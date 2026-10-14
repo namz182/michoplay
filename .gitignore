@@ -1,0 +1,54 @@
+# JavaScript dependencies and generated output
+node_modules/
+dist/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Rust and Tauri generated output (keep Cargo.lock for this application)
+target/
+src-tauri/target/
+src-tauri/gen/*
+!src-tauri/gen/android/
+!src-tauri/gen/android/**
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/**/build/
+
+# Environment files and local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs, caches, and local app databases
+*.log
+.cache/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
+
+# Editor and operating system files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# Temporary files and local package artifacts
+*.tmp
+*.bak
+*.orig
+*.deb
+*.rpm
+*.AppImage
+*.dmg
+*.msi

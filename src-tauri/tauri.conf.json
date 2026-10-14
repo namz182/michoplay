@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MichoPlay",
+  "version": "0.1.0",
+  "identifier": "app.michoplay.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "MichoPlay",
+        "width": 1180,
+        "height": 790,
+        "minWidth": 720,
+        "minHeight": 540,
+        "center": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Music",
+    "android": {
+      "minSdkVersion": 26
+    },
+    "shortDescription": "Offline music for your desktop",
+    "longDescription": "A private, offline-first music player for your local collection.",
+    "fileAssociations": [
+      { "ext": ["mp3"], "mimeType": "audio/mpeg", "name": "MP3 audio", "description": "MP3 audio file", "androidIntentActionFilters": ["view", "send", "sendMultiple"] },
+      { "ext": ["flac"], "mimeType": "audio/flac", "name": "FLAC audio", "description": "FLAC audio file", "androidIntentActionFilters": ["view", "send", "sendMultiple"] },
+      { "ext": ["wav"], "mimeType": "audio/wav", "name": "WAV audio", "description": "WAV audio file", "androidIntentActionFilters": ["view", "send", "sendMultiple"] },
+      { "ext": ["ogg"], "mimeType": "audio/ogg", "name": "Ogg audio", "description": "Ogg audio file", "androidIntentActionFilters": ["view", "send", "sendMultiple"] },
+      { "ext": ["opus"], "mimeType": "audio/opus", "name": "Opus audio", "description": "Opus audio file", "androidIntentActionFilters": ["view", "send", "sendMultiple"] },
+      { "ext": ["m4a"], "mimeType": "audio/mp4", "name": "M4A audio", "description": "M4A audio file", "androidIntentActionFilters": ["view", "send", "sendMultiple"] },
+      { "ext": ["aac"], "mimeType": "audio/aac", "name": "AAC audio", "description": "AAC audio file", "androidIntentActionFilters": ["view", "send", "sendMultiple"] },
+      { "ext": ["aiff", "aif"], "mimeType": "audio/aiff", "name": "AIFF audio", "description": "AIFF audio file", "androidIntentActionFilters": ["view", "send", "sendMultiple"] }
+    ],
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ]
+  }
+}

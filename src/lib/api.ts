@@ -1,0 +1,51 @@
+import { invoke } from "@tauri-apps/api/core";
+
+export type Folder = { path: string; name: string };
+export type Track = {
+  id: number; title: string; artist: string; album: string; releaseDate: string; addedAt: number; durationMs: number;
+  folderPath: string; folderName: string; rootPath: string; folders: Folder[]; artworkKey: string | null;
+};
+export type PlayerSnapshot = {
+  currentTrackId: number | null; isPlaying: boolean; positionMs: number; durationMs: number;
+  volume: number; shuffle: boolean; repeatMode: "off" | "all" | "one";
+  queue: number[]; priorityQueue: number[]; autoplay: boolean;
+  sleepTimerRemainingMs: number | null; sleepTimerAtTrackEnd: boolean;
+  equalizerBands: number[]; equalizerEnabled: boolean;
+};
+export const api = {
+  scanFolder: (folder: string) => invoke<Track[]>("library_scan_folder", { folder }),
+  openAudioFiles: (paths: string[]) => invoke<Track[]>("library_open_audio_files", { paths }),
+  takePendingAudioOpens: () => invoke<string[]>("take_pending_audio_opens"),
+  takeOpenedAudio: () => invoke<{ name: string; dataBase64: string }[]>("media_take_opened_audio"),
+  setDefaultPlayer: () => invoke<void>("system_set_default_player"),
+  importFiles: (files: { name: string; dataBase64: string }[]) => invoke<string>("library_import_audio_files", { files }),
+  importAndPlayFiles: (files: { name: string; dataBase64: string }[]) => invoke<Track[]>("library_import_and_play_audio_files", { files }),
+  importDirectory: () => invoke<string>("library_import_directory"),
+  mediaUpdate: (track: { title: string; artist: string } | null, isPlaying: boolean, durationMs: number, positionMs: number) => invoke<void>("media_update", {
+    title: track?.title ?? null,
+    artist: track?.artist ?? null,
+    isPlaying,
+    durationMs,
+    positionMs,
+  }),
+  mediaStop: () => invoke<void>("media_stop"),
+  refresh: (folders: string[]) => invoke<Track[]>("library_refresh", { folders }),
+  removeFolder: (folder: string) => invoke<Track[]>("library_remove_folder", { folder }),
+  artwork: (artworkKey: string) => invoke<string | null>("library_artwork", { artworkKey }),
+  state: () => invoke<PlayerSnapshot>("player_state"),
+  play: (trackId: number) => invoke<void>("player_play_track", { trackId }),
+  playCollection: (trackIds: number[], startId: number) => invoke<void>("player_play_collection", { trackIds, startId }),
+  toggle: () => invoke<void>("player_toggle"),
+  previous: () => invoke<void>("player_previous"),
+  next: () => invoke<void>("player_next"),
+  shuffle: () => invoke<void>("player_toggle_shuffle"),
+  repeat: () => invoke<void>("player_toggle_repeat"),
+  seek: (positionMs: number) => invoke<void>("player_seek", { positionMs }),
+  volume: (volume: number) => invoke<void>("player_set_volume", { volume }),
+  equalizer: (bands: number[], enabled: boolean) => invoke<void>("player_set_equalizer_bands", { bands, enabled }),
+  autoplay: (enabled: boolean) => invoke<void>("player_set_autoplay", { enabled }),
+  sleepTimer: (durationMinutes: number | null, atTrackEnd: boolean) => invoke<void>("player_set_sleep_timer", { durationMinutes, atTrackEnd }),
+  queueAdd: (trackId: number) => invoke<void>("player_queue_add", { trackId }),
+  queueMove: (fromIndex: number, toIndex: number) => invoke<void>("player_queue_move", { fromIndex, toIndex }),
+  queueRemove: (index: number) => invoke<void>("player_queue_remove", { index }),
+};
