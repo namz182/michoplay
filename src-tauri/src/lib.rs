@@ -1153,19 +1153,82 @@ fn youtube_music_directory(app: AppHandle) -> Result<String, String> {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct YoutubeDownloadProgress {
+struct YoutubeSearchResult {
+    id: String,
     title: String,
+    url: String,
+    thumbnail: Option<String>,
+    duration_seconds: Option<f64>,
+    is_playlist: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeDownloadItem {
+    id: String,
+    title: String,
+    url: String,
+    thumbnail: Option<String>,
+    is_playlist: bool,
+    status: String,
     percent: Option<f32>,
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
     message: String,
-    complete: bool,
+}
+
+struct YoutubeDownloadTask {
+    item: YoutubeDownloadItem,
+    process_id: Option<u32>,
+}
+
+#[derive(Default)]
+struct YoutubeDownloadManager {
+    tasks: Vec<YoutubeDownloadTask>,
+    next_id: u64,
+    running: bool,
+}
+
+#[derive(Default)]
+struct YoutubeDownloadState(Mutex<YoutubeDownloadManager>);
+
+impl YoutubeDownloadManager {
+    fn snapshot(&self) -> Vec<YoutubeDownloadItem> {
+        self.tasks.iter().map(|task| task.item.clone()).collect()
+    }
 }
 
 #[cfg(not(target_os = "android"))]
-fn report_youtube_progress(app: &AppHandle, line: &str) {
+fn emit_youtube_downloads(app: &AppHandle) {
+    let items = app
+        .state::<YoutubeDownloadState>()
+        .0
+        .lock()
+        .map(|manager| manager.snapshot())
+        .unwrap_or_default();
+    let _ = app.emit("youtube-downloads-updated", items);
+}
+
+#[cfg(not(target_os = "android"))]
+fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) {
     let Some(progress) = line.strip_prefix("__MICHOPLAY_PROGRESS__") else {
         return;
     };
-    let (raw_percent, title) = progress.split_once('|').unwrap_or(("", progress));
+    let mut fields = progress.splitn(5, '|');
+    let raw_percent = fields.next().unwrap_or_default();
+    let downloaded_bytes = fields
+        .next()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let total_bytes = fields
+        .next()
+        .filter(|value| !value.trim().is_empty() && *value != "NA")
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let total_bytes_estimate = fields
+        .next()
+        .filter(|value| !value.trim().is_empty() && *value != "NA")
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let total_bytes = total_bytes.or(total_bytes_estimate);
+    let title = fields.next().unwrap_or_default();
     let percent = raw_percent
         .trim()
         .trim_end_matches('%')
@@ -1174,15 +1237,22 @@ fn report_youtube_progress(app: &AppHandle, line: &str) {
         .ok()
         .filter(|value| value.is_finite())
         .map(|value| value.clamp(0.0, 100.0));
-    let _ = app.emit(
-        "youtube-download-progress",
-        YoutubeDownloadProgress {
-            title: title.trim().to_owned(),
-            percent,
-            message: "Downloading audio".to_owned(),
-            complete: false,
-        },
-    );
+    if let Ok(mut manager) = app.state::<YoutubeDownloadState>().0.lock() {
+        if let Some(task) = manager.tasks.iter_mut().find(|task| task.item.id == id) {
+            if !title.trim().is_empty() && !task.item.is_playlist {
+                task.item.title = title.trim().to_owned();
+            }
+            task.item.percent = percent.or(task.item.percent);
+            task.item.downloaded_bytes = downloaded_bytes.or(task.item.downloaded_bytes);
+            task.item.total_bytes = total_bytes.or(task.item.total_bytes);
+            task.item.message = if task.item.is_playlist && !title.trim().is_empty() {
+                format!("Downloading: {}", title.trim())
+            } else {
+                "Downloading audio".to_owned()
+            };
+        }
+    }
+    emit_youtube_downloads(app);
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1199,147 +1269,613 @@ fn bundled_desktop_tool(name: &str) -> Result<std::path::PathBuf, String> {
     };
     let path = directory.join(filename);
     if !path.is_file() {
-        return Err(format!("MichoPlay’s bundled {name} tool is missing. Reinstall the desktop app."));
+        return Err(format!(
+            "MichoPlay’s bundled {name} tool is missing. Reinstall the desktop app."
+        ));
     }
     Ok(path)
 }
 
 #[tauri::command]
-async fn youtube_download(url: String, app: AppHandle) -> Result<(), String> {
+async fn youtube_search(query: String) -> Result<Vec<YoutubeSearchResult>, String> {
+    #[cfg(target_os = "android")]
+    return Err("YouTube search is available in the desktop app.".to_owned());
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let query = query.trim().to_owned();
+        if query.is_empty() || query.chars().count() > 200 {
+            return Err("Enter a search or YouTube link (up to 200 characters).".to_owned());
+        }
+        let is_url = query.starts_with("https://") || query.starts_with("http://");
+        if is_url {
+            validate_youtube_url(&query)?;
+        }
+        let is_playlist_url = is_url
+            && url::Url::parse(&query)
+                .ok()
+                .is_some_and(|url| url.query_pairs().any(|(key, _)| key == "list"));
+        let yt_dlp = bundled_desktop_tool("yt-dlp")?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let search = if is_url {
+                query
+            } else {
+                format!("ytsearch10:{query}")
+            };
+            let output = Command::new(yt_dlp)
+                .arg("--ignore-config")
+                .arg("--no-warnings")
+                .arg("--flat-playlist")
+                .arg("--dump-single-json")
+                .arg("--playlist-end")
+                .arg("10")
+                .arg("--skip-download")
+                .arg("--")
+                .arg(&search)
+                .output()
+                .map_err(|_| "MichoPlay couldn’t start YouTube search.".to_owned())?;
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr)
+                    .lines()
+                    .rev()
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n"));
+            }
+            let document: serde_json::Value =
+                serde_json::from_slice(&output.stdout).map_err(|_| {
+                    "YouTube search returned unreadable results. Try another search.".to_owned()
+                })?;
+            if is_playlist_url {
+                let title = document
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("YouTube playlist")
+                    .to_owned();
+                let url = document
+                    .get("webpage_url")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|url| validate_youtube_url(url).is_ok())
+                    .unwrap_or(&search)
+                    .to_owned();
+                let thumbnail = document
+                    .get("thumbnail")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|url| valid_youtube_thumbnail(url))
+                    .map(ToOwned::to_owned);
+                return Ok(vec![YoutubeSearchResult {
+                    id: document
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("playlist")
+                        .to_owned(),
+                    title,
+                    url,
+                    thumbnail,
+                    duration_seconds: None,
+                    is_playlist: true,
+                }]);
+            }
+            let entries: Vec<&serde_json::Value> = document
+                .get("entries")
+                .and_then(serde_json::Value::as_array)
+                .map(|entries| entries.iter().collect())
+                .unwrap_or_else(|| vec![&document]);
+            let results = entries
+                .into_iter()
+                .filter_map(|entry| {
+                    let id = entry.get("id")?.as_str()?.to_owned();
+                    let title = entry.get("title")?.as_str()?.trim().to_owned();
+                    if title.is_empty() {
+                        return None;
+                    }
+                    let url = entry
+                        .get("webpage_url")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|url| validate_youtube_url(url).is_ok())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={id}"));
+                    let thumbnail = entry
+                        .get("thumbnail")
+                        .and_then(serde_json::Value::as_str)
+                        .or_else(|| {
+                            entry
+                                .get("thumbnails")
+                                .and_then(serde_json::Value::as_array)
+                                .and_then(|items| items.last())
+                                .and_then(|item| item.get("url"))
+                                .and_then(serde_json::Value::as_str)
+                        })
+                        .filter(|url| valid_youtube_thumbnail(url))
+                        .map(ToOwned::to_owned);
+                    Some(YoutubeSearchResult {
+                        id,
+                        title,
+                        url,
+                        thumbnail,
+                        duration_seconds: entry.get("duration").and_then(serde_json::Value::as_f64),
+                        is_playlist: false,
+                    })
+                })
+                .take(10)
+                .collect::<Vec<_>>();
+            Ok(results)
+        })
+        .await
+        .map_err(|_| "YouTube search couldn’t be completed.".to_owned())?
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn validate_youtube_url(raw: &str) -> Result<String, String> {
+    let parsed = url::Url::parse(raw).map_err(|_| "Enter a valid YouTube URL.".to_owned())?;
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    if parsed.scheme() != "https"
+        || !matches!(
+            host.as_str(),
+            "youtube.com"
+                | "www.youtube.com"
+                | "m.youtube.com"
+                | "music.youtube.com"
+                | "youtu.be"
+                | "www.youtu.be"
+        )
+    {
+        return Err("Enter a YouTube video or playlist URL.".to_owned());
+    }
+    Ok(parsed.to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+fn valid_youtube_thumbnail(raw: &str) -> bool {
+    url::Url::parse(raw)
+        .ok()
+        .filter(|url| url.scheme() == "https")
+        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+        .is_some_and(|host| host == "ytimg.com" || host.ends_with(".ytimg.com"))
+}
+
+#[tauri::command]
+fn youtube_downloads_state(state: State<'_, YoutubeDownloadState>) -> Vec<YoutubeDownloadItem> {
+    state
+        .0
+        .lock()
+        .map(|manager| manager.snapshot())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn youtube_download_enqueue(
+    url: String,
+    title: String,
+    thumbnail: Option<String>,
+    is_playlist: bool,
+    app: AppHandle,
+    state: State<'_, YoutubeDownloadState>,
+) -> Result<YoutubeDownloadItem, String> {
     #[cfg(target_os = "android")]
     return Err("YouTube audio downloads are available in the desktop app.".to_owned());
 
     #[cfg(not(target_os = "android"))]
     {
-        let url = url.trim().to_owned();
-        let parsed = url::Url::parse(&url).map_err(|_| "Enter a valid YouTube URL.".to_owned())?;
-        let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
-        if parsed.scheme() != "https"
-            || !matches!(
-                host.as_str(),
-                "youtube.com"
-                    | "www.youtube.com"
-                    | "m.youtube.com"
-                    | "music.youtube.com"
-                    | "youtu.be"
-                    | "www.youtu.be"
-            )
-        {
-            return Err("Enter a YouTube video or playlist URL.".to_owned());
+        let url = validate_youtube_url(&url)?;
+        let thumbnail = thumbnail.filter(|url| valid_youtube_thumbnail(url));
+        let is_playlist = is_playlist
+            && url::Url::parse(&url)
+                .ok()
+                .is_some_and(|url| url.query_pairs().any(|(key, _)| key == "list"));
+        let item = {
+            let mut manager = state
+                .0
+                .lock()
+                .map_err(|_| "The download manager is unavailable.".to_owned())?;
+            manager.next_id += 1;
+            let item = YoutubeDownloadItem {
+                id: format!("youtube-{}", manager.next_id),
+                title: if title.trim().is_empty() {
+                    "YouTube audio".to_owned()
+                } else {
+                    title.trim().to_owned()
+                },
+                url: url.clone(),
+                thumbnail,
+                is_playlist,
+                status: "queued".to_owned(),
+                percent: None,
+                downloaded_bytes: None,
+                total_bytes: None,
+                message: "Waiting to download".to_owned(),
+            };
+            manager.tasks.push(YoutubeDownloadTask {
+                item: item.clone(),
+                process_id: None,
+            });
+            item
+        };
+        emit_youtube_downloads(&app);
+        start_youtube_download_worker(app.clone());
+        Ok(item)
+    }
+}
+
+#[tauri::command]
+fn youtube_download_pause(
+    id: String,
+    app: AppHandle,
+    state: State<'_, YoutubeDownloadState>,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    #[cfg(not(target_os = "android"))]
+    {
+        let pid = {
+            let mut manager = state
+                .0
+                .lock()
+                .map_err(|_| "The download manager is unavailable.".to_owned())?;
+            let task = manager
+                .tasks
+                .iter_mut()
+                .find(|task| task.item.id == id)
+                .ok_or_else(|| "That download no longer exists.".to_owned())?;
+            if task.item.status != "queued" && task.item.status != "downloading" {
+                return Ok(());
+            }
+            task.item.status = "paused".to_owned();
+            task.item.message = "Paused".to_owned();
+            task.process_id
+        };
+        if let Some(pid) = pid {
+            stop_download_process(pid);
         }
-        let directory = app
-            .path()
-            .audio_dir()
-            .map_err(|_| "The Music folder couldn’t be located.".to_owned())?
-            .join("YouTube");
-        std::fs::create_dir_all(&directory)
-            .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
-        let yt_dlp = bundled_desktop_tool("yt-dlp")?;
-        let ffmpeg = bundled_desktop_tool("ffmpeg")?;
-        let deno = bundled_desktop_tool("deno")?;
+        emit_youtube_downloads(&app);
+        Ok(())
+    }
+}
 
-        tauri::async_runtime::spawn_blocking(move || {
-            use tauri::Emitter;
+#[tauri::command]
+fn youtube_download_resume(
+    id: String,
+    app: AppHandle,
+    state: State<'_, YoutubeDownloadState>,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    #[cfg(not(target_os = "android"))]
+    {
+        {
+            let mut manager = state
+                .0
+                .lock()
+                .map_err(|_| "The download manager is unavailable.".to_owned())?;
+            let task = manager
+                .tasks
+                .iter_mut()
+                .find(|task| task.item.id == id)
+                .ok_or_else(|| "That download no longer exists.".to_owned())?;
+            if task.item.status != "paused" && task.item.status != "failed" {
+                return Ok(());
+            }
+            task.item.status = "queued".to_owned();
+            task.item.message = "Waiting to resume".to_owned();
+        }
+        emit_youtube_downloads(&app);
+        start_youtube_download_worker(app);
+        Ok(())
+    }
+}
 
-            let output_template = directory.join("%(title)s [%(id)s].%(ext)s");
-            let mut child = Command::new(yt_dlp)
-                .arg("--ignore-config")
-                .arg("--no-warnings")
-                .arg("--newline")
-                .arg("--yes-playlist")
-                .arg("--extract-audio")
-                .arg("--audio-format")
-                .arg("m4a")
-                .arg("--audio-quality")
-                .arg("0")
-                .arg("--ffmpeg-location")
-                .arg(ffmpeg)
-                .arg("--js-runtimes")
-                .arg(format!("deno:{}", deno.to_string_lossy()))
-                .arg("--embed-metadata")
-                .arg("--progress-template")
-                .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(info.title)s")
-                .arg("--output")
-                .arg(output_template)
-                .arg("--")
-                .arg(&url)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|_| "MichoPlay couldn’t start its bundled YouTube audio downloader.".to_owned())?;
+#[tauri::command]
+fn youtube_download_cancel(
+    id: String,
+    app: AppHandle,
+    state: State<'_, YoutubeDownloadState>,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    #[cfg(not(target_os = "android"))]
+    {
+        let pid = {
+            let mut manager = state
+                .0
+                .lock()
+                .map_err(|_| "The download manager is unavailable.".to_owned())?;
+            let task = manager
+                .tasks
+                .iter_mut()
+                .find(|task| task.item.id == id)
+                .ok_or_else(|| "That download no longer exists.".to_owned())?;
+            if task.item.status == "completed" || task.item.status == "cancelled" {
+                return Ok(());
+            }
+            task.item.status = "cancelled".to_owned();
+            task.item.message = "Cancelled".to_owned();
+            task.process_id
+        };
+        if let Some(pid) = pid {
+            stop_download_process(pid);
+        }
+        emit_youtube_downloads(&app);
+        Ok(())
+    }
+}
 
-            let stderr = child
-                .stderr
-                .take()
-                .ok_or_else(|| "Couldn’t read yt-dlp output.".to_owned())?;
-            let stderr_tail = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
-            let tail = stderr_tail.clone();
-            let progress_app = app.clone();
-            let stderr_reader = std::thread::spawn(move || {
-                for line in BufReader::new(stderr).lines().flatten() {
-                    if line.starts_with("__MICHOPLAY_PROGRESS__") {
-                        report_youtube_progress(&progress_app, &line);
-                    } else if let Ok(mut lines) = tail.lock() {
-                        lines.push(line);
-                        if lines.len() > 24 {
-                            lines.remove(0);
+#[tauri::command]
+fn youtube_download_remove(
+    id: String,
+    app: AppHandle,
+    state: State<'_, YoutubeDownloadState>,
+) -> Result<(), String> {
+    let mut manager = state
+        .0
+        .lock()
+        .map_err(|_| "The download manager is unavailable.".to_owned())?;
+    manager.tasks.retain(|task| {
+        task.item.id != id || task.item.status == "downloading" || task.item.status == "queued"
+    });
+    drop(manager);
+    #[cfg(not(target_os = "android"))]
+    emit_youtube_downloads(&app);
+    #[cfg(target_os = "android")]
+    let _ = app;
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+fn start_youtube_download_worker(app: AppHandle) {
+    let start = app
+        .state::<YoutubeDownloadState>()
+        .0
+        .lock()
+        .map(|mut manager| {
+            if manager.running {
+                false
+            } else {
+                manager.running = true;
+                true
+            }
+        })
+        .unwrap_or(false);
+    if start {
+        tauri::async_runtime::spawn_blocking(move || youtube_download_worker(app));
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn youtube_download_worker(app: AppHandle) {
+    loop {
+        let next = {
+            let state = app.state::<YoutubeDownloadState>();
+            let Ok(mut manager) = state.0.lock() else {
+                return;
+            };
+            if let Some(task) = manager
+                .tasks
+                .iter_mut()
+                .find(|task| task.item.status == "queued")
+            {
+                task.item.status = "downloading".to_owned();
+                task.item.message = "Starting download".to_owned();
+                Some((task.item.id.clone(), task.item.url.clone()))
+            } else {
+                manager.running = false;
+                None
+            }
+        };
+        let Some((id, url)) = next else {
+            emit_youtube_downloads(&app);
+            return;
+        };
+        emit_youtube_downloads(&app);
+        let is_playlist = app
+            .state::<YoutubeDownloadState>()
+            .0
+            .lock()
+            .ok()
+            .and_then(|manager| {
+                manager
+                    .tasks
+                    .iter()
+                    .find(|task| task.item.id == id)
+                    .map(|task| task.item.is_playlist)
+            })
+            .unwrap_or(false);
+        let result = run_youtube_download(&app, &id, &url, is_playlist);
+        {
+            let state = app.state::<YoutubeDownloadState>();
+            if let Ok(mut manager) = state.0.lock() {
+                if let Some(task) = manager.tasks.iter_mut().find(|task| task.item.id == id) {
+                    task.process_id = None;
+                    if task.item.status == "downloading" {
+                        match result {
+                            Ok(()) => {
+                                task.item.status = "completed".to_owned();
+                                task.item.percent = Some(100.0);
+                                task.item.message = "Saved to Music/YouTube".to_owned();
+                            }
+                            Err(error) => {
+                                task.item.status = "failed".to_owned();
+                                task.item.message = error;
+                            }
                         }
                     }
                 }
-            });
+            };
+        }
+        emit_youtube_downloads(&app);
+    }
+}
 
-            if let Some(stdout) = child.stdout.take() {
-                for line in BufReader::new(stdout).lines().flatten() {
-                    report_youtube_progress(&app, &line);
+#[cfg(not(target_os = "android"))]
+fn run_youtube_download(
+    app: &AppHandle,
+    id: &str,
+    url: &str,
+    is_playlist: bool,
+) -> Result<(), String> {
+    let directory = app
+        .path()
+        .audio_dir()
+        .map_err(|_| "The Music folder couldn’t be located.".to_owned())?
+        .join("YouTube");
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
+    let yt_dlp = bundled_desktop_tool("yt-dlp")?;
+    let ffmpeg = bundled_desktop_tool("ffmpeg")?;
+    let deno = bundled_desktop_tool("deno")?;
+    let output_template = directory.join("%(title)s [%(id)s].%(ext)s");
+    let mut child = Command::new(yt_dlp)
+        .arg("--ignore-config")
+        .arg("--no-warnings")
+        .arg("--newline")
+        .arg("--continue")
+        .arg(if is_playlist {
+            "--yes-playlist"
+        } else {
+            "--no-playlist"
+        })
+        .arg("--extract-audio")
+        .arg("--audio-format")
+        .arg("m4a")
+        .arg("--audio-quality")
+        .arg("0")
+        .arg("--ffmpeg-location")
+        .arg(ffmpeg)
+        .arg("--js-runtimes")
+        .arg(format!("deno:{}", deno.to_string_lossy()))
+        .arg("--embed-metadata")
+        .arg("--embed-thumbnail")
+        .arg("--convert-thumbnails")
+        .arg("jpg")
+        .arg("--progress-template")
+        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(info.title)s")
+        .arg("--output")
+        .arg(output_template)
+        .arg("--")
+        .arg(url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "MichoPlay couldn’t start its bundled YouTube audio downloader.".to_owned())?;
+    let pid = child.id();
+    let continue_running = {
+        let state = app.state::<YoutubeDownloadState>();
+        state
+            .0
+            .lock()
+            .ok()
+            .and_then(|mut manager| {
+                manager
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.item.id == id)
+                    .map(|task| {
+                        task.process_id = Some(pid);
+                        task.item.status == "downloading"
+                    })
+            })
+            .unwrap_or(false)
+    };
+    if !continue_running {
+        stop_download_process(pid);
+    }
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Couldn’t read downloader output.".to_owned())?;
+    let stderr_tail = Arc::new(Mutex::new(Vec::<String>::new()));
+    let tail = stderr_tail.clone();
+    let app_for_stderr = app.clone();
+    let task_id = id.to_owned();
+    let stderr_reader = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().flatten() {
+            if line.starts_with("__MICHOPLAY_PROGRESS__") {
+                report_youtube_progress(&app_for_stderr, &task_id, &line);
+            } else if let Ok(mut lines) = tail.lock() {
+                lines.push(line);
+                if lines.len() > 24 {
+                    lines.remove(0);
                 }
             }
-            let status = child
-                .wait()
-                .map_err(|_| "yt-dlp stopped before the download finished.".to_owned())?;
-            let _ = stderr_reader.join();
-            if !status.success() {
-                let details = stderr_tail
-                    .lock()
-                    .map(|lines| {
-                        lines
-                            .iter()
-                            .rev()
-                            .take(6)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .rev()
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default();
-                let details = details.trim();
-                return Err(if details.is_empty() {
-                    format!(
-                        "yt-dlp couldn’t download that URL (exit code {}).",
-                        status
-                            .code()
-                            .map(|code| code.to_string())
-                            .unwrap_or_else(|| "unknown".to_owned())
-                    )
-                } else {
-                    details.to_owned()
-                });
+        }
+    });
+    if let Some(stdout) = child.stdout.take() {
+        for line in BufReader::new(stdout).lines().flatten() {
+            if line.starts_with("__MICHOPLAY_PROGRESS__") {
+                report_youtube_progress(app, id, &line);
             }
-            let _ = app.emit(
-                "youtube-download-progress",
-                YoutubeDownloadProgress {
-                    title: String::new(),
-                    percent: Some(100.0),
-                    message: "Download complete".to_owned(),
-                    complete: true,
-                },
-            );
-            Ok(())
-        })
-        .await
-        .map_err(|_| "The YouTube download couldn’t be completed.".to_owned())?
+        }
     }
+    let status = child
+        .wait()
+        .map_err(|_| "yt-dlp stopped before the download finished.".to_owned())?;
+    let _ = stderr_reader.join();
+    if status.success() {
+        return Ok(());
+    }
+    let current_status = app
+        .state::<YoutubeDownloadState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|manager| {
+            manager
+                .tasks
+                .iter()
+                .find(|task| task.item.id == id)
+                .map(|task| task.item.status.clone())
+        })
+        .unwrap_or_default();
+    if current_status == "paused" || current_status == "cancelled" {
+        return Ok(());
+    }
+    let details = stderr_tail
+        .lock()
+        .map(|lines| {
+            lines
+                .iter()
+                .rev()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    if details.trim().is_empty() {
+        Err(format!(
+            "yt-dlp couldn’t download that video (exit code {}).",
+            status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_owned())
+        ))
+    } else {
+        Err(details)
+    }
+}
+
+#[cfg(all(unix, not(target_os = "android")))]
+fn stop_download_process(pid: u32) {
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status();
+}
+
+#[cfg(windows)]
+fn stop_download_process(pid: u32) {
+    let _ = Command::new("taskkill")
+        .arg("/PID")
+        .arg(pid.to_string())
+        .arg("/T")
+        .arg("/F")
+        .status();
 }
 
 #[tauri::command]
@@ -1773,6 +2309,7 @@ pub fn run() {
             equalizer_enabled: Arc::new(AtomicBool::new(true)),
             ..PlayerCore::default()
         })))
+        .manage(YoutubeDownloadState::default())
         .plugin(tauri_plugin_dialog::init())
         .manage(MediaBridge(Mutex::new(None)))
         .plugin(
@@ -1842,7 +2379,13 @@ pub fn run() {
             library_import_and_play_audio_files,
             library_import_directory,
             youtube_music_directory,
-            youtube_download,
+            youtube_search,
+            youtube_downloads_state,
+            youtube_download_enqueue,
+            youtube_download_pause,
+            youtube_download_resume,
+            youtube_download_cancel,
+            youtube_download_remove,
             library_scan_folder,
             library_refresh,
             library_remove_folder,

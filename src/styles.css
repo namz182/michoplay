@@ -543,10 +543,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .now-title .row-action { flex: 0 0 auto; margin-left: auto; color: #c8c1cf; }
 .now-title .row-action.selected { color: #d2c6ec; }
 .now-album { display: block; margin-top: 8px; color: #918b96; line-height: 1.4; }
-.now-track > .now-track-status { display: inline-flex; align-items: center; gap: 7px; margin-top: 12px; color: #918b96; font-size: 10px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
-.now-track > .now-track-status::before { width: 6px; height: 6px; border-radius: 50%; background: #746f78; content: ""; }
-.now-track > .now-track-status.active { color: #a7e5c6; }
-.now-track > .now-track-status.active::before { background: #a7e5c6; box-shadow: 0 0 9px rgba(167,229,198,.4); }
 .queue-hint { margin-top: 10px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.09); }
 .queue-list { display: grid; gap: 7px; padding: 3px 0 12px; }
 .queue-row { min-height: 47px; gap: 8px; padding: 5px 6px; border: 1px solid transparent; border-radius: 6px; }
@@ -593,7 +589,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .playlist-submenu > button { min-height: 38px; }
 .playlist-options { max-height: min(320px,45vh); }
 
-.youtube-downloader { display: grid; gap: 15px; margin: 4px 24px 7px; padding: 16px 18px; border: 1px solid rgba(255,255,255,.08); border-radius: 9px; background: linear-gradient(110deg, rgba(245,198,190,.08), rgba(203,196,222,.055) 60%, rgba(216,238,228,.035)); }
+.youtube-downloader { display: grid; gap: 12px; margin: 4px 24px 7px; padding: 14px 18px; border: 1px solid rgba(255,255,255,.08); border-radius: 9px; background: linear-gradient(110deg, rgba(245,198,190,.08), rgba(203,196,222,.055) 60%, rgba(216,238,228,.035)); }
+.youtube-search-header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 18px; }
+.youtube-search-header h2 { flex: 0 0 auto; margin: 0; color: #f4f0f6; font-size: 14px; font-weight: 750; }
 .youtube-downloader-copy { display: flex; align-items: center; gap: 11px; }
 .youtube-downloader-icon { display: grid; width: 36px; height: 36px; flex: 0 0 36px; place-items: center; border-radius: 7px; background: rgba(245,198,190,.12); color: var(--blush); }
 .youtube-downloader-copy h2 { margin: 0; color: #f4f0f6; font-size: 13px; font-weight: 750; }
@@ -609,6 +607,83 @@ body.resizing { cursor: col-resize; user-select: none; }
 .youtube-progress-track { grid-column: 1 / -1; height: 3px; overflow: hidden; border-radius: 9px; background: rgba(255,255,255,.1); }
 .youtube-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blush), var(--lavender), var(--accent)); transition: width 140ms linear; }
 @media (max-width: 620px) { .youtube-downloader { margin-inline: 14px; padding: 13px; } .youtube-download-form { flex-direction: column; } .youtube-download-form .primary-button { min-height: 37px; } }
+.youtube-search-form { display: flex; width: min(560px, 72%); min-width: 0; align-items: center; gap: 10px; }
+.youtube-search-input { display: flex; min-width: 0; flex: 1; align-items: center; gap: 9px; height: 39px; padding: 0 11px; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; background: rgba(9,9,11,.62); color: #aaa2b0; }
+.youtube-search-input:focus-within { border-color: rgba(203,196,222,.55); box-shadow: 0 0 0 2px rgba(203,196,222,.1); }
+.youtube-search-input input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #f5f3f6; font-size: 11px; }
+.youtube-search-input input::placeholder { color: #817c86; }
+.youtube-search-input button { display: grid; width: 23px; height: 25px; flex: 0 0 23px; place-items: center; border: 0; background: transparent; color: #aaa2b0; cursor: pointer; }
+.youtube-search-spinner { display: inline-flex; align-items: center; gap: 7px; color: #aaa2b0; font-size: 10px; }
+.youtube-search-spinner::before { width: 12px; height: 12px; border: 1.5px solid rgba(203,196,222,.25); border-top-color: var(--lavender); border-radius: 50%; animation: spin .8s linear infinite; content: ""; }
+.youtube-search-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
+.youtube-result-card { position: relative; display: grid; min-width: 0; gap: 8px; padding: 7px; border: 1px solid rgba(255,255,255,.07); border-radius: 7px; background: rgba(255,255,255,.035); color: #f3eff5; text-align: left; transition: background 140ms ease, border-color 140ms ease; }
+.youtube-result-card:hover, .youtube-result-card:focus-within { border-color: rgba(203,196,222,.38); background: rgba(255,255,255,.075); }
+.youtube-result-preview { display: grid; min-width: 0; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.youtube-result-art { position: relative; display: grid; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; place-items: center; border-radius: 4px; background: linear-gradient(145deg, rgba(245,198,190,.17), rgba(203,196,222,.13) 62%, rgba(216,238,228,.1)); color: var(--lavender); }
+.youtube-result-art img { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.youtube-result-duration { position: absolute; z-index: 2; right: 5px; bottom: 5px; padding: 3px 5px; border-radius: 3px; background: rgba(7,7,8,.8); color: #f6f2f8; font-size: 9px; font-variant-numeric: tabular-nums; }
+.youtube-result-preview-icon { position: absolute; z-index: 3; inset: 0; display: grid; place-items: center; background: rgba(5,5,6,.28); color: white; opacity: 0; transition: opacity 130ms ease; }
+.youtube-result-preview:hover .youtube-result-preview-icon, .youtube-result-preview:focus-visible .youtube-result-preview-icon { opacity: 1; }
+.youtube-result-download { position: absolute; z-index: 4; top: 11px; right: 11px; display: inline-flex; min-height: 30px; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid rgba(255,255,255,.24); border-radius: 5px; background: rgba(20,18,23,.92); color: #fff; font: inherit; font-size: 10px; font-weight: 650; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity 130ms ease, transform 130ms ease, background 130ms ease; cursor: pointer; }
+.youtube-result-card:hover .youtube-result-download, .youtube-result-card:focus-within .youtube-result-download { opacity: 1; pointer-events: auto; transform: translateY(0); }
+.youtube-result-download:hover { background: #51495c; }
+.youtube-result-copy { display: grid; min-width: 0; gap: 4px; padding: 0 2px 2px; }
+.youtube-result-copy strong { display: -webkit-box; overflow: hidden; color: #f2eef4; font-size: 11px; font-weight: 650; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.youtube-result-copy small { color: #99929f; font-size: 9px; }
+.download-item-size { color: #c1bbc7 !important; font-variant-numeric: tabular-nums; }
+.youtube-search-empty { margin: 0; color: #9c95a2; font-size: 10px; line-height: 1.5; }
+.youtube-result-skeleton { display: grid; gap: 8px; padding: 7px; border: 1px solid rgba(255,255,255,.06); border-radius: 7px; background: rgba(255,255,255,.025); }
+.youtube-result-skeleton > span { width: 100%; aspect-ratio: 16 / 9; border-radius: 4px; background: linear-gradient(100deg, #252329 20%, #332f38 42%, #252329 64%); background-size: 220% 100%; animation: youtube-shimmer 1.5s ease-in-out infinite; }
+.youtube-result-skeleton > div { display: grid; gap: 6px; padding: 0 2px; }
+.youtube-result-skeleton i { height: 8px; border-radius: 4px; background: linear-gradient(100deg, #252329 20%, #332f38 42%, #252329 64%); background-size: 220% 100%; animation: youtube-shimmer 1.5s ease-in-out infinite; }
+.youtube-result-skeleton i:last-child { width: 55%; height: 6px; }
+@keyframes youtube-shimmer { to { background-position: -220% 0; } }
+.youtube-confirm-dialog { position: relative; display: grid; width: min(440px,100%); gap: 17px; overflow: hidden; padding: 14px 14px 16px; border: 1px solid rgba(255,255,255,.12); border-radius: 10px; background: #201e23; box-shadow: 0 20px 70px rgba(0,0,0,.55); }
+.youtube-confirm-close { position: absolute; z-index: 2; top: 18px; right: 18px; background: rgba(8,8,9,.55); }
+.youtube-confirm-art { position: relative; display: grid; width: 100%; aspect-ratio: 16 / 8.5; overflow: hidden; place-items: center; border-radius: 6px; background: linear-gradient(145deg, rgba(245,198,190,.18), rgba(203,196,222,.16) 62%, rgba(216,238,228,.13)); color: var(--lavender); }
+.youtube-confirm-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.youtube-confirm-copy { display: grid; gap: 6px; padding: 0 4px; }
+.youtube-confirm-copy > span { color: var(--accent); font-size: 10px; font-weight: 700; }
+.youtube-confirm-copy h2 { margin: 0; color: #f4f0f6; font-size: 17px; line-height: 1.35; }
+.youtube-confirm-copy p { margin: 0; color: #aaa3af; font-size: 10px; line-height: 1.5; }
+.youtube-confirm-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 0 2px; }
+.youtube-confirm-actions .primary-button { justify-content: center; }
+.side-panel-tabs { display: flex; min-width: 0; gap: 4px; }
+.side-panel-tabs button { display: inline-flex; min-height: 29px; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: #928c98; font: inherit; font-size: 11px; cursor: pointer; }
+.side-panel-tabs button.selected { background: rgba(255,255,255,.075); color: #f1edf4; }
+.side-panel-tabs button:focus-visible, .download-manager-trigger:focus-visible { outline: 2px solid var(--lavender); outline-offset: 2px; }
+.download-tab-count { display: inline-grid; min-width: 16px; height: 16px; place-items: center; border-radius: 8px; background: rgba(203,196,222,.16); color: var(--lavender); font-size: 9px; }
+.download-manager { display: grid; align-content: start; gap: 9px; }
+.download-item { display: grid; gap: 8px; padding: 9px; border: 1px solid rgba(255,255,255,.07); border-radius: 6px; background: rgba(255,255,255,.025); }
+.download-item-main { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.download-item-art { position: relative; display: grid; width: 46px; height: 38px; flex: 0 0 46px; overflow: hidden; place-items: center; border-radius: 4px; background: linear-gradient(145deg, rgba(245,198,190,.17), rgba(203,196,222,.13)); color: var(--lavender); }
+.download-item-art img { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.download-item-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.download-item-copy strong { overflow: hidden; color: #f1edf4; font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.download-item-copy small { overflow: hidden; color: #99929f; font-size: 9px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.download-item-progress { height: 3px; overflow: hidden; border-radius: 3px; background: rgba(255,255,255,.09); }
+.download-item-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blush), var(--lavender), var(--accent)); transition: width 180ms linear; }
+.download-item-actions { display: flex; align-items: center; gap: 2px; margin: -4px -3px -3px; }
+.download-status-label { margin-right: auto; color: #aaa3af; font-size: 9px; text-transform: capitalize; }
+.download-status-label.downloading { color: var(--accent); }
+.download-status-label.completed { color: #9bdab7; }
+.download-status-label.failed { color: #e59b9b; }
+.download-manager-empty { display: grid; justify-items: center; gap: 9px; padding: 36px 14px; color: #817b86; text-align: center; }
+.download-manager-empty strong { color: #eeeaf1; font-size: 12px; }
+.download-manager-empty span { max-width: 200px; color: #96909c; font-size: 10px; line-height: 1.5; }
+.download-manager-trigger { position: relative; display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: #aaa4ae; cursor: pointer; }
+.download-manager-trigger:hover, .download-manager-trigger.active { background: rgba(255,255,255,.08); color: #f5f1f7; }
+.download-manager-trigger span { position: absolute; top: -4px; right: -5px; display: grid; min-width: 15px; height: 15px; place-items: center; padding: 0 3px; border: 1px solid #09090b; border-radius: 8px; background: var(--lavender); color: #302b38; font-size: 8px; font-weight: 800; }
+@media (max-width: 620px) { .youtube-search-grid { grid-template-columns: repeat(auto-fill, minmax(145px,1fr)); gap: 7px; } .youtube-search-header { align-items: flex-start; flex-direction: column; gap: 9px; } .youtube-search-form { width: 100%; align-items: stretch; } .youtube-search-spinner { font-size: 0; } .youtube-result-card { padding: 5px; } }
+@media (hover: none) { .youtube-result-download { opacity: 1; pointer-events: auto; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .youtube-result-card, .youtube-result-download, .youtube-result-preview-icon, .youtube-result-skeleton > span, .youtube-result-skeleton i, .youtube-search-spinner::before { animation: none; transition: none; } }
+.youtube-preview-dialog { display: grid; width: min(760px, calc(100vw - 36px)); gap: 14px; padding: 17px; border: 1px solid rgba(255,255,255,.12); border-radius: 10px; background: #201e23; box-shadow: 0 20px 70px rgba(0,0,0,.55); }
+.youtube-preview-heading, .youtube-preview-actions { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 14px; }
+.youtube-preview-heading h2 { overflow: hidden; margin: 4px 0 0; color: #f4f0f6; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.youtube-preview-heading span, .youtube-preview-actions > span { color: #aaa3af; font-size: 10px; }
+.youtube-preview-frame { width: 100%; overflow: hidden; aspect-ratio: 16 / 9; border-radius: 6px; background: #080809; }
+.youtube-preview-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+.youtube-preview-actions .primary-button { justify-content: center; }
 .playlist-options button { min-height: 37px; }
 .collection-open { cursor: pointer; }
 .collection-open:hover strong { color: #fff; }
