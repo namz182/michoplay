@@ -65,6 +65,11 @@ function formatFileSize(bytes: number) {
   while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
   return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[unit]}`;
 }
+function youtubeResultSize(result: YoutubeSearchResult) {
+  if (result.isPlaylist) return "Size varies";
+  if (result.durationSeconds === null) return "Size unavailable";
+  return `~${formatFileSize(Math.round(result.durationSeconds * 16_000))} est.`;
+}
 function normalizeZoom(value: number) { return Math.max(70, Math.min(130, Math.round(value / 10) * 10)); }
 function matches(track: Track, query: string) { return `${track.title} ${track.artist} ${track.album} ${track.folderName}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()); }
 function albumKey(track: Track) { return `${track.album}\u0000${track.artist}`; }
@@ -729,7 +734,7 @@ export default function App() {
               {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/>}<div className="heading-foreground">{page.detail && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={page.detail.kind === "folder" ? <FolderOpen size={40}/> : undefined}/>}<div className="heading-copy"><h1>{heading}</h1><p>{listPage ? `${collectionTracks.length} songs · ${time(collectionTracks.reduce((sum, track) => sum + track.durationMs, 0))}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : `${playlists.length} playlists`}</p></div></div>
             </div>
           {listPage ? <>{isYoutubePlaylist && <section className="youtube-downloader" aria-label="Search YouTube audio">
-            <div className="youtube-search-header"><h2>YouTube</h2>
+            <div className="youtube-search-header">
             <form className="youtube-search-form" onSubmit={(event) => event.preventDefault()}>
               <label className="youtube-search-input"><Search size={16}/><input type="search" aria-label="Search YouTube" placeholder="Search songs or paste a YouTube link" value={youtubeQuery} onChange={(event) => setYoutubeQuery(event.target.value)}/>{youtubeQuery && <button type="button" aria-label="Clear YouTube search" onClick={() => setYoutubeQuery("")}><X size={15}/></button>}</label>
               {youtubeSearching && <span className="youtube-search-spinner" role="status">Searching</span>}
@@ -740,7 +745,7 @@ export default function App() {
               : youtubeQuery.trim() && youtubeResults.length ? <div className="youtube-search-grid" aria-label="YouTube search results">{youtubeResults.map((result) => <article className="youtube-result-card" key={result.id}>
                 <button className="youtube-result-preview" aria-label={`Preview ${result.title}`} onClick={() => setYoutubePreview(result)}>
                   <span className="youtube-result-art">{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/> : <Youtube size={24}/>}<span className="youtube-result-duration">{result.durationSeconds === null ? (result.isPlaylist ? "Playlist" : "YouTube") : durationLabel(result.durationSeconds)}</span><span className="youtube-result-preview-icon"><Play size={20} fill="currentColor"/></span></span>
-                  <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · M4A audio" : "Video · M4A audio"}</small></span>
+                  <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · M4A audio" : `Video · M4A · ${youtubeResultSize(result)}`}</small></span>
                 </button>
                 <button className="youtube-result-download" aria-label={`Download ${result.title}`} onClick={() => void queueYoutubeDownload(result)}><Download size={14}/><span>Download</span></button>
               </article>)}</div>
