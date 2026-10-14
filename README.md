@@ -1,6 +1,40 @@
-# MichoPlay
+<p align="center">
+  <img src="public/michoplay-logo.svg" width="112" alt="MichoPlay logo" />
+</p>
 
-MichoPlay is an offline-first music player for Linux, Windows, macOS, and Android. It scans local music folders, reads tags and embedded cover art, and plays local audio. The Android app can import shared audio files into app storage and offers background playback controls.
+<h1 align="center">MichoPlay</h1>
+
+<p align="center"><strong>A Spotify-inspired local music player.</strong></p>
+<p align="center">Play and organize the music you already own, with an offline-first library for desktop and Android.</p>
+
+## Showcase
+
+<p align="center">
+  <img src="docs/showcase/home.png" alt="MichoPlay home screen showing music folders, recently played tracks, and the playback menu" width="100%" />
+</p>
+<p align="center"><em>Home, local music folders, playback, and track actions</em></p>
+
+<p align="center">
+  <img src="docs/showcase/favorites.png" alt="MichoPlay favorites screen with the now-playing panel and queue" width="100%" />
+</p>
+<p align="center"><em>Favorites, queue, and now playing</em></p>
+
+<p align="center">
+  <img src="docs/showcase/settings.png" alt="MichoPlay settings, including the zoom controls" width="100%" />
+</p>
+<p align="center"><em>Playback and appearance settings</em></p>
+
+## Features
+
+- Scan local music folders and browse songs, albums, artists, and folders with embedded artwork and tags.
+- Create playlists, save favorites, search the library, and sort collections.
+- Control playback with shuffle, repeat, an editable queue, an equalizer, and a sleep timer.
+- Keep listening history and pick up from the last played track.
+- Import audio on Android, keep imported files available across restarts, and use background playback controls.
+- Use keyboard shortcuts and adjust the interface density and zoom.
+- Keep your music library and listening data on your device; no streaming account is required.
+
+MichoPlay is available for Linux, Windows, macOS, and Android.
 
 ## Requirements
 
