@@ -8,6 +8,7 @@ coverage/
 # Rust and Tauri generated output (keep Cargo.lock for this application)
 target/
 src-tauri/target/
+src-tauri/binaries/
 src-tauri/gen/*
 !src-tauri/gen/android/
 !src-tauri/gen/android/**

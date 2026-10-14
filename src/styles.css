@@ -592,6 +592,23 @@ body.resizing { cursor: col-resize; user-select: none; }
 .playlist-find { min-height: 36px; padding-inline: 10px; }
 .playlist-submenu > button { min-height: 38px; }
 .playlist-options { max-height: min(320px,45vh); }
+
+.youtube-downloader { display: grid; gap: 15px; margin: 4px 24px 7px; padding: 16px 18px; border: 1px solid rgba(255,255,255,.08); border-radius: 9px; background: linear-gradient(110deg, rgba(245,198,190,.08), rgba(203,196,222,.055) 60%, rgba(216,238,228,.035)); }
+.youtube-downloader-copy { display: flex; align-items: center; gap: 11px; }
+.youtube-downloader-icon { display: grid; width: 36px; height: 36px; flex: 0 0 36px; place-items: center; border-radius: 7px; background: rgba(245,198,190,.12); color: var(--blush); }
+.youtube-downloader-copy h2 { margin: 0; color: #f4f0f6; font-size: 13px; font-weight: 750; }
+.youtube-downloader-copy p { margin: 4px 0 0; color: #a9a3ae; font-size: 10px; line-height: 1.45; }
+.youtube-download-form { display: flex; gap: 9px; }
+.youtube-download-form input { min-width: 0; flex: 1; height: 37px; padding: 0 12px; border: 1px solid rgba(255,255,255,.11); border-radius: 5px; background: rgba(9,9,11,.62); color: #f5f3f6; font-size: 11px; }
+.youtube-download-form input::placeholder { color: #817c86; }
+.youtube-download-form .primary-button { min-width: 142px; justify-content: center; border-radius: 5px; }
+.youtube-download-form .loading-indicator { width: 14px; height: 14px; border-width: 1.5px; }
+.youtube-download-status { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 7px 12px; color: #c7c1cc; font-size: 10px; }
+.youtube-download-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.youtube-download-status strong { color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums; }
+.youtube-progress-track { grid-column: 1 / -1; height: 3px; overflow: hidden; border-radius: 9px; background: rgba(255,255,255,.1); }
+.youtube-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blush), var(--lavender), var(--accent)); transition: width 140ms linear; }
+@media (max-width: 620px) { .youtube-downloader { margin-inline: 14px; padding: 13px; } .youtube-download-form { flex-direction: column; } .youtube-download-form .primary-button { min-height: 37px; } }
 .playlist-options button { min-height: 37px; }
 .collection-open { cursor: pointer; }
 .collection-open:hover strong { color: #fff; }

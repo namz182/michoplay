@@ -21,6 +21,8 @@ export const api = {
   importFiles: (files: { name: string; dataBase64: string }[]) => invoke<string>("library_import_audio_files", { files }),
   importAndPlayFiles: (files: { name: string; dataBase64: string }[]) => invoke<Track[]>("library_import_and_play_audio_files", { files }),
   importDirectory: () => invoke<string>("library_import_directory"),
+  youtubeMusicDirectory: () => invoke<string>("youtube_music_directory"),
+  youtubeDownload: (url: string) => invoke<void>("youtube_download", { url }),
   mediaUpdate: (track: { title: string; artist: string } | null, isPlaying: boolean, durationMs: number, positionMs: number) => invoke<void>("media_update", {
     title: track?.title ?? null,
     artist: track?.artist ?? null,

@@ -12,7 +12,9 @@ use std::{
     collections::{HashMap, HashSet},
     fs::File,
     hash::{Hash, Hasher},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex,
@@ -1129,6 +1131,218 @@ async fn library_import_and_play_audio_files(
 }
 
 #[tauri::command]
+fn youtube_music_directory(app: AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let directory = app
+            .path()
+            .audio_dir()
+            .map_err(|_| "The Music folder couldn’t be located.".to_owned())?
+            .join("YouTube");
+        std::fs::create_dir_all(&directory)
+            .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
+        let directory = directory
+            .canonicalize()
+            .map_err(|_| "The YouTube music folder couldn’t be located.".to_owned())?;
+        Ok(directory.to_string_lossy().into_owned())
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeDownloadProgress {
+    title: String,
+    percent: Option<f32>,
+    message: String,
+    complete: bool,
+}
+
+#[cfg(not(target_os = "android"))]
+fn report_youtube_progress(app: &AppHandle, line: &str) {
+    let Some(progress) = line.strip_prefix("__MICHOPLAY_PROGRESS__") else {
+        return;
+    };
+    let (raw_percent, title) = progress.split_once('|').unwrap_or(("", progress));
+    let percent = raw_percent
+        .trim()
+        .trim_end_matches('%')
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 100.0));
+    let _ = app.emit(
+        "youtube-download-progress",
+        YoutubeDownloadProgress {
+            title: title.trim().to_owned(),
+            percent,
+            message: "Downloading audio".to_owned(),
+            complete: false,
+        },
+    );
+}
+
+#[cfg(not(target_os = "android"))]
+fn bundled_desktop_tool(name: &str) -> Result<std::path::PathBuf, String> {
+    let executable = std::env::current_exe()
+        .map_err(|_| "MichoPlay couldn’t locate its bundled audio tools.".to_owned())?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| "MichoPlay couldn’t locate its bundled audio tools.".to_owned())?;
+    let filename = if cfg!(target_os = "windows") {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
+    let path = directory.join(filename);
+    if !path.is_file() {
+        return Err(format!("MichoPlay’s bundled {name} tool is missing. Reinstall the desktop app."));
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+async fn youtube_download(url: String, app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let url = url.trim().to_owned();
+        let parsed = url::Url::parse(&url).map_err(|_| "Enter a valid YouTube URL.".to_owned())?;
+        let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+        if parsed.scheme() != "https"
+            || !matches!(
+                host.as_str(),
+                "youtube.com"
+                    | "www.youtube.com"
+                    | "m.youtube.com"
+                    | "music.youtube.com"
+                    | "youtu.be"
+                    | "www.youtu.be"
+            )
+        {
+            return Err("Enter a YouTube video or playlist URL.".to_owned());
+        }
+        let directory = app
+            .path()
+            .audio_dir()
+            .map_err(|_| "The Music folder couldn’t be located.".to_owned())?
+            .join("YouTube");
+        std::fs::create_dir_all(&directory)
+            .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
+        let yt_dlp = bundled_desktop_tool("yt-dlp")?;
+        let ffmpeg = bundled_desktop_tool("ffmpeg")?;
+        let deno = bundled_desktop_tool("deno")?;
+
+        tauri::async_runtime::spawn_blocking(move || {
+            use tauri::Emitter;
+
+            let output_template = directory.join("%(title)s [%(id)s].%(ext)s");
+            let mut child = Command::new(yt_dlp)
+                .arg("--ignore-config")
+                .arg("--no-warnings")
+                .arg("--newline")
+                .arg("--yes-playlist")
+                .arg("--extract-audio")
+                .arg("--audio-format")
+                .arg("m4a")
+                .arg("--audio-quality")
+                .arg("0")
+                .arg("--ffmpeg-location")
+                .arg(ffmpeg)
+                .arg("--js-runtimes")
+                .arg(format!("deno:{}", deno.to_string_lossy()))
+                .arg("--embed-metadata")
+                .arg("--progress-template")
+                .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(info.title)s")
+                .arg("--output")
+                .arg(output_template)
+                .arg("--")
+                .arg(&url)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|_| "MichoPlay couldn’t start its bundled YouTube audio downloader.".to_owned())?;
+
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| "Couldn’t read yt-dlp output.".to_owned())?;
+            let stderr_tail = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+            let tail = stderr_tail.clone();
+            let progress_app = app.clone();
+            let stderr_reader = std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines().flatten() {
+                    if line.starts_with("__MICHOPLAY_PROGRESS__") {
+                        report_youtube_progress(&progress_app, &line);
+                    } else if let Ok(mut lines) = tail.lock() {
+                        lines.push(line);
+                        if lines.len() > 24 {
+                            lines.remove(0);
+                        }
+                    }
+                }
+            });
+
+            if let Some(stdout) = child.stdout.take() {
+                for line in BufReader::new(stdout).lines().flatten() {
+                    report_youtube_progress(&app, &line);
+                }
+            }
+            let status = child
+                .wait()
+                .map_err(|_| "yt-dlp stopped before the download finished.".to_owned())?;
+            let _ = stderr_reader.join();
+            if !status.success() {
+                let details = stderr_tail
+                    .lock()
+                    .map(|lines| {
+                        lines
+                            .iter()
+                            .rev()
+                            .take(6)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                let details = details.trim();
+                return Err(if details.is_empty() {
+                    format!(
+                        "yt-dlp couldn’t download that URL (exit code {}).",
+                        status
+                            .code()
+                            .map(|code| code.to_string())
+                            .unwrap_or_else(|| "unknown".to_owned())
+                    )
+                } else {
+                    details.to_owned()
+                });
+            }
+            let _ = app.emit(
+                "youtube-download-progress",
+                YoutubeDownloadProgress {
+                    title: String::new(),
+                    percent: Some(100.0),
+                    message: "Download complete".to_owned(),
+                    complete: true,
+                },
+            );
+            Ok(())
+        })
+        .await
+        .map_err(|_| "The YouTube download couldn’t be completed.".to_owned())?
+    }
+}
+
+#[tauri::command]
 fn library_import_directory(app: AppHandle) -> Result<String, String> {
     let directory = app
         .path()
@@ -1627,6 +1841,8 @@ pub fn run() {
             library_import_audio_files,
             library_import_and_play_audio_files,
             library_import_directory,
+            youtube_music_directory,
+            youtube_download,
             library_scan_folder,
             library_refresh,
             library_remove_folder,

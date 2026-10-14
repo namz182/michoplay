@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, FormEvent, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -7,7 +7,7 @@ import {
   AudioLines, Disc3, Heart, Home, ListMusic, Music2, Play, Plus, Search, Shuffle,
   SkipBack, SkipForward, Volume2, Settings2, MoreHorizontal, FolderOpen, Pause,
   Trash2, X, PanelRightClose, PanelRightOpen, ChevronLeft, ChevronRight,
-  ChevronUp, ChevronDown, GripVertical, RefreshCw, Pencil, Clock3, History as HistoryIcon,
+  ChevronUp, ChevronDown, GripVertical, RefreshCw, Pencil, Clock3, History as HistoryIcon, Youtube,
   ListFilter, List, AlignJustify, Check, Library, Timer, Share2,
 } from "lucide-react";
 import { api } from "../lib/api";
@@ -23,6 +23,7 @@ type TrackMenu = { track: Track; x: number; y: number };
 type ListeningRecord = { trackId: number; lastPlayedAt: number; playCount: number; positionMs: number; durationMs: number };
 type GlobalSearchResult = { type: "Song" | "Folder" | "Album" | "Artist" | "Playlist"; title: string; subtitle: string; artworkKey: string | null; trackId?: number; page?: Page };
 type TrackSort = "custom" | "title" | "artist" | "album" | "recentlyAdded" | "releaseDate" | "duration";
+type YoutubeDownloadProgress = { title: string; percent: number | null; message: string; complete: boolean };
 const trackSortOptions: { key: TrackSort; label: string }[] = [
   { key: "custom", label: "Custom order" }, { key: "title", label: "Title" }, { key: "artist", label: "Artist" },
   { key: "album", label: "Album" }, { key: "recentlyAdded", label: "Recently added" },
@@ -108,6 +109,10 @@ export default function App() {
   const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false);
   const [mobileQueueOpen, setMobileQueueOpen] = useState(false);
   const [mobileQueueEditing, setMobileQueueEditing] = useState(false);
+  const [youtubeDirectory, setYoutubeDirectory] = useState("");
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [youtubeDownloading, setYoutubeDownloading] = useState(false);
+  const [youtubeProgress, setYoutubeProgress] = useState<YoutubeDownloadProgress | null>(null);
   const [zoomLevel, setZoomLevel] = useState(() => normalizeZoom(stored<number>("zoom-level", 100)));
   const [draggedQueue, setDraggedQueue] = useState<number | null>(null);
   const [queueDrop, setQueueDrop] = useState<number | null>(null);
@@ -136,13 +141,42 @@ export default function App() {
   }, [roots]);
   useEffect(() => {
     if (!isTauri()) return;
-    void refresh(roots);
+    if (isAndroid) void refresh(roots);
     void api.volume(stored("volume", 0.75));
     void api.autoplay(stored("autoplay", true));
     void api.equalizer(equalizerBands, equalizerEnabled);
     // Restore library and playback preferences once on launch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (!isTauri() || isAndroid) return;
+    let active = true;
+    void api.youtubeMusicDirectory().then(async (directory) => {
+      if (!active) return;
+      setYoutubeDirectory(directory);
+      const nextRoots = [...new Set([...roots, directory])];
+      setRoots(nextRoots);
+      setPlaylists((prior) => prior.some((item) => item.name.trim().toLocaleLowerCase() === "youtube")
+        ? prior
+        : [{ id: "michoplay-youtube", name: "YouTube", trackIds: [] }, ...prior]);
+      try {
+        const scanned = await api.refresh(nextRoots);
+        if (!active) return;
+        setTracks(scanned);
+        setPlayer(await api.state());
+      } catch (error) {
+        if (active) setMessage(String(error));
+      }
+    }).catch((error) => { if (active) setMessage(String(error)); });
+    return () => { active = false; };
+  }, [isAndroid]);
+  useEffect(() => {
+    if (!isTauri() || isAndroid) return;
+    let unlisten: (() => void) | undefined;
+    void listen<YoutubeDownloadProgress>("youtube-download-progress", ({ payload }) => setYoutubeProgress(payload))
+      .then((dispose) => { unlisten = dispose; });
+    return () => unlisten?.();
+  }, [isAndroid]);
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
@@ -344,6 +378,31 @@ export default function App() {
     const payloads = await Promise.all(supported.map(async (file) => ({ name: file.name, dataBase64: await fileToBase64(file) })));
     await importAudioPayloads(payloads);
   }
+  async function downloadYoutubeAudio(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!youtubeDirectory || youtubeDownloading) return;
+    setYoutubeDownloading(true); setYoutubeProgress(null); setMessage("");
+    try {
+      await api.youtubeDownload(youtubeUrl.trim());
+      const priorYoutubeIds = new Set(tracks.filter((track) => track.rootPath === youtubeDirectory).map((track) => track.id));
+      const nextRoots = [...new Set([...roots, youtubeDirectory])];
+      const scanned = await api.refresh(nextRoots);
+      setRoots(nextRoots); setTracks(scanned); setPlayer(await api.state());
+      const downloadedIds = scanned.filter((track) => track.rootPath === youtubeDirectory && !priorYoutubeIds.has(track.id)).map((track) => track.id);
+      setPlaylists((prior) => {
+        const existing = prior.find((item) => item.name.trim().toLocaleLowerCase() === "youtube");
+        if (!existing) return [{ id: "michoplay-youtube", name: "YouTube", trackIds: downloadedIds }, ...prior];
+        return prior.map((item) => item.id === existing.id
+          ? { ...item, trackIds: [...item.trackIds, ...downloadedIds.filter((id) => !item.trackIds.includes(id))] }
+          : item);
+      });
+      setYoutubeUrl("");
+      setMessage(`Saved audio to ${youtubeDirectory}`);
+    } catch (error) {
+      setYoutubeProgress(null);
+      setMessage(String(error));
+    } finally { setYoutubeDownloading(false); }
+  }
   function chooseLibrarySource() {
     if (isAndroid) importInput.current?.click();
     else void chooseFolder();
@@ -402,6 +461,8 @@ export default function App() {
     return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
   }, [tracks]);
   const selectedPlaylist = page.detail?.kind === "playlist" ? playlists.find((item) => item.id === page.detail?.key) : undefined;
+  const youtubePlaylist = playlists.find((item) => item.name.trim().toLocaleLowerCase() === "youtube");
+  const isYoutubePlaylist = !isAndroid && selectedPlaylist?.name.trim().toLocaleLowerCase() === "youtube";
   const collectionTracks = useMemo(() => {
     const detail = page.detail;
     if (page.section === "Recently Played") return recentTracks;
@@ -553,10 +614,10 @@ export default function App() {
     <input ref={importInput} className="audio-import-input" type="file" accept="audio/*,.mp3,.flac,.wav,.ogg,.opus,.m4a,.aac,.aiff,.aif" multiple aria-label="Choose audio files" onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; void importAudioFiles(files); }}/>
     <aside className="sidebar" aria-label="Main navigation">
       <button className="brand" onClick={() => navigate({ section: "Home" })}><span className="brand-mark"><AudioLines size={19}/></span><span>Micho<span className="brand-light">Play</span></span></button>
-      <nav className="nav-list" aria-label="Library">{navigation.map(({ label, icon: Icon }) => <button key={label} className={`nav-item ${page.section === label ? "active" : ""}`} aria-current={page.section === label ? "page" : undefined} onClick={() => { setSearch(""); navigate({ section: label }); }}><Icon size={18}/><span>{label}</span></button>)}</nav>
+      <nav className="nav-list" aria-label="Library">{navigation.map(({ label, icon: Icon }) => <Fragment key={label}><button className={`nav-item ${page.section === label && !(label === "Playlists" && isYoutubePlaylist) ? "active" : ""}`} aria-current={page.section === label && !(label === "Playlists" && isYoutubePlaylist) ? "page" : undefined} onClick={() => { setSearch(""); navigate({ section: label }); }}><Icon size={18}/><span>{label}</span></button>{label === "Favorites" && !isAndroid && <button className={`nav-item ${isYoutubePlaylist ? "active" : ""}`} aria-current={isYoutubePlaylist ? "page" : undefined} onClick={() => { const youtube = youtubePlaylist ?? { id: "michoplay-youtube", name: "YouTube", trackIds: [] }; if (!youtubePlaylist) setPlaylists((prior) => prior.some((item) => item.name.trim().toLocaleLowerCase() === "youtube") ? prior : [youtube, ...prior]); setSearch(""); navigate({ section: "Playlists", detail: { kind: "playlist", key: youtube.id, title: youtube.name } }); }}><Youtube size={18}/><span>YouTube</span></button>}</Fragment>)}</nav>
       <div className="sidebar-rule"/><div className="library-heading"><span className="side-label">Your library</span><button className="icon-button small" aria-label={isAndroid ? "Import audio files" : "Add a music folder"} onClick={chooseLibrarySource} disabled={scanning}><Plus size={17}/></button></div>
       <div className="library-summary"><span>{roots.length ? `${roots.length} folders` : "No folders added"}</span><span className="library-count">{tracks.length} songs</span></div>
-      <div className="sidebar-playlists">{playlists.map((playlist) => <button key={playlist.id} className={selectedPlaylist?.id === playlist.id ? "selected" : ""} onClick={() => navigate({ section: "Playlists", detail: { kind: "playlist", key: playlist.id, title: playlist.name } })}><ListMusic size={15}/><span>{playlist.name}</span></button>)}</div>
+      <div className="sidebar-playlists">{playlists.filter((playlist) => playlist.name.trim().toLocaleLowerCase() !== "youtube").map((playlist) => <button key={playlist.id} className={selectedPlaylist?.id === playlist.id ? "selected" : ""} onClick={() => navigate({ section: "Playlists", detail: { kind: "playlist", key: playlist.id, title: playlist.name } })}><ListMusic size={15}/><span>{playlist.name}</span></button>)}</div>
       <button className={`settings-link ${page.section === "Settings" ? "active" : ""}`} onClick={() => navigate({ section: "Settings" })}><Settings2 size={17}/><span>Settings</span></button>
     </aside>
     <div className="resize-handle sidebar-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" onPointerDown={(event) => startResize("sidebar", event)}/>
@@ -596,7 +657,14 @@ export default function App() {
             <div className={`collection-heading ${listPage ? "detail-heading" : ""}`}>
               {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/>}<div className="heading-foreground">{page.detail && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={page.detail.kind === "folder" ? <FolderOpen size={40}/> : undefined}/>}<div className="heading-copy"><h1>{heading}</h1><p>{listPage ? `${collectionTracks.length} songs · ${time(collectionTracks.reduce((sum, track) => sum + track.durationMs, 0))}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : `${playlists.length} playlists`}</p></div></div>
             </div>
-          {listPage ? <><div className="collection-tools"><div className="play-actions"><button className={`primary-play ${collectionTracks.some((track) => track.id === player.currentTrackId) ? "is-playing" : ""}`} aria-label={collectionTracks.some((track) => track.id === player.currentTrackId) && player.isPlaying ? `Pause ${heading}` : `Play ${heading}`} disabled={!visibleTracks.length} onClick={() => { if (collectionTracks.some((track) => track.id === player.currentTrackId)) void run(api.toggle); else if (sortedVisibleTracks[0]) playCollection(sortedVisibleTracks[0]); }}>{collectionTracks.some((track) => track.id === player.currentTrackId) && player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button><button className={`round-button ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" disabled={!visibleTracks.length} onClick={() => void run(api.shuffle)}><Shuffle size={18}/></button>{selectedPlaylist && <><button className="text-action" onClick={() => newPlaylist(undefined, selectedPlaylist)}><Pencil size={14}/>Rename</button><button className="icon-button" aria-label="Delete playlist" onClick={() => confirmDeletePlaylist(selectedPlaylist)}><Trash2 size={16}/></button></>}</div><div className="collection-tools-right"><label className="collection-search"><Search size={15}/><input aria-label={`Search in ${heading}`} placeholder={`Search in ${heading}`} value={inlineSearch} onChange={(event) => setInlineSearch(event.target.value)}/>{inlineSearch && <button className="icon-button" aria-label="Clear collection search" onClick={() => setInlineSearch("")}><X size={14}/></button>}</label><div className="sort-control"><button className={`sort-trigger ${sortMenuOpen ? "open" : ""}`} aria-label={`Sort by ${trackSortOptions.find((option) => option.key === sortBy)?.label}`} aria-expanded={sortMenuOpen} onClick={() => setSortMenuOpen((open) => !open)}><span>{trackSortOptions.find((option) => option.key === sortBy)?.label}</span><ListFilter size={15}/></button>{sortMenuOpen && <div className="sort-menu" role="menu"><strong className="sort-menu-heading">Sort by</strong>{trackSortOptions.map((option) => <button key={option.key} role="menuitemradio" aria-checked={sortBy === option.key} className={`sort-menu-option ${sortBy === option.key ? "selected" : ""}`} onClick={() => { setSortBy(option.key); localStorage.setItem("michoplay-collection-sort", JSON.stringify(option.key)); setSortMenuOpen(false); }}><span>{option.label}</span>{sortBy === option.key && <Check size={15}/>}</button>)}<span className="sort-menu-divider"/><strong className="sort-menu-heading">View as</strong><button role="menuitemradio" aria-checked={!compact} className={`sort-menu-option view-option ${!compact ? "selected" : ""}`} onClick={() => { setCompact(false); setSortMenuOpen(false); }}><List size={15}/><span>List</span>{!compact && <Check size={15}/>}</button><button role="menuitemradio" aria-checked={compact} className={`sort-menu-option view-option ${compact ? "selected" : ""}`} onClick={() => { setCompact(true); setSortMenuOpen(false); }}><AlignJustify size={15}/><span>Compact</span>{compact && <Check size={15}/>}</button></div>}</div></div></div>{rows(sortedVisibleTracks, page.section === "Favorites" ? "No favorites yet" : page.section === "Recently Played" ? "No listening history yet" : "No songs here")}</> : page.section === "Home" ? <div className="home-section android-home">
+          {listPage ? <>{isYoutubePlaylist && <section className="youtube-downloader" aria-label="Download YouTube audio">
+            <div className="youtube-downloader-copy"><span className="youtube-downloader-icon"><Music2 size={18}/></span><div><h2>Download audio</h2><p>Paste a YouTube video or playlist URL. Audio is saved in Music/YouTube.</p></div></div>
+            <form className="youtube-download-form" onSubmit={(event) => { void downloadYoutubeAudio(event); }}>
+              <input type="url" required aria-label="YouTube video or playlist URL" placeholder="https://www.youtube.com/watch?v=…" value={youtubeUrl} disabled={youtubeDownloading} onChange={(event) => setYoutubeUrl(event.target.value)}/>
+              <button className="primary-button" type="submit" disabled={!youtubeUrl.trim() || youtubeDownloading || !youtubeDirectory}>{youtubeDownloading ? <span className="loading-indicator"/> : <Music2 size={15}/>} {youtubeDownloading ? "Downloading" : "Download audio"}</button>
+            </form>
+            {youtubeProgress && <div className="youtube-download-status" role="status" aria-live="polite"><span>{youtubeProgress.title || youtubeProgress.message}</span>{youtubeProgress.percent !== null && <strong>{Math.round(youtubeProgress.percent)}%</strong>}<div className="youtube-progress-track"><span style={{ width: `${youtubeProgress.percent ?? 4}%` }}/></div></div>}
+          </section>}<div className="collection-tools"><div className="play-actions"><button className={`primary-play ${collectionTracks.some((track) => track.id === player.currentTrackId) ? "is-playing" : ""}`} aria-label={collectionTracks.some((track) => track.id === player.currentTrackId) && player.isPlaying ? `Pause ${heading}` : `Play ${heading}`} disabled={!visibleTracks.length} onClick={() => { if (collectionTracks.some((track) => track.id === player.currentTrackId)) void run(api.toggle); else if (sortedVisibleTracks[0]) playCollection(sortedVisibleTracks[0]); }}>{collectionTracks.some((track) => track.id === player.currentTrackId) && player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button><button className={`round-button ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" disabled={!visibleTracks.length} onClick={() => void run(api.shuffle)}><Shuffle size={18}/></button>{selectedPlaylist && <><button className="text-action" onClick={() => newPlaylist(undefined, selectedPlaylist)}><Pencil size={14}/>Rename</button><button className="icon-button" aria-label="Delete playlist" onClick={() => confirmDeletePlaylist(selectedPlaylist)}><Trash2 size={16}/></button></>}</div><div className="collection-tools-right"><label className="collection-search"><Search size={15}/><input aria-label={`Search in ${heading}`} placeholder={`Search in ${heading}`} value={inlineSearch} onChange={(event) => setInlineSearch(event.target.value)}/>{inlineSearch && <button className="icon-button" aria-label="Clear collection search" onClick={() => setInlineSearch("")}><X size={14}/></button>}</label><div className="sort-control"><button className={`sort-trigger ${sortMenuOpen ? "open" : ""}`} aria-label={`Sort by ${trackSortOptions.find((option) => option.key === sortBy)?.label}`} aria-expanded={sortMenuOpen} onClick={() => setSortMenuOpen((open) => !open)}><span>{trackSortOptions.find((option) => option.key === sortBy)?.label}</span><ListFilter size={15}/></button>{sortMenuOpen && <div className="sort-menu" role="menu"><strong className="sort-menu-heading">Sort by</strong>{trackSortOptions.map((option) => <button key={option.key} role="menuitemradio" aria-checked={sortBy === option.key} className={`sort-menu-option ${sortBy === option.key ? "selected" : ""}`} onClick={() => { setSortBy(option.key); localStorage.setItem("michoplay-collection-sort", JSON.stringify(option.key)); setSortMenuOpen(false); }}><span>{option.label}</span>{sortBy === option.key && <Check size={15}/>}</button>)}<span className="sort-menu-divider"/><strong className="sort-menu-heading">View as</strong><button role="menuitemradio" aria-checked={!compact} className={`sort-menu-option view-option ${!compact ? "selected" : ""}`} onClick={() => { setCompact(false); setSortMenuOpen(false); }}><List size={15}/><span>List</span>{!compact && <Check size={15}/>}</button><button role="menuitemradio" aria-checked={compact} className={`sort-menu-option view-option ${compact ? "selected" : ""}`} onClick={() => { setCompact(true); setSortMenuOpen(false); }}><AlignJustify size={15}/><span>Compact</span>{compact && <Check size={15}/>}</button></div>}</div></div></div>{rows(sortedVisibleTracks, page.section === "Favorites" ? "No favorites yet" : page.section === "Recently Played" ? "No listening history yet" : "No songs here")}</> : page.section === "Home" ? <div className="home-section android-home">
             {isAndroid && <div className="mobile-filter-row home-filter-row" role="tablist" aria-label="Home content filters">{(["All", "Folders", "Albums"] as const).map((filter) => <button key={filter} role="tab" aria-selected={mobileHomeFilter === filter} className={mobileHomeFilter === filter ? "selected" : ""} onClick={() => setMobileHomeFilter(filter)}>{filter}</button>)}</div>}
             {mobileHomeFilter !== "Albums" && <><div className="section-title-row"><h2>{isAndroid ? "Folders" : "Folders"}</h2><button className="text-action" disabled={scanning} onClick={chooseLibrarySource}><Plus size={15}/>{isAndroid ? "Import music" : "Add root folder"}</button></div><CollectionGrid collections={folders} kind="folder" onOpen={(item) => openDetail("Home", "folder", item)} onPlay={(item) => { if (item.tracks.some((track) => track.id === player.currentTrackId)) void run(api.toggle); else void run(() => api.playCollection(item.tracks.map((track) => track.id), item.tracks[0].id)); }} playingId={player.currentTrackId} isPlaying={player.isPlaying}/>{!folders.length && <Empty title={scanning ? "Scanning music…" : "Your music starts here"} description="Import audio files to build your library on this device." action={<button className="primary-button" disabled={scanning} onClick={chooseLibrarySource}><Plus size={15}/>Import audio</button>}/>}</>}
             {isAndroid && mobileHomeFilter !== "Folders" && albums.length > 0 && <section className="mobile-home-albums"><div className="section-title-row"><h2>While you’re offline</h2><button className="text-action" onClick={() => setMobileTab("library")}>Your albums<ChevronRight size={14}/></button></div><CollectionGrid collections={albums.slice(0, 8)} kind="album" onOpen={(item) => openDetail("Albums", "album", item)} onPlay={playCardCollection} playingId={player.currentTrackId} isPlaying={player.isPlaying}/></section>}

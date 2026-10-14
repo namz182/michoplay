@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "app.michoplay.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run tauri:prepare-tools && npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run tauri:prepare-tools && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "resources": ["resources/THIRD-PARTY-LICENSES.txt"],
     "category": "Music",
     "android": {
       "minSdkVersion": 26
