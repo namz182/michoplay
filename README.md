@@ -36,6 +36,8 @@
 
 MichoPlay is available for Linux, Windows, macOS, and Android.
 
+<p align="center"><a href="https://github.com/namz182/michoplay/releases"><strong>Download the latest release</strong></a></p>
+
 ## Requirements
 
 - Node.js 20.19+ or 22.12+ (Node 24 is also suitable)
@@ -130,16 +132,51 @@ Choose the connected device if the CLI asks. Vite uses Tauri’s `TAURI_DEV_HOST
 
 ## Build release apps
 
-### Desktop
+### Linux
 
-Build the frontend and native desktop bundle:
+Run the build on Linux to create the selected package. Tauri places each bundle under `src-tauri/target/release/bundle/`.
 
 ```sh
-npm run build
-npm run tauri build
+npm run tauri build -- --bundles deb
+npm run tauri build -- --bundles rpm
+npm run tauri build -- --bundles appimage
 ```
 
-Installers and bundles are written under `src-tauri/target/release/bundle/`.
+### Windows
+
+Build an MSI on Windows. WiX, which Tauri uses for MSI packages, only runs on Windows. On Windows, choose either installer:
+
+```powershell
+npm run tauri build -- --bundles msi
+npm run tauri build -- --bundles nsis
+```
+
+#### Build a Windows NSIS installer from Kali/Linux
+
+You can cross-compile the Windows setup `.exe` from Kali or another Debian-based Linux system. Install NSIS, LLVM, and LLD, then install the Windows Rust target and `cargo-xwin`:
+
+```sh
+sudo apt install -y nsis lld llvm
+rustup target add x86_64-pc-windows-msvc
+cargo install --locked cargo-xwin
+```
+
+Build with the Windows target and runner explicitly selected. Running `--bundles nsis` without these options builds for the current Linux system.
+
+```sh
+npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis
+```
+
+The installer is created at `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`. MSI packages still need to be built on Windows. See the [Tauri Windows installer guide](https://v2.tauri.app/distribute/windows-installer/) for cross-compilation details and caveats.
+
+### macOS
+
+Run these commands on macOS to create an application bundle and disk image:
+
+```sh
+npm run tauri build -- --bundles app
+npm run tauri build -- --bundles dmg
+```
 
 ### Android APK or app bundle
 
@@ -161,12 +198,6 @@ Outputs are under `src-tauri/gen/android/app/build/outputs/`. Install a generate
 adb install -r /path/to/generated.apk
 ```
 
-The release build runs the frontend build command automatically. For development, use `npm run tauri android dev` instead.
+The release build runs the frontend build command automatically. For development, use `npm run tauri android dev` instead. Tauri’s desktop bundle targets are `deb`, `rpm`, `appimage`, `msi`, `nsis`, `app`, and `dmg`; see the [Tauri distribution guide](https://v2.tauri.app/distribute/) for platform requirements and bundle details.
 
-## Project layout
-
-- `src/` — React interface and styles
-- `src-tauri/` — Rust/Tauri host, Android project, and native playback integration
-- `docs/` — project documentation
-
-The library, playlists, playback queue, and listening history are stored locally. Music files remain on disk on desktop; Android imports are copied into MichoPlay’s app storage.
+Your library, playlists, playback queue, and listening history stay on your device. Desktop music files remain in their folders; Android imports are copied into MichoPlay’s app storage.
