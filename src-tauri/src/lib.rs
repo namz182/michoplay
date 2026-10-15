@@ -4,7 +4,10 @@ use lofty::{
     probe::Probe,
     tag::ItemKey,
 };
-use rodio::{ChannelCount, Decoder, OutputStream, OutputStreamBuilder, SampleRate, Sink, Source};
+use rodio::{
+    source::SeekError, ChannelCount, Decoder, OutputStream, OutputStreamBuilder, SampleRate, Sink,
+    Source,
+};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
 use souvlaki::{MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
@@ -163,6 +166,12 @@ impl<S: Source> Source for EqualizerSource<S> {
     }
     fn total_duration(&self) -> Option<Duration> {
         self.input.total_duration()
+    }
+    fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
+        self.input.try_seek(position)?;
+        self.states.fill([BiquadState::default(); 6]);
+        self.channel = 0;
+        Ok(())
     }
 }
 
