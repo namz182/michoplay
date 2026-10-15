@@ -75,8 +75,8 @@ button:disabled { cursor: default; }
 
 .workspace { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
 .topbar { position: relative; z-index: 20; display: flex; flex: 0 0 62px; align-items: center; justify-content: space-between; gap: 18px; padding: 0 18px; }
-.topbar-settings { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #aaa5af; cursor: pointer; }
-.topbar-settings:hover, .topbar-settings.active { background: rgba(255,255,255,.08); color: #fff; }
+.topbar-settings, .topbar-downloads { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #aaa5af; cursor: pointer; }
+.topbar-settings:hover, .topbar-settings.active, .topbar-downloads:hover, .topbar-downloads.active { background: rgba(255,255,255,.08); color: #fff; }
 .topbar-title { display: none; color: var(--text); font-size: 14px; font-weight: 750; }
 .search-box { display: flex; align-items: center; gap: 10px; width: min(420px, 70%); height: 39px; margin: 0 auto; padding: 0 14px; border: 1px solid rgba(255,255,255,.07); border-radius: 999px; background: #1a191c; color: #b5b0ba; }
 .global-search { position: relative; z-index: 30; }
@@ -299,7 +299,12 @@ button:disabled { cursor: default; }
 .work-area { gap: 0; }
 .content-scroll { margin-right: 5px; }
 .panel-resize { margin-right: 3px; }
-.now-panel-head { display: flex; align-items: center; justify-content: space-between; }
+.now-panel-head { display: flex; align-items: center; gap: 5px; }
+.now-panel-head .side-panel-tabs { flex: 1; }
+.now-panel-head .side-panel-tabs { gap: 2px; }
+.now-panel-head .side-panel-tabs button { min-width: 0; padding-inline: 6px; white-space: nowrap; }
+.now-panel-close { flex: 0 0 28px; }
+.now-panel-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 1px; }
 .settings-link.active { background: #242226; color: #fff; }
 .settings-link.active svg { color: var(--lavender); }
 .collection-heading { padding-bottom: 14px; }
@@ -633,7 +638,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .playlist-submenu.opens-right::before { left: -8px; right: auto; }
 .playlist-find { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 3px; background: #3a373e; color: #bfb8c8; }
 .playlist-find input { min-width: 0; width: 100%; border: 0; outline: none; background: transparent; color: #f2edf7; font-size: 11px; }
-.playlist-options { max-height: min(320px,45vh); overflow: auto; scrollbar-width: thin; }
+.playlist-options { max-height: min(320px, max(100px, calc(100dvh - 190px))); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .playlist-submenu > p { padding: 3px 10px; color: #b1a9bb; font-size: 10px; }
 .dialog-overlay { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.62); backdrop-filter: blur(5px); }
 .playlist-dialog { display: grid; width: min(410px,100%); gap: 20px; padding: 25px; border: 1px solid rgba(255,255,255,.12); border-radius: 10px; background: #252229; box-shadow: 0 15px 50px rgba(0,0,0,.5); }
@@ -721,7 +726,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .playlist-submenu { width: 256px; padding: 7px; border-radius: 8px; background: rgba(39,37,42,.99); }
 .playlist-find { min-height: 36px; padding-inline: 10px; }
 .playlist-submenu > button { min-height: 38px; }
-.playlist-options { max-height: min(320px,45vh); }
+.playlist-options { max-height: min(320px, max(100px, calc(100dvh - 190px))); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 
 .youtube-downloader { display: grid; gap: 12px; margin: 10px 24px 13px; padding: 0; border: 0; border-radius: 0; background: transparent; }
 .youtube-search-header { display: flex; min-width: 0; align-items: center; justify-content: center; }

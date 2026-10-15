@@ -1222,8 +1222,10 @@ struct YoutubeDownloadTask {
 struct YoutubeDownloadManager {
     tasks: Vec<YoutubeDownloadTask>,
     next_id: u64,
-    running: bool,
+    active_workers: usize,
 }
+
+const MAX_CONCURRENT_YOUTUBE_DOWNLOADS: usize = 3;
 
 #[derive(Default)]
 struct YoutubeDownloadState(Mutex<YoutubeDownloadManager>);
@@ -1532,7 +1534,7 @@ fn youtube_download_enqueue(
             item
         };
         emit_youtube_downloads(&app);
-        start_youtube_download_worker(app.clone());
+        start_youtube_download_workers(app.clone());
         Ok(item)
     }
 }
@@ -1599,7 +1601,7 @@ fn youtube_download_resume(
             task.item.message = "Waiting to resume".to_owned();
         }
         emit_youtube_downloads(&app);
-        start_youtube_download_worker(app);
+        start_youtube_download_workers(app);
         Ok(())
     }
 }
@@ -1661,22 +1663,22 @@ fn youtube_download_remove(
 }
 
 #[cfg(not(target_os = "android"))]
-fn start_youtube_download_worker(app: AppHandle) {
-    let start = app
+fn start_youtube_download_workers(app: AppHandle) {
+    let workers_to_start = app
         .state::<YoutubeDownloadState>()
         .0
         .lock()
         .map(|mut manager| {
-            if manager.running {
-                false
-            } else {
-                manager.running = true;
-                true
-            }
+            let queued = manager.tasks.iter().filter(|task| task.item.status == "queued").count();
+            let available = MAX_CONCURRENT_YOUTUBE_DOWNLOADS.saturating_sub(manager.active_workers);
+            let count = queued.min(available);
+            manager.active_workers += count;
+            count
         })
-        .unwrap_or(false);
-    if start {
-        tauri::async_runtime::spawn_blocking(move || youtube_download_worker(app));
+        .unwrap_or(0);
+    for _ in 0..workers_to_start {
+        let worker_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || youtube_download_worker(worker_app));
     }
 }
 
@@ -1697,7 +1699,7 @@ fn youtube_download_worker(app: AppHandle) {
                 task.item.message = "Starting download".to_owned();
                 Some((task.item.id.clone(), task.item.url.clone()))
             } else {
-                manager.running = false;
+                manager.active_workers = manager.active_workers.saturating_sub(1);
                 None
             }
         };
