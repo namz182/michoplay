@@ -121,9 +121,14 @@ async function download(url, path) {
 
 async function downloadVerified(asset, sumsAsset, expectedName, directory) {
   const sumsPath = await download(sumsAsset.browser_download_url, join(directory, `${sumsAsset.name}-${asset.id}`));
-  const lines = readFileSync(sumsPath, "utf8").split(/\r?\n/).filter((line) => line.trim());
+  const checksumText = readFileSync(sumsPath, "utf8");
+  const lines = checksumText.split(/\r?\n/).filter((line) => line.trim());
   const expected = lines.find((line) => line.trim().endsWith(expectedName)) ?? (lines.length === 1 ? lines[0] : undefined);
-  const hash = expected?.trim().split(/\s+/)[0]?.replace(/^\*/, "");
+  let hash = expected?.match(/\b[a-f\d]{64}\b/i)?.[0];
+  if (!hash) {
+    const publishedHashes = [...new Set([...checksumText.matchAll(/\b[a-f\d]{64}\b/gi)].map(([value]) => value))];
+    if (publishedHashes.length === 1) [hash] = publishedHashes;
+  }
   if (!hash || !/^[a-f\d]{64}$/i.test(hash)) throw new Error(`No SHA-256 checksum was published for ${expectedName}.`);
   const path = join(directory, asset.name);
   if (existsSync(path)) {
