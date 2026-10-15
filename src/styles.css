@@ -164,6 +164,8 @@ button:disabled { cursor: default; }
 .progress-line { flex: 1; }
 .player-options { display: flex; align-items: center; justify-content: flex-end; gap: 10px; color: #aaa4ae; }
 .player-options input[type="range"] { width: 78px; accent-color: var(--accent); }
+.volume-mute-button { display: grid; width: 20px; height: 26px; flex: 0 0 20px; place-items: center; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.volume-mute-button:hover { color: #fff; }
 .full-mode-trigger.active { color: var(--accent-strong); }
 
 .full-player-mode { position: fixed; z-index: 120; inset: 0; display: grid; grid-template-rows: 50px minmax(0,1fr); overflow: hidden; padding: 8px; background: #282828; color: #fff; }
