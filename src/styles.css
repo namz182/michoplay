@@ -191,6 +191,7 @@ button:disabled { cursor: default; }
 .full-mode-transport { display: flex; align-items: center; justify-content: center; gap: clamp(17px,3vw,35px); }
 .full-mode-control { position: relative; display: grid; width: 36px; height: 36px; place-items: center; border: 0; background: transparent; color: rgba(255,255,255,.78); cursor: pointer; }
 .full-mode-control.active { color: var(--accent-strong); }
+.shuffle-control, .repeat-control { position: relative; }
 .full-mode-control small { position: absolute; right: 1px; bottom: 2px; font-size: 8px; font-weight: 800; }
 .full-mode-play { display: grid; width: 46px; height: 46px; place-items: center; border: 0; border-radius: 50%; background: #fff; color: #202020; cursor: pointer; }
 .full-mode-play:hover { transform: scale(1.04); }
@@ -989,3 +990,5 @@ body.resizing { cursor: col-resize; user-select: none; }
   .android-app .folder-grid .collection-open > strong { font-size:12px; }
   .mobile-player-screen { padding-inline:18px; }
 }
+.shuffle-control.active, .repeat-control.active, .full-mode-control.active { color: #1ed760; }
+.shuffle-control.active::after, .repeat-control.active::after, .full-mode-control.active::after { position: absolute; bottom: -2px; left: 50%; width: 4px; height: 4px; border-radius: 50%; background: #1ed760; content: ""; transform: translateX(-50%); }
