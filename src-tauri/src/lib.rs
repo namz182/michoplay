@@ -32,12 +32,15 @@ use walkdir::WalkDir;
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
 
 fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let mut command = Command::new(program);
     #[cfg(windows)]
-    {
+    let command = {
+        let mut command = Command::new(program);
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+        command
+    };
+    #[cfg(not(windows))]
+    let command = Command::new(program);
     command
 }
 
