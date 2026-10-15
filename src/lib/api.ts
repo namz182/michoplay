@@ -12,6 +12,8 @@ export type PlayerSnapshot = {
   sleepTimerRemainingMs: number | null; sleepTimerAtTrackEnd: boolean;
   equalizerBands: number[]; equalizerEnabled: boolean;
 };
+export type YoutubeSearchResult = { id: string; title: string; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean };
+export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string };
 export const api = {
   scanFolder: (folder: string) => invoke<Track[]>("library_scan_folder", { folder }),
   openAudioFiles: (paths: string[]) => invoke<Track[]>("library_open_audio_files", { paths }),
@@ -21,6 +23,14 @@ export const api = {
   importFiles: (files: { name: string; dataBase64: string }[]) => invoke<string>("library_import_audio_files", { files }),
   importAndPlayFiles: (files: { name: string; dataBase64: string }[]) => invoke<Track[]>("library_import_and_play_audio_files", { files }),
   importDirectory: () => invoke<string>("library_import_directory"),
+  youtubeMusicDirectory: () => invoke<string>("youtube_music_directory"),
+  youtubeSearch: (query: string) => invoke<YoutubeSearchResult[]>("youtube_search", { query }),
+  youtubeDownloadsState: () => invoke<YoutubeDownload[]>("youtube_downloads_state"),
+  youtubeDownloadEnqueue: (url: string, title: string, thumbnail: string | null, isPlaylist: boolean) => invoke<YoutubeDownload>("youtube_download_enqueue", { url, title, thumbnail, isPlaylist }),
+  youtubeDownloadPause: (id: string) => invoke<void>("youtube_download_pause", { id }),
+  youtubeDownloadResume: (id: string) => invoke<void>("youtube_download_resume", { id }),
+  youtubeDownloadCancel: (id: string) => invoke<void>("youtube_download_cancel", { id }),
+  youtubeDownloadRemove: (id: string) => invoke<void>("youtube_download_remove", { id }),
   mediaUpdate: (track: { title: string; artist: string } | null, isPlaying: boolean, durationMs: number, positionMs: number) => invoke<void>("media_update", {
     title: track?.title ?? null,
     artist: track?.artist ?? null,

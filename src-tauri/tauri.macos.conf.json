@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": [
+      "binaries/michoplay-yt-dlp",
+      "binaries/michoplay-ffmpeg",
+      "binaries/michoplay-deno"
+    ],
+    "resources": ["resources/THIRD-PARTY-LICENSES.txt"]
+  }
+}

@@ -33,6 +33,7 @@
 - Import audio on Android, keep imported files available across restarts, and use background playback controls.
 - Use keyboard shortcuts and adjust the interface density and zoom.
 - Keep your music library and listening data on your device; no streaming account is required.
+- On desktop, download YouTube videos or playlists as M4A audio into `Music/YouTube` and keep them in the YouTube playlist.
 
 MichoPlay is available for Linux, Windows, macOS, and Android.
 
@@ -201,3 +202,9 @@ adb install -r /path/to/generated.apk
 The release build runs the frontend build command automatically. For development, use `npm run tauri android dev` instead. Tauri’s desktop bundle targets are `deb`, `rpm`, `appimage`, `msi`, `nsis`, `app`, and `dmg`; see the [Tauri distribution guide](https://v2.tauri.app/distribute/) for platform requirements and bundle details.
 
 Your library, playlists, playback queue, and listening history stay on your device. Desktop music files remain in their folders; Android imports are copied into MichoPlay’s app storage.
+
+### YouTube audio downloads (desktop)
+
+Desktop bundles include `yt-dlp`, FFmpeg, and Deno, so users do not need to install them separately. The first desktop build downloads the latest release assets for the selected target and verifies their published SHA-256 checksums. This requires network access during the build. Supported targets are Linux x64/arm64, Windows x64, and macOS x64/Apple Silicon. Bundled tool notices are included in the app under `THIRD-PARTY-LICENSES.txt`.
+
+Open **YouTube** directly below **Favorites** in the desktop sidebar and search for a song, or paste a YouTube video or playlist link. Search waits 500 ms after typing, returns up to 10 flat results, and caches recent queries briefly. Search from the centered YouTube field. Result cards show an estimated M4A size based on duration; preview a result in the app, or use its hover Download button to add it directly. Jobs appear in the bottom bar’s **Downloads** panel with byte progress when yt-dlp reports it; you can pause, resume, cancel, retry, or dismiss them. MichoPlay extracts M4A audio into the `YouTube` folder inside the operating system’s Music folder, embeds the thumbnail when available, and adds completed tracks to the app playlist and library. Android downloads are not supported yet. See the [yt-dlp dependency notes](https://github.com/yt-dlp/yt-dlp#dependencies) for the tools MichoPlay bundles.
