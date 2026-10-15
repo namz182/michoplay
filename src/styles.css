@@ -639,7 +639,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .now-track-copy > span { overflow: hidden; color: #bcb6c1; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .now-title .row-action { flex: 0 0 auto; margin-left: auto; color: #c8c1cf; }
 .now-title .row-action.selected { color: #d2c6ec; }
-.now-album { display: block; margin-top: 8px; color: #918b96; line-height: 1.4; }
 .queue-hint { margin-top: 10px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.09); }
 .queue-list { display: grid; gap: 7px; padding: 3px 0 12px; }
 .queue-row { min-height: 47px; gap: 8px; padding: 5px 6px; border: 1px solid transparent; border-radius: 6px; }
