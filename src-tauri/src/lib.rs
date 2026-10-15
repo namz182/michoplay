@@ -31,6 +31,16 @@ use walkdir::WalkDir;
 
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
 
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    command
+}
+
 #[derive(Clone, Copy)]
 struct BiquadCoefficients {
     b0: f32,
@@ -377,7 +387,7 @@ fn system_set_default_player() -> Result<(), String> {
             "audio/aiff",
         ];
         for mime in mime_types {
-            let status = std::process::Command::new("xdg-mime")
+            let status = hidden_command("xdg-mime")
                 .args(["default", desktop_id, mime])
                 .status()
                 .map_err(|_| {
@@ -1328,7 +1338,7 @@ async fn youtube_search(query: String) -> Result<Vec<YoutubeSearchResult>, Strin
             } else {
                 format!("ytsearch10:{query}")
             };
-            let output = Command::new(yt_dlp)
+            let output = hidden_command(yt_dlp)
                 .arg("--ignore-config")
                 .arg("--no-warnings")
                 .arg("--flat-playlist")
@@ -1753,7 +1763,7 @@ fn run_youtube_download(
     let ffmpeg = bundled_desktop_tool("ffmpeg")?;
     let deno = bundled_desktop_tool("deno")?;
     let output_template = directory.join("%(title)s [%(id)s].%(ext)s");
-    let mut child = Command::new(yt_dlp)
+    let mut child = hidden_command(yt_dlp)
         .arg("--ignore-config")
         .arg("--no-warnings")
         .arg("--newline")
@@ -1888,7 +1898,7 @@ fn run_youtube_download(
 
 #[cfg(all(unix, not(target_os = "android")))]
 fn stop_download_process(pid: u32) {
-    let _ = Command::new("kill")
+    let _ = hidden_command("kill")
         .arg("-TERM")
         .arg(pid.to_string())
         .status();
@@ -1896,7 +1906,7 @@ fn stop_download_process(pid: u32) {
 
 #[cfg(windows)]
 fn stop_download_process(pid: u32) {
-    let _ = Command::new("taskkill")
+    let _ = hidden_command("taskkill")
         .arg("/PID")
         .arg(pid.to_string())
         .arg("/T")
