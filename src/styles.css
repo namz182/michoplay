@@ -791,6 +791,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .download-item-main { display: flex; min-width: 0; align-items: center; gap: 9px; }
 .download-item-art { position: relative; display: grid; width: 46px; height: 38px; flex: 0 0 46px; overflow: hidden; place-items: center; border-radius: 4px; background: linear-gradient(145deg, rgba(245,198,190,.17), rgba(203,196,222,.13)); color: var(--lavender); }
 .download-item-art img { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.download-art-play { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; border: 0; background: rgba(10,10,12,.62); color: #fff; opacity: 0; transition: opacity 140ms ease; cursor: pointer; }
+.download-item.status-completed:hover .download-art-play, .download-item.status-completed:focus-within .download-art-play { opacity: 1; }
+.download-art-play:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .download-item-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
 .download-item-copy strong { overflow: hidden; color: #f1edf4; font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .download-item-copy small { overflow: hidden; color: #99929f; font-size: 9px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
