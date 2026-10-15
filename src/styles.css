@@ -49,7 +49,7 @@ button:disabled { cursor: default; }
 .library-summary { display: grid; gap: 5px; padding: 13px 8px; color: #a6a1ab; font-size: 11px; }
 .library-count { color: #77727c; font-size: 10px; }
 .library-heading-actions { display: flex; align-items: center; gap: 4px; }
-.library-heading-actions .icon-button.small { width: 34px; height: 34px; background: rgba(255,255,255,.08); color: #d6d2d9; }
+.library-heading-actions .icon-button.small { width: 27px; height: 27px; background: rgba(255,255,255,.08); color: #d6d2d9; }
 .library-heading-actions .icon-button.small:hover { background: rgba(255,255,255,.14); color: #fff; }
 .library-tools { display: flex; min-height: 30px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 7px; }
 .library-search { display: flex; min-width: 30px; height: 30px; flex: 0 1 auto; align-items: center; gap: 7px; padding: 0 7px; border-radius: 6px; color: #aaa5af; transition: background 140ms ease, flex-basis 140ms ease; }
@@ -456,7 +456,7 @@ button:disabled { cursor: default; }
   .sidebar { align-items: center; padding: 16px 6px 12px; }
   .brand { margin: 0 0 28px; }
   .brand > span:not(.brand-mark) { display: none; }
-  .library-heading, .library-summary, .sidebar-rule, .nav-item span, .settings-link { display: none; }
+  .library-heading, .library-summary, .sidebar-rule, .library-tools, .nav-item span, .settings-link { display: none; }
   .nav-list { gap: 7px; }
   .nav-item { justify-content: center; width: 48px; padding: 0; }
   .work-area { grid-template-columns: minmax(0, 1fr); }
@@ -787,6 +787,30 @@ body.resizing { cursor: col-resize; user-select: none; }
 .confirm-dialog { display: grid; width: min(430px,100%); gap: 14px; padding: 25px; border: 1px solid rgba(255,255,255,.12); border-radius: 10px; background: #252229; box-shadow: 0 15px 50px rgba(0,0,0,.5); }
 .confirm-dialog .dialog-title h2 { font-size: 20px; }
 .confirm-dialog > p { margin: 0; color: #bcb5c1; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.about-dialog { display: grid; width: min(440px,100%); gap: 18px; padding: 22px; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: #19191b; box-shadow: 0 18px 60px rgba(0,0,0,.56); }
+.about-dialog-head, .about-product { display: flex; align-items: center; }
+.about-dialog-head { justify-content: space-between; gap: 16px; }
+.about-product { gap: 10px; color: #f6f4f8; font-size: 20px; font-weight: 750; letter-spacing: -.4px; }
+.about-mark { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; background: var(--brand-gradient); color: #302b38; }
+.about-caption { margin: -8px 0 0; color: #b4afb8; font-size: 12px; }
+.about-version { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 13px 14px; border-radius: 7px; background: rgba(255,255,255,.07); color: #bdb8c1; font-size: 12px; }
+.about-version strong { color: #f4f1f6; font-weight: 650; }
+
+/* Keep the desktop library list roomy enough to scan while fitting more rows. */
+@media (min-width: 821px) {
+  .sidebar { padding: 15px 12px 10px; }
+  .brand { margin-bottom: 24px; }
+  .nav-list { gap: 1px; }
+  .nav-item { height: 38px; }
+  .sidebar-rule { margin-top: 14px; margin-bottom: 12px; }
+  .library-tools { min-height: 27px; margin-bottom: 3px; }
+  .library-search { height: 27px; }
+  .library-sort { padding-top: 3px; padding-bottom: 3px; }
+  .sidebar-playlists { flex: 1 1 auto; gap: 1px; margin-bottom: 6px; }
+  .sidebar-playlists .library-item { min-height: 48px; gap: 9px; padding: 2px 5px; }
+  .sidebar-playlists .library-item-art, .sidebar-playlists .library-item-placeholder { width: 40px; height: 40px; flex-basis: 40px; }
+  .sidebar-playlists .library-item-copy { gap: 3px; }
+}
 .confirm-actions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 5px; }
 .danger-button { min-height: 36px; padding: 0 15px; border: 0; border-radius: 999px; background: #8b4649; color: white; font-size: 11px; font-weight: 750; cursor: pointer; }
 .danger-button:hover { background: #a05256; }
