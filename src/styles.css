@@ -100,6 +100,18 @@ button:disabled { cursor: default; }
 .global-search-empty { display: grid; gap: 5px; padding: 14px 11px 17px; }
 .global-search-empty strong { color: #f5f3f6; font-size: 12px; }
 .global-search-empty span { color: #aaa4ae; font-size: 10px; line-height: 1.5; }
+.global-search-status { margin: 2px 8px 8px; color: #aaa4ae; font-size: 10px; line-height: 1.45; }
+.global-youtube-result .global-search-cover { object-fit: cover; }
+.global-youtube-placeholder { display: grid; place-items: center; background: #242126; color: #aaa4ae; }
+.global-youtube-result-row { position: relative; min-width: 0; border-radius: 5px; }
+.global-youtube-result { padding-right: 48px; }
+.global-youtube-download { position: absolute; top: 50%; right: 12px; display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 50%; background: var(--brand-gradient); color: #302b38; opacity: 0; pointer-events: none; transform: translateY(calc(-50% + 3px)); transition: opacity 140ms ease, transform 140ms ease; cursor: pointer; }
+.global-youtube-result-row:hover .global-youtube-download, .global-youtube-result-row:focus-within .global-youtube-download { opacity: 1; pointer-events: auto; transform: translateY(-50%); }
+.global-youtube-download:hover, .global-youtube-download:focus-visible { outline: 2px solid rgba(255,255,255,.72); outline-offset: 2px; }
+.global-search-youtube-skeleton { display: grid; min-height: 54px; grid-template-columns: 42px minmax(0, 1fr); align-content: center; gap: 6px 11px; padding: 5px 8px; }
+.global-search-youtube-skeleton > span { width: 42px; height: 42px; grid-row: span 2; border-radius: 4px; background: linear-gradient(100deg, #252329 20%, #39343e 42%, #252329 64%); background-size: 220% 100%; animation: youtube-shimmer 1.5s ease-in-out infinite; }
+.global-search-youtube-skeleton > i { width: 68%; height: 8px; align-self: end; border-radius: 4px; background: linear-gradient(100deg, #252329 20%, #39343e 42%, #252329 64%); background-size: 220% 100%; animation: youtube-shimmer 1.5s ease-in-out infinite; }
+.global-search-youtube-skeleton > i:last-child { width: 38%; height: 6px; align-self: start; }
 .search-box input { min-width: 0; flex: 1; padding: 0; border: 0; outline: 0; background: transparent; color: #f4f1f5; font-size: 12px; }
 .search-box input::placeholder { color: #aaa5af; opacity: 1; }
 .search-box input:disabled { cursor: not-allowed; }
