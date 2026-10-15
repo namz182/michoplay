@@ -1272,9 +1272,9 @@ fn bundled_desktop_tool(name: &str) -> Result<std::path::PathBuf, String> {
         .parent()
         .ok_or_else(|| "MichoPlay couldn’t locate its bundled audio tools.".to_owned())?;
     let filename = if cfg!(target_os = "windows") {
-        format!("{name}.exe")
+        format!("michoplay-{name}.exe")
     } else {
-        name.to_owned()
+        format!("michoplay-{name}")
     };
     let path = directory.join(filename);
     if !path.is_file() {

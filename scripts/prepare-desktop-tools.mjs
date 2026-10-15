@@ -13,7 +13,7 @@ mkdirSync(outputDirectory, { recursive: true });
 const cacheDirectory = join(fileURLToPath(new URL("../.cache/desktop-tools/", import.meta.url)), target);
 mkdirSync(cacheDirectory, { recursive: true });
 const suffix = target.endsWith("-pc-windows-msvc") ? ".exe" : "";
-const outputs = ["yt-dlp", "ffmpeg", "deno"].map((name) => join(outputDirectory, `${name}-${target}${suffix}`));
+const outputs = ["yt-dlp", "ffmpeg", "deno"].map((name) => join(outputDirectory, `michoplay-${name}-${target}${suffix}`));
 
 if (outputs.every(existsSync)) {
   console.log(`Desktop downloader tools are already staged for ${target}.`);
