@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { spawnSync } from "node:child_process";
 import { inflateRawSync } from "node:zlib";
 
@@ -37,7 +39,7 @@ try {
   const denoAsset = requireAsset(denoRelease, targetInfo.denoAsset);
   const denoSumsAsset = requireAsset(denoRelease, `${targetInfo.denoAsset}.sha256sum`);
   const denoArchive = await downloadVerified(denoAsset, denoSumsAsset, targetInfo.denoAsset, cacheDirectory);
-  const denoPath = extractBinary(denoArchive, "deno", temporaryDirectory);
+  const denoPath = extractBinary(denoArchive, targetInfo.denoBinary, temporaryDirectory);
 
   const ffmpegAsset = ffmpegRelease.assets.find((asset) => asset.name.startsWith("ffmpeg-") && !asset.name.includes("-shared-") && asset.name.endsWith(targetInfo.ffmpegSuffix));
   const ffmpegSumsAsset = requireAsset(ffmpegRelease, "checksums.sha256");
@@ -67,23 +69,23 @@ function targetDetails(triple) {
   const supported = {
     "x86_64-unknown-linux-gnu": {
       ytDlpAsset: "yt-dlp_linux", denoAsset: "deno-x86_64-unknown-linux-gnu.zip",
-      ffmpegSuffix: "linux-x64.tar.gz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "linux-x64.tar.gz", ffmpegBinary: "ffmpeg",
     },
     "aarch64-unknown-linux-gnu": {
       ytDlpAsset: "yt-dlp_linux_aarch64", denoAsset: "deno-aarch64-unknown-linux-gnu.zip",
-      ffmpegSuffix: "linux-arm64.tar.gz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "linux-arm64.tar.gz", ffmpegBinary: "ffmpeg",
     },
     "x86_64-pc-windows-msvc": {
       ytDlpAsset: "yt-dlp.exe", denoAsset: "deno-x86_64-pc-windows-msvc.zip",
-      ffmpegSuffix: "win-x64.zip", ffmpegBinary: "ffmpeg.exe",
+      denoBinary: "deno.exe", ffmpegSuffix: "win-x64.zip", ffmpegBinary: "ffmpeg.exe",
     },
     "x86_64-apple-darwin": {
       ytDlpAsset: "yt-dlp_macos", denoAsset: "deno-x86_64-apple-darwin.zip",
-      ffmpegSuffix: "macos-x64.tar.gz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "macos-x64.tar.gz", ffmpegBinary: "ffmpeg",
     },
     "aarch64-apple-darwin": {
       ytDlpAsset: "yt-dlp_macos", denoAsset: "deno-aarch64-apple-darwin.zip",
-      ffmpegSuffix: "macos-arm64.tar.gz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "macos-arm64.tar.gz", ffmpegBinary: "ffmpeg",
     },
   };
   if (!supported[triple]) throw new Error(`Bundled YouTube audio tools do not support target ${triple}.`);
@@ -115,7 +117,41 @@ function requireAsset(release, name) {
 async function download(url, path) {
   const response = await fetch(url, { headers: { "User-Agent": "MichoPlay-desktop-build" } });
   if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
-  writeFileSync(path, Buffer.from(await response.arrayBuffer()));
+  if (!response.body) throw new Error(`Download returned no data: ${url}`);
+  const total = Number(response.headers.get("content-length")) || 0;
+  const label = basename(path);
+  let received = 0;
+  let lastStep = -1;
+  const formatBytes = (bytes) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+  const showProgress = (force = false) => {
+    const step = total ? Math.floor((received / total) * 10) : Math.floor(received / (10 * 1024 * 1024));
+    if (!force && step <= lastStep) return;
+    lastStep = step;
+    const progress = total ? `${Math.min(100, Math.floor((received / total) * 100))}% (${formatBytes(received)} / ${formatBytes(total)})` : formatBytes(received);
+    if (process.stdout.isTTY) process.stdout.write(`\rDownloading ${label}: ${progress}`);
+    else console.log(`Downloading ${label}: ${progress}`);
+  };
+  if (process.stdout.isTTY) process.stdout.write(`Downloading ${label}: 0%`);
+  else console.log(`Downloading ${label}${total ? ` (${formatBytes(total)})` : ""}…`);
+  const progress = new Transform({
+    transform(chunk, _encoding, callback) {
+      received += chunk.length;
+      showProgress();
+      callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(Readable.fromWeb(response.body), progress, createWriteStream(path));
+  } catch (error) {
+    rmSync(path, { force: true });
+    throw error;
+  }
+  showProgress(true);
+  if (process.stdout.isTTY) process.stdout.write("\n");
+  else console.log(`Downloaded ${label}: ${formatBytes(received)}.`);
   return path;
 }
 
