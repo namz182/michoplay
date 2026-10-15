@@ -807,16 +807,36 @@ impl PlayerCore {
         views
     }
 
-    fn random_next_index(&self, current: usize) -> usize {
-        if self.queue.len() < 2 {
-            return current;
+    fn shuffle_upcoming(&mut self) {
+        let start = self
+            .current_queue_index
+            .map(|index| index + 1)
+            .unwrap_or(0)
+            .min(self.queue.len());
+        if self.queue.len().saturating_sub(start) < 2 {
+            self.priority_queue.clear();
+            return;
         }
-        let nanos = SystemTime::now()
+
+        let original = self.queue[start..].to_vec();
+        let mut state = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos() as usize;
-        let offset = nanos % (self.queue.len() - 1) + 1;
-        (current + offset) % self.queue.len()
+            .as_nanos() as u64;
+        if state == 0 {
+            state = 0x9e37_79b9_7f4a_7c15;
+        }
+        for index in (start + 1..self.queue.len()).rev() {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let swap_index = start + (state as usize % (index - start + 1));
+            self.queue.swap(index, swap_index);
+        }
+        if self.queue[start..] == original[..] {
+            self.queue[start..].rotate_left(1);
+        }
+        self.priority_queue.clear();
     }
 
     fn next_index(&self, current: usize) -> Option<usize> {
@@ -824,9 +844,6 @@ impl PlayerCore {
             if let Some(index) = self.queue.iter().position(|queued| queued == id) {
                 return Some(index);
             }
-        }
-        if self.shuffle {
-            return Some(self.random_next_index(current));
         }
         if current + 1 < self.queue.len() {
             Some(current + 1)
@@ -2011,7 +2028,11 @@ fn player_play_collection(
         .ok_or_else(|| "Choose a song in this collection.".to_owned())?;
     core.queue = track_ids;
     core.priority_queue.clear();
-    core.play_queue_index(start)
+    core.play_queue_index(start)?;
+    if core.shuffle {
+        core.shuffle_upcoming();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2179,6 +2200,9 @@ fn player_toggle_shuffle(state: State<'_, AppState>) -> Result<(), String> {
         .0
         .lock()
         .map_err(|_| "The player is unavailable.".to_owned())?;
+    if !core.shuffle {
+        core.shuffle_upcoming();
+    }
     core.shuffle = !core.shuffle;
     Ok(())
 }
