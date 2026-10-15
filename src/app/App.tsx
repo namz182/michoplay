@@ -185,7 +185,6 @@ export default function App() {
   const selectedPlaylist = page.detail?.kind === "playlist" ? playlists.find((item) => item.id === page.detail?.key) : undefined;
   const youtubePlaylist = playlists.find((item) => item.name.trim().toLocaleLowerCase() === "youtube");
   const isYoutubePlaylist = !isAndroid && selectedPlaylist?.name.trim().toLocaleLowerCase() === "youtube";
-  const activeYoutubeDownloads = youtubeDownloads.filter((item) => item.status === "downloading" || item.status === "queued");
 
   const navigate = useCallback((next: Page) => {
     setHistory((prior) => ({ entries: [...prior.entries.slice(0, prior.index + 1), next], index: prior.index + 1 }));
