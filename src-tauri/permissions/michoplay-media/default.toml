@@ -1,0 +1,15 @@
+[[permission]]
+identifier = "default"
+description = "Allows MichoPlay's Android media bridge and event listener."
+commands.allow = [
+  "chooseMusicFolder",
+  "youtubeSearch",
+  "youtubeDownloadsState",
+  "youtubeDownloadEnqueue",
+  "youtubeDownloadPause",
+  "youtubeDownloadResume",
+  "youtubeDownloadCancel",
+  "youtubeDownloadRemove",
+  "register_listener",
+  "registerListener",
+]

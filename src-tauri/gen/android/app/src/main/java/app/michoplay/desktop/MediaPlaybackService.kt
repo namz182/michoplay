@@ -6,11 +6,14 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
+import android.util.Base64
 
 class MediaPlaybackService : Service() {
   companion object {
@@ -24,6 +27,7 @@ class MediaPlaybackService : Service() {
     const val EXTRA_PLAYING = "isPlaying"
     const val EXTRA_DURATION = "durationMs"
     const val EXTRA_POSITION = "positionMs"
+    const val EXTRA_ARTWORK = "artworkDataUrl"
     private const val CHANNEL_ID = "michoplay-playback"
     private const val NOTIFICATION_ID = 9042
   }
@@ -34,6 +38,8 @@ class MediaPlaybackService : Service() {
   private var isPlaying = false
   private var durationMs = 0L
   private var positionMs = 0L
+  private var artworkDataUrl: String? = null
+  private var artwork: Bitmap? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -64,6 +70,11 @@ class MediaPlaybackService : Service() {
     isPlaying = intent.getBooleanExtra(EXTRA_PLAYING, false)
     durationMs = intent.getLongExtra(EXTRA_DURATION, 0)
     positionMs = intent.getLongExtra(EXTRA_POSITION, 0)
+    val nextArtwork = intent.getStringExtra(EXTRA_ARTWORK)
+    if (nextArtwork != artworkDataUrl) {
+      artworkDataUrl = nextArtwork
+      artwork = decodeArtwork(nextArtwork)
+    }
     updateSession()
     startForeground(NOTIFICATION_ID, buildNotification())
     return START_STICKY
@@ -83,6 +94,7 @@ class MediaPlaybackService : Service() {
       .putString(MediaMetadata.METADATA_KEY_TITLE, title)
       .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
       .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
+      .also { builder -> artwork?.let { builder.putBitmap(MediaMetadata.METADATA_KEY_ART, it) } }
       .build())
     val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
       PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_PREVIOUS or
@@ -100,7 +112,7 @@ class MediaPlaybackService : Service() {
     val contentIntent = launchIntent?.let {
       PendingIntent.getActivity(this, 10, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
-    builder.setSmallIcon(android.R.drawable.ic_media_play)
+    builder.setSmallIcon(R.drawable.ic_stat_michoplay)
       .setContentTitle(title)
       .setContentText(artist)
       .setCategory(Notification.CATEGORY_TRANSPORT)
@@ -108,6 +120,8 @@ class MediaPlaybackService : Service() {
       .setVisibility(Notification.VISIBILITY_PUBLIC)
       .setOngoing(isPlaying)
       .setShowWhen(false)
+    artwork?.let { builder.setLargeIcon(it) }
+    builder
       .addAction(action(android.R.drawable.ic_media_previous, "Previous", ACTION_PREVIOUS))
       .addAction(action(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
         if (isPlaying) "Pause" else "Play", if (isPlaying) ACTION_PAUSE else ACTION_PLAY))
@@ -117,6 +131,15 @@ class MediaPlaybackService : Service() {
         .setShowActionsInCompactView(0, 1, 2))
     }
     return builder.build()
+  }
+
+  private fun decodeArtwork(dataUrl: String?): Bitmap? {
+    if (dataUrl.isNullOrBlank()) return null
+    return try {
+      val encoded = dataUrl.substringAfter(',', dataUrl)
+      val bytes = Base64.decode(encoded, Base64.DEFAULT)
+      BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    } catch (_: Exception) { null }
   }
 
   private fun action(icon: Int, label: String, action: String): Notification.Action {

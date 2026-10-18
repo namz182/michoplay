@@ -9,6 +9,8 @@ use rodio::{
     Source,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "android")]
+use serde::de::DeserializeOwned;
 #[cfg(target_os = "linux")]
 use souvlaki::{MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
 use std::{
@@ -274,6 +276,30 @@ struct AppState(Mutex<PlayerCore>);
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 struct MediaBridge(Mutex<Option<tauri::plugin::PluginHandle<tauri::Wry>>>);
 
+#[cfg(target_os = "android")]
+fn android_media_plugin(
+    state: &State<'_, MediaBridge>,
+) -> Result<tauri::plugin::PluginHandle<tauri::Wry>, String> {
+    state
+        .0
+        .lock()
+        .map_err(|_| "Android media services are unavailable.".to_owned())?
+        .clone()
+        .ok_or_else(|| "Android media services are still starting. Try again shortly.".to_owned())
+}
+
+#[cfg(target_os = "android")]
+async fn call_android_media<T: DeserializeOwned>(
+    plugin: tauri::plugin::PluginHandle<tauri::Wry>,
+    command: &'static str,
+    payload: serde_json::Value,
+) -> Result<T, String> {
+    plugin
+        .run_mobile_plugin_async(command, payload)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(target_os = "linux")]
 struct DesktopMediaBridge(Mutex<Option<MediaControls>>);
 #[cfg(not(target_os = "linux"))]
@@ -421,6 +447,7 @@ fn media_update(
     is_playing: bool,
     duration_ms: u64,
     position_ms: u64,
+    artwork_data_url: Option<String>,
     state: State<'_, MediaBridge>,
     desktop: State<'_, DesktopMediaBridge>,
 ) -> Result<(), String> {
@@ -440,6 +467,7 @@ fn media_update(
                         "isPlaying": is_playing,
                         "durationMs": duration_ms,
                         "positionMs": position_ms,
+                        "artworkDataUrl": artwork_data_url,
                     }),
                 )
                 .map_err(|error| error.to_string())?;
@@ -453,11 +481,13 @@ fn media_update(
             .map_err(|_| "System media controls are unavailable.".to_owned())?;
         if let Some(controls) = controls.as_mut() {
             if let Some(title) = title.as_deref() {
+                let cover_url = artwork_data_url.as_deref().and_then(save_media_artwork);
                 controls
                     .set_metadata(MediaMetadata {
                         title: Some(title),
                         artist: artist.as_deref(),
                         duration: Some(Duration::from_millis(duration_ms)),
+                        cover_url: cover_url.as_deref(),
                         ..Default::default()
                     })
                     .map_err(|error| error.to_string())?;
@@ -478,10 +508,28 @@ fn media_update(
         let _ = &state;
     }
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
-    let _ = (title, artist, is_playing, duration_ms, position_ms, state);
+    let _ = (title, artist, is_playing, duration_ms, position_ms, artwork_data_url, state);
     #[cfg(not(target_os = "linux"))]
     let _ = desktop;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn save_media_artwork(data_url: &str) -> Option<String> {
+    let (header, encoded) = data_url.split_once(',')?;
+    let bytes = STANDARD.decode(encoded).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    let extension = if header.contains("image/png") {
+        "png"
+    } else if header.contains("image/webp") {
+        "webp"
+    } else {
+        "jpg"
+    };
+    let path = std::env::temp_dir().join(format!("michoplay-art-{:x}.{extension}", hasher.finish()));
+    std::fs::write(&path, bytes).ok()?;
+    url::Url::from_file_path(path).ok().map(|url| url.to_string())
 }
 
 #[tauri::command]
@@ -1169,13 +1217,24 @@ async fn library_import_and_play_audio_files(
     Ok(views)
 }
 
+#[derive(Deserialize)]
+struct YoutubeMusicDirectory { path: String }
+
 #[tauri::command]
-fn youtube_music_directory(app: AppHandle) -> Result<String, String> {
+async fn youtube_music_directory(
+    bridge: State<'_, MediaBridge>,
+    app: AppHandle,
+) -> Result<String, String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        let directory: YoutubeMusicDirectory = call_android_media(plugin, "youtubeMusicDirectory", serde_json::json!({})).await?;
+        return Ok(directory.path);
+    }
 
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let directory = app
             .path()
             .audio_dir()
@@ -1190,7 +1249,7 @@ fn youtube_music_directory(app: AppHandle) -> Result<String, String> {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct YoutubeSearchResult {
     id: String,
@@ -1201,7 +1260,15 @@ struct YoutubeSearchResult {
     is_playlist: bool,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedMusicFolder {
+    path: String,
+    count: usize,
+    name: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct YoutubeDownloadItem {
     id: String,
@@ -1213,6 +1280,7 @@ struct YoutubeDownloadItem {
     percent: Option<f32>,
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
+    estimated_bytes: Option<u64>,
     message: String,
 }
 
@@ -1255,7 +1323,7 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) {
     let Some(progress) = line.strip_prefix("__MICHOPLAY_PROGRESS__") else {
         return;
     };
-    let mut fields = progress.splitn(5, '|');
+    let mut fields = progress.splitn(6, '|');
     let raw_percent = fields.next().unwrap_or_default();
     let downloaded_bytes = fields
         .next()
@@ -1270,6 +1338,7 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) {
         .and_then(|value| value.trim().parse::<u64>().ok());
     let total_bytes = total_bytes.or(total_bytes_estimate);
     let title = fields.next().unwrap_or_default();
+    let speed = fields.next().unwrap_or_default().trim();
     let percent = raw_percent
         .trim()
         .trim_end_matches('%')
@@ -1286,10 +1355,10 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) {
             task.item.percent = percent.or(task.item.percent);
             task.item.downloaded_bytes = downloaded_bytes.or(task.item.downloaded_bytes);
             task.item.total_bytes = total_bytes.or(task.item.total_bytes);
-            task.item.message = if task.item.is_playlist && !title.trim().is_empty() {
-                format!("Downloading: {}", title.trim())
+            task.item.message = if !speed.is_empty() && speed != "NA" {
+                speed.to_owned()
             } else {
-                "Downloading audio".to_owned()
+                String::new()
             };
         }
     }
@@ -1318,12 +1387,35 @@ fn bundled_desktop_tool(name: &str) -> Result<std::path::PathBuf, String> {
 }
 
 #[tauri::command]
-async fn youtube_search(query: String) -> Result<Vec<YoutubeSearchResult>, String> {
+async fn library_pick_music_folder(
+    bridge: State<'_, MediaBridge>,
+) -> Result<PickedMusicFolder, String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube search is available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(plugin, "chooseMusicFolder", serde_json::json!({})).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        Err("Choose a music folder from the Android app.".to_owned())
+    }
+}
+
+#[tauri::command]
+async fn youtube_search(
+    query: String,
+    bridge: State<'_, MediaBridge>,
+) -> Result<Vec<YoutubeSearchResult>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(plugin, "youtubeSearch", serde_json::json!({ "query": query })).await
+    }
 
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let query = query.trim().to_owned();
         if query.is_empty() || query.chars().count() > 200 {
             return Err("Enter a search or YouTube link (up to 200 characters).".to_owned());
@@ -1480,28 +1572,51 @@ fn valid_youtube_thumbnail(raw: &str) -> bool {
 }
 
 #[tauri::command]
-fn youtube_downloads_state(state: State<'_, YoutubeDownloadState>) -> Vec<YoutubeDownloadItem> {
-    state
-        .0
-        .lock()
-        .map(|manager| manager.snapshot())
-        .unwrap_or_default()
+async fn youtube_downloads_state(
+    state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
+) -> Result<Vec<YoutubeDownloadItem>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(plugin, "youtubeDownloadsState", serde_json::json!({})).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        Ok(state
+            .0
+            .lock()
+            .map(|manager| manager.snapshot())
+            .unwrap_or_default())
+    }
 }
 
 #[tauri::command]
-fn youtube_download_enqueue(
+async fn youtube_download_enqueue(
     url: String,
     title: String,
     thumbnail: Option<String>,
     is_playlist: bool,
+    estimated_bytes: Option<u64>,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<YoutubeDownloadItem, String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadEnqueue",
+            serde_json::json!({ "url": url, "title": title, "thumbnail": thumbnail, "isPlaylist": is_playlist, "estimatedBytes": estimated_bytes }),
+        )
+        .await
+    }
 
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let url = validate_youtube_url(&url)?;
         let thumbnail = thumbnail.filter(|url| valid_youtube_thumbnail(url));
         let is_playlist = is_playlist
@@ -1528,6 +1643,7 @@ fn youtube_download_enqueue(
                 percent: None,
                 downloaded_bytes: None,
                 total_bytes: None,
+                estimated_bytes,
                 message: "Waiting to download".to_owned(),
             };
             manager.tasks.push(YoutubeDownloadTask {
@@ -1543,15 +1659,25 @@ fn youtube_download_enqueue(
 }
 
 #[tauri::command]
-fn youtube_download_pause(
+async fn youtube_download_pause(
     id: String,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadPause",
+            serde_json::json!({ "id": id }),
+        )
+        .await
+    }
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let pid = {
             let mut manager = state
                 .0
@@ -1578,15 +1704,25 @@ fn youtube_download_pause(
 }
 
 #[tauri::command]
-fn youtube_download_resume(
+async fn youtube_download_resume(
     id: String,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadResume",
+            serde_json::json!({ "id": id }),
+        )
+        .await
+    }
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         {
             let mut manager = state
                 .0
@@ -1610,15 +1746,25 @@ fn youtube_download_resume(
 }
 
 #[tauri::command]
-fn youtube_download_cancel(
+async fn youtube_download_cancel(
     id: String,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadCancel",
+            serde_json::json!({ "id": id }),
+        )
+        .await
+    }
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let pid = {
             let mut manager = state
                 .0
@@ -1645,11 +1791,24 @@ fn youtube_download_cancel(
 }
 
 #[tauri::command]
-fn youtube_download_remove(
+async fn youtube_download_remove(
     id: String,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        return call_android_media(
+            plugin,
+            "youtubeDownloadRemove",
+            serde_json::json!({ "id": id }),
+        )
+        .await;
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = bridge;
     let mut manager = state
         .0
         .lock()
@@ -1699,7 +1858,7 @@ fn youtube_download_worker(app: AppHandle) {
                 .find(|task| task.item.status == "queued")
             {
                 task.item.status = "downloading".to_owned();
-                task.item.message = "Starting download".to_owned();
+                task.item.message.clear();
                 Some((task.item.id.clone(), task.item.url.clone()))
             } else {
                 manager.active_workers = manager.active_workers.saturating_sub(1);
@@ -1792,7 +1951,7 @@ fn run_youtube_download(
         .arg("--convert-thumbnails")
         .arg("jpg")
         .arg("--progress-template")
-        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(info.title)s")
+        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(info.title)s|%(progress._speed_str)s")
         .arg("--output")
         .arg(output_template)
         .arg("--")
@@ -2426,6 +2585,7 @@ pub fn run() {
             library_import_audio_files,
             library_import_and_play_audio_files,
             library_import_directory,
+            library_pick_music_folder,
             youtube_music_directory,
             youtube_search,
             youtube_downloads_state,

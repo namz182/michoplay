@@ -20,10 +20,11 @@ Initial dark theme candidates from the blueprint:
 | `--surface-elevated` | `#202B27` | Menus, dialogs, raised surfaces |
 | `--text` | `#E9EFEB` | Primary text |
 | `--muted` | `#95A29B` | Secondary text and metadata |
-| `--accent` | `#CBC4DE` | Selected navigation and queue actions |
-| `--brand-gradient` | `#F5C6BE → #CBC4DE → #D8EEE4` | Primary playback action and MichoPlay mark |
+| `--accent` | `#D8EEE4` | Brand highlight |
+| `--accent-strong` | `#73DDA0` | Playback status indicators |
+| `--brand-gradient` | `#F5C6BE → #F5EEE8 → #D8EEE4` | Primary brand gradient |
 
-The blueprint lists `#1ED760` as a placeholder accent only. The current shell uses deep dark surfaces with a muted blush, lavender, and mint gradient drawn from the MichoPlay mark. Album, artist, and folder views use available local artwork behind their headings. Check contrast against WCAG AA targets before release. Light mode and configurable accents are later options.
+The app uses deep dark neutral surfaces, the primary blush-to-cream-to-mint gradient, and green for playback. Album, artist, and folder views use available local artwork behind their headings. Check contrast against WCAG AA targets before release. Light mode and configurable accents are later options.
 
 ## Typography
 

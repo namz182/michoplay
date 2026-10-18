@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:youtube-size": "node --experimental-strip-types tests/youtube-size.test.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:prepare-tools": "node scripts/prepare-desktop-tools.mjs"

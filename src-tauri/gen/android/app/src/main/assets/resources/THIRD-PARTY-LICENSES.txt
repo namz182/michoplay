@@ -1,0 +1,27 @@
+MichoPlay desktop YouTube audio tools
+====================================
+
+MichoPlay bundles these upstream command line tools as separate executables.
+The desktop build script downloads current upstream release assets and checks
+their published SHA-256 checksums before packaging them.
+
+yt-dlp
+  Project: https://github.com/yt-dlp/yt-dlp
+  License: GNU General Public License version 3 or later (GPL-3.0-or-later)
+  License text: https://github.com/yt-dlp/yt-dlp/blob/master/LICENSE
+
+FFmpeg
+  Project: https://ffmpeg.org/
+  Build source: https://github.com/AtlasYang/ffmpeg-static-builds
+  License: GNU Lesser General Public License version 2.1 or later
+  License text: https://github.com/FFmpeg/FFmpeg/blob/master/COPYING.LGPLv2.1
+  This application runs FFmpeg as a separate executable.
+
+Deno
+  Project: https://deno.com/
+  License: MIT
+  License text: https://github.com/denoland/deno/blob/main/LICENSE
+
+The exact upstream release versions and asset checksums used in a build are
+printed by scripts/prepare-desktop-tools.mjs. See each upstream project for
+source code and the full license and copyright notices for its release.
