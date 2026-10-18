@@ -851,7 +851,7 @@ export default function App() {
   const fullBrowsePlaylist = playlists.find((playlist) => playlist.id === fullBrowsePlaylistId) ?? null;
   const fullBrowsePlaylistTracks = fullBrowsePlaylist?.trackIds.flatMap((id) => trackMap.get(id) ? [trackMap.get(id)!] : []) ?? [];
   const current = player.currentTrackId === null ? null : trackMap.get(player.currentTrackId) ?? null;
-  const currentArtworkDataUrl = useArtwork(current?.artworkKey, isAndroid);
+  const currentArtworkDataUrl = useArtwork(current?.artworkKey);
   const recentTracks = useMemo(() => listeningHistory
     .slice().sort((a, b) => b.lastPlayedAt - a.lastPlayedAt)
     .flatMap((entry) => trackMap.has(entry.trackId) ? [trackMap.get(entry.trackId)!] : []), [listeningHistory, trackMap]);
@@ -942,6 +942,14 @@ export default function App() {
       if (action.startsWith("seek:")) {
         const position = Number(action.slice(5));
         if (Number.isFinite(position)) void run(() => api.seek(position));
+        return;
+      }
+      if (action.startsWith("seek-by:")) {
+        const delta = Number(action.slice(8));
+        if (Number.isFinite(delta)) void run(async () => {
+          const state = await api.state();
+          await api.seek(Math.max(0, Math.min(state.durationMs, state.positionMs + delta)));
+        });
         return;
       }
       switch (action) {

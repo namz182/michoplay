@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.graphics.Canvas
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadata
@@ -14,6 +15,7 @@ import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
 import android.util.Base64
+import android.graphics.drawable.Drawable
 
 class MediaPlaybackService : Service() {
   companion object {
@@ -40,6 +42,7 @@ class MediaPlaybackService : Service() {
   private var positionMs = 0L
   private var artworkDataUrl: String? = null
   private var artwork: Bitmap? = null
+  private val appLogo: Bitmap? by lazy { loadAppLogo() }
 
   override fun onCreate() {
     super.onCreate()
@@ -94,7 +97,13 @@ class MediaPlaybackService : Service() {
       .putString(MediaMetadata.METADATA_KEY_TITLE, title)
       .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
       .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
-      .also { builder -> artwork?.let { builder.putBitmap(MediaMetadata.METADATA_KEY_ART, it) } }
+      .also { builder ->
+        artwork?.let {
+          builder.putBitmap(MediaMetadata.METADATA_KEY_ART, it)
+          builder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it)
+        }
+        appLogo?.let { builder.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, it) }
+      }
       .build())
     val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
       PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_PREVIOUS or
@@ -115,12 +124,13 @@ class MediaPlaybackService : Service() {
     builder.setSmallIcon(R.drawable.ic_stat_michoplay)
       .setContentTitle(title)
       .setContentText(artist)
+      .setSubText("MichoPlay")
       .setCategory(Notification.CATEGORY_TRANSPORT)
       .setContentIntent(contentIntent)
       .setVisibility(Notification.VISIBILITY_PUBLIC)
       .setOngoing(isPlaying)
       .setShowWhen(false)
-    artwork?.let { builder.setLargeIcon(it) }
+    builder.setLargeIcon(artwork ?: appLogo)
     builder
       .addAction(action(android.R.drawable.ic_media_previous, "Previous", ACTION_PREVIOUS))
       .addAction(action(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
@@ -138,7 +148,27 @@ class MediaPlaybackService : Service() {
     return try {
       val encoded = dataUrl.substringAfter(',', dataUrl)
       val bytes = Base64.decode(encoded, Base64.DEFAULT)
-      BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+      BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { decoded ->
+        val maxDimension = maxOf(decoded.width, decoded.height)
+        if (maxDimension <= 512) decoded else {
+          val scale = 512f / maxDimension
+          Bitmap.createScaledBitmap(decoded, (decoded.width * scale).toInt().coerceAtLeast(1),
+            (decoded.height * scale).toInt().coerceAtLeast(1), true).also { scaled ->
+              if (scaled !== decoded) decoded.recycle()
+            }
+        }
+      }
+    } catch (_: Exception) { null }
+  }
+
+  private fun loadAppLogo(): Bitmap? {
+    return try {
+      val icon: Drawable = packageManager.getApplicationIcon(packageName)
+      val bitmap = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888)
+      val canvas = Canvas(bitmap)
+      icon.setBounds(0, 0, canvas.width, canvas.height)
+      icon.draw(canvas)
+      bitmap
     } catch (_: Exception) { null }
   }
 

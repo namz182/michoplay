@@ -8,10 +8,10 @@ use rodio::{
     source::SeekError, ChannelCount, Decoder, OutputStream, OutputStreamBuilder, SampleRate, Sink,
     Source,
 };
-use serde::{Deserialize, Serialize};
 #[cfg(target_os = "android")]
 use serde::de::DeserializeOwned;
-#[cfg(target_os = "linux")]
+use serde::{Deserialize, Serialize};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use souvlaki::{MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
 use std::{
     collections::{HashMap, HashSet},
@@ -300,9 +300,9 @@ async fn call_android_media<T: DeserializeOwned>(
         .map_err(|error| error.to_string())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 struct DesktopMediaBridge(Mutex<Option<MediaControls>>);
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 struct DesktopMediaBridge;
 
 struct PendingAudioOpens(Mutex<Vec<String>>);
@@ -473,7 +473,7 @@ fn media_update(
                 .map_err(|error| error.to_string())?;
         }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let mut controls = desktop
             .0
@@ -507,14 +507,22 @@ fn media_update(
         }
         let _ = &state;
     }
-    #[cfg(not(any(target_os = "android", target_os = "linux")))]
-    let _ = (title, artist, is_playing, duration_ms, position_ms, artwork_data_url, state);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "ios")]
+    let _ = (
+        title,
+        artist,
+        is_playing,
+        duration_ms,
+        position_ms,
+        artwork_data_url,
+        state,
+    );
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = desktop;
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn save_media_artwork(data_url: &str) -> Option<String> {
     let (header, encoded) = data_url.split_once(',')?;
     let bytes = STANDARD.decode(encoded).ok()?;
@@ -527,13 +535,19 @@ fn save_media_artwork(data_url: &str) -> Option<String> {
     } else {
         "jpg"
     };
-    let path = std::env::temp_dir().join(format!("michoplay-art-{:x}.{extension}", hasher.finish()));
+    let path =
+        std::env::temp_dir().join(format!("michoplay-art-{:x}.{extension}", hasher.finish()));
     std::fs::write(&path, bytes).ok()?;
-    url::Url::from_file_path(path).ok().map(|url| url.to_string())
+    url::Url::from_file_path(path)
+        .ok()
+        .map(|url| url.to_string())
 }
 
 #[tauri::command]
-fn media_stop(state: State<'_, MediaBridge>) -> Result<(), String> {
+fn media_stop(
+    state: State<'_, MediaBridge>,
+    desktop: State<'_, DesktopMediaBridge>,
+) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         let bridge = state
@@ -546,8 +560,21 @@ fn media_stop(state: State<'_, MediaBridge>) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Ok(mut controls) = desktop.0.lock() {
+            if let Some(controls) = controls.as_mut() {
+                controls
+                    .set_playback(MediaPlayback::Stopped)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        let _ = state;
+    }
+    #[cfg(target_os = "ios")]
     let _ = state;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = desktop;
     Ok(())
 }
 
@@ -2304,6 +2331,38 @@ fn player_toggle(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn player_set_playing(is_playing: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let mut core = state
+        .0
+        .lock()
+        .map_err(|_| "The player is unavailable.".to_owned())?;
+    core.discard_failed_output();
+    if !is_playing {
+        if let Some(sink) = &core.sink {
+            sink.pause();
+        }
+        core.is_playing = false;
+        return Ok(());
+    }
+    if core.current_queue_index.is_none() {
+        let first = core
+            .queue
+            .first()
+            .copied()
+            .ok_or_else(|| "Add a music folder first.".to_owned())?;
+        return core.play_track(first);
+    }
+    if core.sink.as_ref().is_none_or(Sink::empty) {
+        let index = core.current_queue_index.unwrap_or(0);
+        core.play_queue_index(index)?;
+    } else if let Some(sink) = &core.sink {
+        sink.play();
+        core.is_playing = true;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn player_next(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -2457,9 +2516,9 @@ fn player_state(state: State<'_, AppState>) -> Result<PlayerSnapshot, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.manage(DesktopMediaBridge(Mutex::new(None)));
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.manage(DesktopMediaBridge);
     let startup_audio_files = {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2538,25 +2597,70 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            #[cfg(target_os = "linux")]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
-                if let Ok(mut controls) = MediaControls::new(PlatformConfig {
+                #[cfg(target_os = "windows")]
+                let controls = app
+                    .get_webview_window("main")
+                    .and_then(|window| window.hwnd().ok())
+                    .and_then(|hwnd| {
+                        MediaControls::new(PlatformConfig {
+                            dbus_name: "michoplay",
+                            display_name: "MichoPlay",
+                            hwnd: Some(hwnd.0 as *mut std::ffi::c_void),
+                        })
+                        .ok()
+                    });
+                #[cfg(not(target_os = "windows"))]
+                let controls = MediaControls::new(PlatformConfig {
                     dbus_name: "michoplay",
                     display_name: "MichoPlay",
                     hwnd: None,
-                }) {
+                })
+                .ok();
+                if let Some(mut controls) = controls {
                     let handle = app.handle().clone();
                     if controls
                         .attach(move |event| {
                             let action = match event {
-                                souvlaki::MediaControlEvent::Play => "play",
-                                souvlaki::MediaControlEvent::Pause => "pause",
-                                souvlaki::MediaControlEvent::Toggle => "toggle",
-                                souvlaki::MediaControlEvent::Next => "next",
-                                souvlaki::MediaControlEvent::Previous => "previous",
+                                souvlaki::MediaControlEvent::Play => "play".to_owned(),
+                                souvlaki::MediaControlEvent::Pause
+                                | souvlaki::MediaControlEvent::Stop => "pause".to_owned(),
+                                souvlaki::MediaControlEvent::Toggle => "toggle".to_owned(),
+                                souvlaki::MediaControlEvent::Next => "next".to_owned(),
+                                souvlaki::MediaControlEvent::Previous => "previous".to_owned(),
+                                souvlaki::MediaControlEvent::SetPosition(position) => {
+                                    format!("seek:{}", position.0.as_millis())
+                                }
+                                souvlaki::MediaControlEvent::Seek(direction) => {
+                                    let delta = match direction {
+                                        souvlaki::SeekDirection::Forward => 10_000_i64,
+                                        souvlaki::SeekDirection::Backward => -10_000_i64,
+                                    };
+                                    format!("seek-by:{delta}")
+                                }
+                                souvlaki::MediaControlEvent::SeekBy(direction, amount) => {
+                                    let delta = match direction {
+                                        souvlaki::SeekDirection::Forward => {
+                                            amount.as_millis() as i64
+                                        }
+                                        souvlaki::SeekDirection::Backward => {
+                                            -(amount.as_millis() as i64)
+                                        }
+                                    };
+                                    format!("seek-by:{delta}")
+                                }
+                                souvlaki::MediaControlEvent::Raise => "raise".to_owned(),
                                 _ => return,
                             };
-                            let _ = handle.emit("system-media-control", action);
+                            if action == "raise" {
+                                if let Some(window) = handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            } else {
+                                let _ = handle.emit("system-media-control", action);
+                            }
                         })
                         .is_ok()
                     {
@@ -2577,7 +2681,7 @@ pub fn run() {
                     };
                 });
             }
-            #[cfg(not(any(target_os = "android", target_os = "linux")))]
+            #[cfg(any(target_os = "android", target_os = "ios"))]
             let _ = app;
             Ok(())
         })
@@ -2610,6 +2714,7 @@ pub fn run() {
             player_set_autoplay,
             player_set_sleep_timer,
             player_toggle,
+            player_set_playing,
             player_next,
             player_previous,
             player_toggle_shuffle,
