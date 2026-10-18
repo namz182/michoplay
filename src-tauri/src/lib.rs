@@ -277,6 +277,12 @@ struct AppState(Mutex<PlayerCore>);
 struct MediaBridge(Mutex<Option<tauri::plugin::PluginHandle<tauri::Wry>>>);
 
 #[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct PendingMediaActions {
+    actions: Vec<String>,
+}
+
+#[cfg(target_os = "android")]
 fn android_media_plugin(
     state: &State<'_, MediaBridge>,
 ) -> Result<tauri::plugin::PluginHandle<tauri::Wry>, String> {
@@ -329,6 +335,29 @@ fn media_take_opened_audio(
         if let Some(handle) = bridge.as_ref() {
             return handle
                 .run_mobile_plugin("takeOpenedAudio", ())
+                .map_err(|error| error.to_string());
+        }
+        return Ok(Vec::new());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = state;
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+fn media_take_pending_actions(state: State<'_, MediaBridge>) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let bridge = state
+            .0
+            .lock()
+            .map_err(|_| "Media controls are unavailable.".to_owned())?;
+        if let Some(handle) = bridge.as_ref() {
+            return handle
+                .run_mobile_plugin::<PendingMediaActions>("takePendingActions", ())
+                .map(|response| response.actions)
                 .map_err(|error| error.to_string());
         }
         return Ok(Vec::new());
@@ -2352,7 +2381,7 @@ fn player_set_playing(is_playing: bool, state: State<'_, AppState>) -> Result<()
             .ok_or_else(|| "Add a music folder first.".to_owned())?;
         return core.play_track(first);
     }
-    if core.sink.as_ref().is_none_or(Sink::empty) {
+    if core.sink.as_ref().map_or(true, Sink::empty) {
         let index = core.current_queue_index.unwrap_or(0);
         core.play_queue_index(index)?;
     } else if let Some(sink) = &core.sink {
@@ -2706,6 +2735,7 @@ pub fn run() {
             library_open_audio_files,
             system_set_default_player,
             media_take_opened_audio,
+            media_take_pending_actions,
             player_play_collection,
             player_queue_move,
             player_queue_remove,

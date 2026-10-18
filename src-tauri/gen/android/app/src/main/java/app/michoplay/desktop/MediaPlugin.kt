@@ -25,6 +25,7 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.ffmpeg.FFmpeg
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.CopyOnWriteArrayList
@@ -64,15 +65,11 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Volatile private var downloaderError: String? = null
   @Volatile private var downloaderUpdateAttempted = false
   companion object {
-    @Volatile private var activePlugin: MediaPlugin? = null
     @Volatile private var notificationPermissionPrompted = false
+    private val pendingActions = CopyOnWriteArrayList<String>()
 
     fun dispatch(action: String) {
-      val plugin = activePlugin ?: return
-      plugin.activity.runOnUiThread {
-        val payload = JSObject().apply { put("action", action) }
-        plugin.trigger("action", payload)
-      }
+      if (action != "youtube-downloads-updated") synchronized(pendingActions) { pendingActions.add(action) }
     }
 
     fun dispatchOpenAudio() = dispatch("open-audio")
@@ -80,8 +77,17 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   override fun load(webView: android.webkit.WebView) {
     super.load(webView)
-    activePlugin = this
     io.execute { initializeDownloader() }
+  }
+
+  @Command
+  fun takePendingActions(invoke: Invoke) {
+    val actions = JSONArray()
+    synchronized(pendingActions) {
+      pendingActions.forEach { actions.put(it) }
+      pendingActions.clear()
+    }
+    invoke.resolve(JSObject().apply { put("actions", actions) })
   }
 
   @Command
