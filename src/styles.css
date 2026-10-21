@@ -18,6 +18,7 @@
   --accent-strong: #73dda0;
   --brand-highlight: #d8eee4;
   --blush: #f5c6be;
+  --youtube-red: #ff0033;
   --brand-gradient: linear-gradient(135deg, var(--blush), #f5eee8 64%, var(--accent));
 }
 
@@ -329,6 +330,7 @@ button:disabled { cursor: default; }
 .home-quick-card { display: flex; min-width: 0; min-height: 64px; align-items: center; gap: 11px; padding: 0; overflow: hidden; border: 0; border-radius: 5px; background: rgba(255,255,255,.095); color: #f3f1f4; text-align: left; cursor: pointer; transition: background 130ms ease; }
 .home-quick-card:hover { background: rgba(255,255,255,.16); }
 .home-quick-art { display: grid; width: 64px; height: 64px; flex: 0 0 64px; place-items: center; overflow: hidden; border-radius: 4px; background: #2c2930; color: #d8eee4; }
+.home-youtube-link .home-quick-art { background: var(--youtube-red); color: #fff; }
 .home-quick-art.artist { border-radius: 0; }
 .home-quick-card > span:last-child { display: grid; min-width: 0; gap: 4px; padding-right: 8px; }
 .home-quick-card strong, .home-quick-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1011,7 +1013,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .home-quick-grid.home-library-links { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
 .android-app .home-quick-card { min-height:64px; gap:9px; border-radius:7px; background:#29292c; }
 .android-app .home-quick-art { width:58px; height:58px; flex-basis:58px; border-radius:5px; }
-.android-app .home-youtube-link .home-quick-art { display:grid; place-items:center; background:var(--brand-gradient); color:#302b38; }
+.android-app .home-youtube-link .home-quick-art { display:grid; place-items:center; background:var(--youtube-red); color:#fff; }
 .android-app .home-quick-card > span:last-child { display:grid; min-width:0; gap:4px; text-align:left; }
 .android-app .home-quick-card strong { overflow:hidden; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
 .android-app .home-quick-card small { overflow:hidden; color:#b8b4bc; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
