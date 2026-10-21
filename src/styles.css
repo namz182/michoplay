@@ -811,6 +811,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .download-item-progress { height: 3px; overflow: hidden; border-radius: 3px; background: rgba(255,255,255,.09); }
 .download-item-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blush), #f5eee8, var(--accent)); transition: width 180ms linear; }
 .download-item-actions { display: flex; align-items: center; gap: 2px; margin: -4px -3px -3px; }
+.download-item-actions .download-menu-trigger { width: 30px; height: 28px; flex: 0 0 30px; border-radius: 5px; }
+.download-item-actions .download-menu-trigger:hover { background: rgba(255,255,255,.08); }
 .download-status-label { margin-right: auto; color: #aaa3af; font-size: 9px; text-transform: capitalize; }
 .download-status-label.downloading { color: var(--accent); }
 .download-status-label.completed { color: var(--blush); }
@@ -964,8 +966,9 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .folder-grid .card-cover { grid-row:1; width:58px; height:58px; aspect-ratio:1; border-radius:5px 0 0 5px; }
 .android-app .folder-grid .collection-open > strong { padding-right:7px; font-size:13px; }
 .android-app .folder-grid .collection-open > small { display:none; }
-.android-app .folder-grid .collection-play-button { right:6px; bottom:6px; width:32px; height:32px; opacity:.82; pointer-events:auto; }
-.android-app .home-section .collection-play-button { display:none !important; }
+.android-app .folder-grid .collection-open > strong { padding-right:38px; }
+.android-app .folder-grid .collection-play-button { top:50%; right:5px; bottom:auto; width:30px; height:30px; opacity:.9; transform:translateY(-50%); pointer-events:auto; }
+.android-app .playlist-card .collection-play-button { right:8px; bottom:52px; width:36px; height:36px; opacity:.9; transform:none; pointer-events:auto; }
 .mobile-home-albums { margin-top:23px; }
 .android-app .mobile-home-albums .collection-grid { display:flex; gap:12px; overflow-x:auto; padding:0 0 6px; scrollbar-width:none; }
 .android-app .mobile-home-albums .collection-grid::-webkit-scrollbar { display:none; }
