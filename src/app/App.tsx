@@ -948,7 +948,6 @@ export default function App() {
   useEffect(() => {
     if (!isAndroid && !isTauri()) return;
     let unlisten: (() => void) | undefined;
-    let polling = false;
     const handleAction = (action: string) => {
       if (action.startsWith("seek:")) {
         const position = Number(action.slice(5));
@@ -973,12 +972,20 @@ export default function App() {
       }
     };
     if (isAndroid) {
-      const poll = window.setInterval(() => {
-        if (polling) return;
-        polling = true;
-        void api.mediaTakePendingActions().then((actions) => actions.forEach(handleAction)).catch(() => {}).finally(() => { polling = false; });
-      }, 300);
-      return () => window.clearInterval(poll);
+      // Android media actions are handled by the Rust playback loop so they
+      // continue to reach the audio engine while this WebView is backgrounded.
+      const refreshPlayerState = () => {
+        if (document.visibilityState !== "visible") return;
+        void api.state().then(setPlayer).catch(() => {});
+      };
+      void listen<string>("android-player-state", refreshPlayerState).then((dispose) => { unlisten = dispose; });
+      document.addEventListener("visibilitychange", refreshPlayerState);
+      window.addEventListener("focus", refreshPlayerState);
+      return () => {
+        unlisten?.();
+        document.removeEventListener("visibilitychange", refreshPlayerState);
+        window.removeEventListener("focus", refreshPlayerState);
+      };
     }
     void listen<string>("system-media-control", ({ payload }) => handleAction(payload)).then((dispose) => { unlisten = dispose; });
     return () => unlisten?.();

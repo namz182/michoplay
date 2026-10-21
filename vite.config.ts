@@ -8,7 +8,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   server: {
-    host: devHost || "127.0.0.1",
+    // Listen on all interfaces so Tauri's Android localhost forwarding can
+    // reach Vite regardless of whether localhost resolves to IPv4 or IPv6.
+    host: devHost || "0.0.0.0",
     port: 1420,
     strictPort: true,
     hmr: devHost ? { protocol: "ws", host: devHost, port: 1421 } : undefined,

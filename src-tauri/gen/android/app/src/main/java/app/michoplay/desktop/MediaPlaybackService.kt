@@ -14,6 +14,7 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Base64
 import android.graphics.drawable.Drawable
 
@@ -84,6 +85,13 @@ class MediaPlaybackService : Service() {
   }
 
   private fun dispatch(action: String) {
+    try {
+      getSystemService(PowerManager::class.java)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:MediaAction")
+        .acquire(5_000)
+    } catch (_: Exception) {
+      // Android will still deliver the queued action; the timeout is best effort.
+    }
     when (action) {
       ACTION_PLAY -> MediaPlugin.dispatch("play")
       ACTION_PAUSE -> MediaPlugin.dispatch("pause")

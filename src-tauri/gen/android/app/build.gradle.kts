@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.io.FileInputStream
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -13,6 +14,12 @@ val tauriProperties = Properties().apply {
         propFile.inputStream().use { load(it) }
     }
 }
+val releaseKeystorePropertiesFile = rootProject.file("keystore.properties")
+val releaseKeystoreProperties = Properties().apply {
+    if (releaseKeystorePropertiesFile.exists()) {
+        FileInputStream(releaseKeystorePropertiesFile).use { load(it) }
+    }
+}
 
 android {
     compileSdk = 37
@@ -24,6 +31,16 @@ android {
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (releaseKeystorePropertiesFile.exists()) {
+            create("release") {
+                keyAlias = releaseKeystoreProperties.getProperty("keyAlias")
+                keyPassword = releaseKeystoreProperties.getProperty("keyPassword")
+                storeFile = file(releaseKeystoreProperties.getProperty("storeFile"))
+                storePassword = releaseKeystoreProperties.getProperty("storePassword")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -39,6 +56,11 @@ android {
             }
         }
         getByName("release") {
+            // Use the private release key when configured; otherwise keep local APKs installable.
+            // Replace the fallback with a private keystore before distributing a production build.
+            signingConfig = signingConfigs.getByName(
+                if (releaseKeystorePropertiesFile.exists()) "release" else "debug"
+            )
             optimization {
                enable = true
             }

@@ -19,3 +19,8 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Commons Compress discovers ZIP extra-field types reflectively while the
+# Android YouTube downloader initializes. Keep their concrete classes and
+# constructors intact in release builds.
+-keep class org.apache.commons.compress.archivers.zip.** { *; }

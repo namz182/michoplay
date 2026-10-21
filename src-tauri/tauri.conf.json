@@ -5,7 +5,7 @@
   "identifier": "app.michoplay.desktop",
   "build": {
     "beforeDevCommand": "npm run tauri:prepare-tools && npm run dev",
-    "devUrl": "http://127.0.0.1:1420",
+    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run tauri:prepare-tools && npm run build",
     "frontendDist": "../dist"
   },

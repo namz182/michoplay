@@ -26,9 +26,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use tauri::Emitter;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
@@ -292,6 +290,125 @@ fn android_media_plugin(
         .map_err(|_| "Android media services are unavailable.".to_owned())?
         .clone()
         .ok_or_else(|| "Android media services are still starting. Try again shortly.".to_owned())
+}
+
+#[cfg(target_os = "android")]
+fn apply_android_media_action(core: &mut PlayerCore, action: &str) -> Result<(), String> {
+    match action {
+        "play" | "toggle" => {
+            core.discard_failed_output();
+            if core.current_queue_index.is_none() {
+                let first = core
+                    .queue
+                    .first()
+                    .copied()
+                    .ok_or_else(|| "Add a music folder first.".to_owned())?;
+                core.play_track(first)
+            } else if core.sink.as_ref().map_or(true, Sink::empty) {
+                core.play_queue_index(core.current_queue_index.unwrap_or(0))
+            } else if let Some(sink) = &core.sink {
+                if action == "toggle" && core.is_playing {
+                    sink.pause();
+                    core.is_playing = false;
+                } else {
+                    sink.play();
+                    core.is_playing = true;
+                }
+                Ok(())
+            } else {
+                Ok(())
+            }
+        }
+        "pause" => {
+            if let Some(sink) = &core.sink {
+                sink.pause();
+            }
+            core.is_playing = false;
+            Ok(())
+        }
+        "next" => {
+            if core.queue.is_empty() {
+                return Err("Add a music folder first.".to_owned());
+            }
+            if let Some(next) = core
+                .current_queue_index
+                .and_then(|index| core.next_index(index))
+            {
+                core.play_queue_index(next)
+            } else {
+                core.is_playing = false;
+                if let Some(sink) = &core.sink {
+                    sink.stop();
+                }
+                Ok(())
+            }
+        }
+        "previous" => {
+            if core.queue.is_empty() {
+                return Err("Add a music folder first.".to_owned());
+            }
+            if core.current_queue_index.is_none() {
+                return core.play_queue_index(0);
+            }
+            if core
+                .sink
+                .as_ref()
+                .is_some_and(|sink| sink.get_pos() > Duration::from_secs(3))
+            {
+                return core
+                    .sink
+                    .as_ref()
+                    .expect("sink checked above")
+                    .try_seek(Duration::ZERO)
+                    .map_err(|_| "This audio format can’t seek.".to_owned());
+            }
+            let index = core.current_queue_index.unwrap_or(0);
+            if index == 0 && core.repeat_mode == "off" {
+                return core
+                    .sink
+                    .as_ref()
+                    .ok_or_else(|| "No song is loaded.".to_owned())?
+                    .try_seek(Duration::ZERO)
+                    .map_err(|_| "This audio format can’t seek.".to_owned());
+            }
+            core.play_queue_index(if index == 0 {
+                core.queue.len() - 1
+            } else {
+                index - 1
+            })
+        }
+        action if action.starts_with("seek:") => {
+            let position = action[5..]
+                .parse::<u64>()
+                .map_err(|_| "Invalid playback position.".to_owned())?;
+            core.sink
+                .as_ref()
+                .ok_or_else(|| "No song is loaded.".to_owned())?
+                .try_seek(Duration::from_millis(position))
+                .map_err(|_| "This audio format can’t seek.".to_owned())
+        }
+        action if action.starts_with("seek-by:") => {
+            let delta = action[8..]
+                .parse::<i64>()
+                .map_err(|_| "Invalid seek distance.".to_owned())?;
+            let sink = core
+                .sink
+                .as_ref()
+                .ok_or_else(|| "No song is loaded.".to_owned())?;
+            let duration = core
+                .current_queue_index
+                .and_then(|index| core.queue.get(index))
+                .and_then(|id| core.tracks.iter().find(|track| track.track.id == *id))
+                .map(|track| track.track.duration_ms)
+                .unwrap_or(0);
+            let position = sink.get_pos().as_millis() as i64;
+            sink.try_seek(Duration::from_millis(
+                (position + delta).clamp(0, duration as i64) as u64,
+            ))
+            .map_err(|_| "This audio format can’t seek.".to_owned())
+        }
+        _ => Ok(()),
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -2702,12 +2819,97 @@ pub fn run() {
             #[cfg(target_os = "android")]
             {
                 let handle = app.handle().clone();
-                tauri::async_runtime::spawn_blocking::<_, ()>(move || loop {
-                    std::thread::sleep(Duration::from_millis(400));
-                    let state = handle.state::<AppState>();
-                    if let Ok(mut core) = state.0.lock() {
-                        let _ = core.snapshot();
-                    };
+                tauri::async_runtime::spawn_blocking::<_, ()>(move || {
+                    let mut last_media_signature = None;
+                    loop {
+                        std::thread::sleep(Duration::from_millis(400));
+                        let plugin = handle
+                            .state::<MediaBridge>()
+                            .0
+                            .lock()
+                            .ok()
+                            .and_then(|bridge| bridge.clone());
+                        let Some(plugin) = plugin else { continue };
+
+                        let actions = plugin
+                            .run_mobile_plugin::<PendingMediaActions>("takePendingActions", ())
+                            .map(|response| response.actions)
+                            .unwrap_or_default();
+                        let mut received_action = false;
+                        for action in actions {
+                            let handled = handle
+                                .state::<AppState>()
+                                .0
+                                .lock()
+                                .map(|mut core| {
+                                    apply_android_media_action(&mut core, &action).is_ok()
+                                })
+                                .unwrap_or(false);
+                            if handled {
+                                received_action = true;
+                                let _ = handle.emit("android-player-state", ());
+                            }
+                        }
+
+                        let (signature, media) = {
+                            let state = handle.state::<AppState>();
+                            let Ok(mut core) = state.0.lock() else {
+                                continue;
+                            };
+                            let snapshot = core.snapshot();
+                            let media = snapshot.current_track_id.and_then(|id| {
+                                core.tracks
+                                    .iter()
+                                    .find(|track| track.track.id == id)
+                                    .map(|track| {
+                                        let artwork_data_url =
+                                            track.artwork.as_ref().map(|artwork| {
+                                                format!(
+                                                    "data:{};base64,{}",
+                                                    artwork.mime,
+                                                    STANDARD.encode(&artwork.data)
+                                                )
+                                            });
+                                        (
+                                            track.track.title.clone(),
+                                            track.track.artist.clone(),
+                                            snapshot.duration_ms,
+                                            snapshot.position_ms,
+                                            snapshot.is_playing,
+                                            artwork_data_url,
+                                        )
+                                    })
+                            });
+                            ((snapshot.current_track_id, snapshot.is_playing), media)
+                        };
+
+                        if received_action || last_media_signature != Some(signature) {
+                            if let Some((
+                                title,
+                                artist,
+                                duration_ms,
+                                position_ms,
+                                is_playing,
+                                artwork,
+                            )) = media
+                            {
+                                let _ = plugin.run_mobile_plugin::<()>(
+                                    "update",
+                                    serde_json::json!({
+                                        "title": title,
+                                        "artist": artist,
+                                        "isPlaying": is_playing,
+                                        "durationMs": duration_ms,
+                                        "positionMs": position_ms,
+                                        "artworkDataUrl": artwork,
+                                    }),
+                                );
+                            } else {
+                                let _ = plugin.run_mobile_plugin::<()>("stop", ());
+                            }
+                        }
+                        last_media_signature = Some(signature);
+                    }
                 });
             }
             #[cfg(any(target_os = "android", target_os = "ios"))]
