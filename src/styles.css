@@ -1169,20 +1169,48 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .sleep-timer-sheet-layer { z-index:95; }
 .playlist-add-songs { margin-top:9px; gap:7px; }
 .empty-library .playlist-add-songs { justify-self:center; }
-.add-songs-dialog { display:flex; width:min(560px,100%); max-height:min(82dvh,760px); min-height:0; flex-direction:column; gap:13px; padding:20px; border:1px solid rgba(255,255,255,.12); border-radius:13px; background:#242225; box-shadow:0 20px 70px rgba(0,0,0,.5); }
-.add-songs-dialog > p { margin:0; color:#aaa5ad; font-size:13px; }
-.add-songs-list { min-height:0; overflow:auto; overscroll-behavior:contain; }
-.add-songs-row { display:flex; width:100%; min-height:63px; align-items:center; gap:11px; padding:7px 4px; border:0; border-bottom:1px solid rgba(255,255,255,.06); background:transparent; color:#f1eff2; text-align:left; }
-.add-songs-row:disabled { opacity:.55; }
-.add-songs-cover { width:45px; height:45px; flex:0 0 45px; border-radius:5px; }
-.add-songs-row > span:nth-child(2) { display:grid; min-width:0; flex:1; gap:4px; }
+.add-songs-overlay { z-index:80; }
+.add-songs-dialog { display:flex; width:min(560px,100%); max-height:min(82dvh,760px); min-height:0; flex-direction:column; gap:0; padding:20px; border:1px solid rgba(255,255,255,.12); border-radius:16px; background:#242225; box-shadow:0 20px 70px rgba(0,0,0,.5); }
+.add-songs-dialog .dialog-title { flex:0 0 auto; }
+.add-songs-dialog .dialog-title h2 { font-size:22px; }
+.add-songs-description { margin:5px 0 13px; color:#aaa5ad; font-size:13px; line-height:1.5; }
+.add-songs-description strong { color:#f2eff4; font-weight:700; }
+.add-songs-search { display:flex; min-height:44px; flex:0 0 auto; align-items:center; gap:10px; margin-bottom:10px; padding:0 12px; border:1px solid rgba(255,255,255,.1); border-radius:10px; background:#19181b; color:#aaa5ad; }
+.add-songs-search:focus-within { border-color:rgba(216,238,228,.55); box-shadow:0 0 0 2px rgba(216,238,228,.08); }
+.add-songs-search input { width:100%; min-width:0; border:0; outline:0; background:transparent; color:#f5f2f6; font-size:13px; }
+.add-songs-search input::placeholder { color:#89848e; }
+.add-songs-search button { display:grid; width:28px; height:30px; flex:0 0 28px; place-items:center; border:0; border-radius:50%; background:transparent; color:#aaa5ad; }
+.add-songs-search button:hover { background:rgba(255,255,255,.08); color:#fff; }
+.add-songs-list { display:grid; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; margin:0 -5px; padding:0 5px; scrollbar-width:thin; scrollbar-color:#514d54 transparent; }
+.add-songs-row { display:flex; width:100%; min-height:60px; align-items:center; gap:11px; padding:7px 6px; border:0; border-bottom:1px solid rgba(255,255,255,.065); border-radius:8px; background:transparent; color:#f1eff2; text-align:left; cursor:pointer; transition:background 140ms ease; }
+.add-songs-row:hover:not(:disabled) { background:rgba(255,255,255,.055); }
+.add-songs-row.selected { background:rgba(216,238,228,.075); }
+.add-songs-row:disabled { cursor:default; opacity:.68; }
+.add-songs-cover { width:44px; height:44px; flex:0 0 44px; border-radius:6px; }
+.add-songs-copy { display:grid; min-width:0; flex:1; gap:4px; }
 .add-songs-row strong, .add-songs-row small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.add-songs-row strong { font-size:13px; }
+.add-songs-row strong { color:#f6f3f7; font-size:13px; font-weight:700; }
 .add-songs-row small { color:#aaa5ad; font-size:11px; }
-.add-songs-row .add-songs-check { display:grid; width:30px; height:30px; flex:0 0 30px; place-items:center; border:1px solid rgba(255,255,255,.16); border-radius:50%; color:#aaa5ad; }
-.add-songs-row.selected .add-songs-check { border-color:var(--brand-highlight); background:rgba(216,238,228,.14); color:var(--brand-highlight); }
-.add-songs-empty { padding:24px 8px; color:#aaa5ad; text-align:center; }
-.add-songs-dialog > .primary-button { justify-content:center; min-height:43px; }
+.add-songs-row .add-songs-check { display:grid; width:32px; height:32px; flex:0 0 32px; place-items:center; border:1px solid rgba(255,255,255,.2); border-radius:50%; color:#bdb8c1; }
+.add-songs-row.selected .add-songs-check { border-color:transparent; background:var(--brand-gradient); color:#302b38; }
+.add-songs-row .add-songs-added { flex:0 0 auto; padding:5px 8px; border-radius:999px; background:rgba(255,255,255,.07); color:#aaa5ad; font-size:10px; }
+.add-songs-empty { display:grid; min-height:120px; align-content:center; justify-items:center; margin:0; padding:24px 8px; color:#aaa5ad; font-size:12px; line-height:1.5; text-align:center; }
+.add-songs-footer { display:flex; flex:0 0 auto; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,.08); }
+.add-songs-selected-count { color:#aaa5ad; font-size:12px; font-variant-numeric:tabular-nums; }
+.add-songs-submit { min-width:130px; min-height:42px; justify-content:center; }
+.android-app .add-songs-overlay { padding:12px; }
+.android-app .add-songs-dialog { width:min(560px,100%); max-height:min(68dvh,620px); padding:17px 15px; border-radius:17px; }
+.android-app .add-songs-dialog .dialog-title h2 { font-size:21px; }
+.android-app .add-songs-description { margin:3px 0 12px; font-size:13px; }
+.android-app .add-songs-search { min-height:46px; border-radius:11px; }
+.android-app .add-songs-search input { font-size:14px; }
+.android-app .add-songs-row { min-height:61px; gap:10px; padding-inline:5px; }
+.android-app .add-songs-cover { width:46px; height:46px; flex-basis:46px; }
+.android-app .add-songs-row strong { font-size:14px; }
+.android-app .add-songs-row small { font-size:12px; }
+.android-app .add-songs-row .add-songs-check { width:34px; height:34px; flex-basis:34px; }
+.android-app .add-songs-footer { margin-top:9px; padding-top:10px; }
+.android-app .add-songs-submit { min-height:45px; font-size:13px; }
 .mobile-sheet-backdrop { position:fixed; z-index:89; inset:0; border:0; background:rgba(0,0,0,.58); }
 .mobile-action-sheet { position:fixed !important; z-index:90; inset:auto 0 0 !important; display:grid; width:100% !important; max-height:min(84dvh,780px); overflow:auto; gap:3px; padding:9px 16px calc(env(safe-area-inset-bottom) + 18px); border:0; border-radius:20px 20px 0 0; background:#242225; box-shadow:0 -12px 40px rgba(0,0,0,.4); }
 .mobile-action-heading { display:grid; }
