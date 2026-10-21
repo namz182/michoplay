@@ -928,7 +928,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 
 /* Android gets a touch-first library, mini-player, and full-screen playback surface. */
-.android-app { position:fixed; z-index:0; inset:0; display:flex; box-sizing:border-box; width:100%; height:100dvh; min-height:0; flex-direction:column; gap:0; overflow:hidden; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); background:#101012; user-select:none; -webkit-user-select:none; overscroll-behavior:none; }
+.android-app { position:fixed; z-index:0; inset:0; display:flex; box-sizing:border-box; width:var(--app-frame-width,100%); height:var(--app-frame-height,100dvh); min-height:0; flex-direction:column; gap:0; overflow:hidden; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); background:#101012; user-select:none; -webkit-user-select:none; overscroll-behavior:none; }
 body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; overflow:hidden; overscroll-behavior:none; }
 .android-app input, .android-app textarea, .android-app [contenteditable="true"] { user-select:text; -webkit-user-select:text; }
 .android-app .sidebar, .android-app .sidebar-resize, .android-app .topbar, .android-app .player-bar, .android-app .panel-resize, .android-app .now-panel { display:none !important; }
@@ -940,7 +940,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-header-actions { display:flex; align-items:center; gap:10px; }
 .mobile-icon-button { display:grid; width:38px; height:42px; place-items:center; border:0; background:transparent; color:#f4f1f5; }
 .android-app .work-area { display:block; min-height:0; flex:1; overflow:hidden; }
-.android-app .content-scroll { height:100%; overflow-x:hidden; overflow-y:auto; overscroll-behavior-y:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y; margin:0; padding:0 0 calc(185px + env(safe-area-inset-bottom)); border-radius:0; background:#111113; scrollbar-width:none; }
+.android-app .content-scroll { height:100%; overflow-x:hidden; overflow-y:auto; overscroll-behavior-y:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y; margin:0; padding:0 0 calc(230px + env(safe-area-inset-bottom)); border-radius:0; background:#111113; scrollbar-width:none; }
 .android-app .content-scroll::-webkit-scrollbar { display:none; }
 .android-app .collection-heading:not(.detail-heading) { display:none; }
 .android-app .detail-heading { display:block; min-height:0; padding:52px 18px 17px; background:var(--brand-gradient); }
