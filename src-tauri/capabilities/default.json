@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default desktop permissions for the MichoPlay window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "michoplay-media:default"]
+  "permissions": ["core:default", "dialog:allow-open", "michoplay-media:default", { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://github.com/namz182/michoplay/releases" }] }]
 }
