@@ -7,22 +7,41 @@
 <p align="center"><strong>A Spotify-inspired local music player.</strong></p>
 <p align="center">Play and organize the music you already own, with an offline-first library for desktop and Android.</p>
 
-## Showcase
+<p align="center">
+  <a href="https://github.com/namz182/michoplay/releases">
+    <img src="https://img.shields.io/badge/Download-Latest%20release-f5c6be?style=for-the-badge&logo=github&logoColor=09090b" alt="Download MichoPlay from GitHub Releases" />
+  </a>
+</p>
+
+## Screenshots
 
 <p align="center">
   <img src="docs/showcase/home.png" alt="MichoPlay home screen showing music folders, recently played tracks, and the playback menu" width="100%" />
 </p>
 <p align="center"><em>Home, local music folders, playback, and track actions</em></p>
 
-<p align="center">
-  <img src="docs/showcase/favorites.png" alt="MichoPlay favorites screen with the now-playing panel and queue" width="100%" />
-</p>
-<p align="center"><em>Favorites, queue, and now playing</em></p>
-
-<p align="center">
-  <img src="docs/showcase/settings.png" alt="MichoPlay settings, including the zoom controls" width="100%" />
-</p>
-<p align="center"><em>Playback and appearance settings</em></p>
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/showcase/playlist.png" alt="MichoPlay playlist view with image-backed heading, playlist controls, and song list" width="100%" />
+      <em>Playlists with artwork and quick controls</em>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/showcase/youtube.png" alt="MichoPlay YouTube search results with estimated audio sizes and download buttons" width="100%" />
+      <em>YouTube search and audio downloads</em>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/showcase/favorites.png" alt="MichoPlay favorites screen with now-playing panel and playback queue" width="100%" />
+      <em>Favorites, queue, and now playing</em>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/showcase/settings.png" alt="MichoPlay playback and appearance settings" width="100%" />
+      <em>Playback and appearance settings</em>
+    </td>
+  </tr>
+</table>
 
 ## Features
 
@@ -36,8 +55,6 @@
 - On desktop, download YouTube videos or playlists as M4A audio into `Music/YouTube` and keep them in the YouTube playlist.
 
 MichoPlay is available for Linux, Windows, macOS, and Android.
-
-<p align="center"><a href="https://github.com/namz182/michoplay/releases"><strong>Download the latest release</strong></a></p>
 
 ## Requirements
 
