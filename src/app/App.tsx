@@ -511,6 +511,35 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [player.currentTrackId, player.durationMs, player.positionMs, run, tracks.length]);
   useEffect(() => {
+    if (isAndroid) return;
+    const blockClipboard = (event: Event) => event.preventDefault();
+    const blockContextMenu = (event: MouseEvent) => event.preventDefault();
+    const blockRestrictedShortcuts = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const modified = event.ctrlKey || event.metaKey;
+      const copyOrCut = (modified && !event.altKey && (key === "c" || key === "x"))
+        || (event.ctrlKey && key === "insert")
+        || (event.shiftKey && key === "delete");
+      const openDevtools = key === "f12"
+        || (modified && event.shiftKey && ["i", "j", "c", "k"].includes(key))
+        || (event.metaKey && event.altKey && ["i", "j", "c"].includes(key));
+      if (copyOrCut || openDevtools) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener("copy", blockClipboard, true);
+    document.addEventListener("cut", blockClipboard, true);
+    document.addEventListener("contextmenu", blockContextMenu, true);
+    window.addEventListener("keydown", blockRestrictedShortcuts, true);
+    return () => {
+      document.removeEventListener("copy", blockClipboard, true);
+      document.removeEventListener("cut", blockClipboard, true);
+      document.removeEventListener("contextmenu", blockContextMenu, true);
+      window.removeEventListener("keydown", blockRestrictedShortcuts, true);
+    };
+  }, [isAndroid]);
+  useEffect(() => {
     if (!isTauri()) return;
     let active = true;
     const tick = async () => {
@@ -1062,7 +1091,7 @@ export default function App() {
   function shareTrack(track: Track) {
     const details = { title: track.title, text: `${track.title} — ${track.artist}` };
     if (navigator.share) void navigator.share(details).catch(() => {});
-    else void navigator.clipboard?.writeText(details.text).then(() => setMessage("Track details copied."), () => setMessage(details.text));
+    else setMessage("Sharing isn't available on this device.");
   }
   function newPlaylist(target?: Track, playlist?: Playlist) { setDialog({ target, playlist }); setPlaylistName(playlist?.name ?? ""); setMenu(null); }
   function savePlaylist() {
@@ -1115,7 +1144,7 @@ export default function App() {
     }) : <div className="global-search-empty"><strong>No matches in your library for “{search}”</strong><span>Try a song, artist, album, folder, or playlist name.</span></div>}
   </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); localStorage.removeItem("michoplay-recent-searches"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
 
-  return <main className={`app-frame ${compact ? "compact" : ""} ${isAndroid ? "android-app" : ""}`} style={{ "--sidebar-width": `${sidebarWidth}px`, "--panel-width": `${panelWidth}px` } as CSSProperties}>
+  return <main className={`app-frame ${compact ? "compact" : ""} ${isAndroid ? "android-app" : "desktop-app"}`} style={{ "--sidebar-width": `${sidebarWidth}px`, "--panel-width": `${panelWidth}px` } as CSSProperties}>
     <svg className="mobile-svg-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="michoplay-brand-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#f5c6be"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="#d8eee4"/></linearGradient></defs></svg>
     <input ref={importInput} className="audio-import-input" type="file" accept="audio/*,.mp3,.flac,.wav,.ogg,.opus,.m4a,.aac,.aiff,.aif" multiple aria-label="Choose audio files" onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; void importAudioFiles(files); }}/>
     <aside className="sidebar" aria-label="Main navigation">

@@ -31,6 +31,8 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 button:disabled { cursor: default; }
 
 .app-frame { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 8px; width: var(--app-frame-width, 100%); height: var(--app-frame-height, 100vh); zoom: var(--app-zoom, 1); min-height: var(--app-frame-min-height, 500px); padding: 8px 8px 0; background: var(--bg); }
+.desktop-app { user-select:none; -webkit-user-select:none; }
+.desktop-app input, .desktop-app textarea, .desktop-app select, .desktop-app [contenteditable="true"] { user-select:text; -webkit-user-select:text; }
 .sidebar { display: flex; min-height: 0; flex-direction: column; padding: 20px 14px 14px; overflow: hidden; border-radius: 12px 12px 0 0; background: var(--sidebar); }
 .brand { display: flex; align-items: center; gap: 10px; margin: 0 6px 32px; color: var(--text); text-decoration: none; font-size: 18px; font-weight: 800; letter-spacing: -.7px; }
 .brand-mark { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 50%; background: linear-gradient(140deg, var(--blush), var(--brand-highlight) 62%, var(--accent)); color: #302b38; }
@@ -961,14 +963,14 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-filter-row button { min-height:37px; flex:0 0 auto; padding:0 16px; border:0; border-radius:999px; background:#29292c; color:#f0eef1; font-size:14px; font-weight:700; }
 .mobile-filter-row button.selected { background:var(--brand-gradient); color:#241d2c; }
 .android-app .folder-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; padding:0; }
-.android-app .folder-grid > .media-card { min-width:0; min-height:58px; padding:0; border-radius:6px; background:#29292c; }
-.android-app .folder-grid .collection-open { display:grid; grid-template-columns:58px minmax(0,1fr); grid-template-rows:1fr; align-items:center; gap:8px; min-height:58px; }
-.android-app .folder-grid .card-cover { grid-row:1; width:58px; height:58px; aspect-ratio:1; border-radius:5px 0 0 5px; }
-.android-app .folder-grid .collection-open > strong { padding-right:7px; font-size:13px; }
+.android-app .folder-grid > .media-card { display:grid; grid-template-columns:minmax(0,1fr) 25px; align-items:center; min-width:0; min-height:58px; padding:0; border-radius:6px; background:#29292c; }
+.android-app .folder-grid .collection-open { grid-column:1; display:grid; grid-template-columns:50px minmax(0,1fr); grid-template-rows:1fr; align-items:center; gap:6px; width:100%; min-height:58px; }
+.android-app .folder-grid .card-cover { grid-row:1; width:50px; height:58px; aspect-ratio:1; border-radius:5px 0 0 5px; }
+.android-app .folder-grid .collection-open > strong { display:-webkit-box; min-width:0; padding-right:3px; overflow:hidden; font-size:12px; line-height:1.2; text-overflow:clip; white-space:normal; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .android-app .folder-grid .collection-open > small { display:none; }
-.android-app .folder-grid .collection-open > strong { padding-right:38px; }
-.android-app .folder-grid .collection-play-button { top:50%; right:5px; bottom:auto; width:30px; height:30px; opacity:.9; transform:translateY(-50%); pointer-events:auto; }
-.android-app .playlist-card .collection-play-button { right:8px; bottom:52px; width:36px; height:36px; opacity:.9; transform:none; pointer-events:auto; }
+.android-app .folder-grid .collection-play-button { position:static; grid-column:2; grid-row:1; width:22px; height:22px; margin-right:2px; opacity:1; transform:none; box-shadow:0 2px 7px rgba(0,0,0,.24); pointer-events:auto; }
+.android-app .folder-grid .collection-play-button svg { width:12px; height:12px; }
+.android-app .playlist-card .collection-play-button { right:8px; bottom:50px; width:29px; height:29px; opacity:.95; transform:none; pointer-events:auto; }
 .mobile-home-albums { margin-top:23px; }
 .android-app .mobile-home-albums .collection-grid { display:flex; gap:12px; overflow-x:auto; padding:0 0 6px; scrollbar-width:none; }
 .android-app .mobile-home-albums .collection-grid::-webkit-scrollbar { display:none; }
@@ -1014,11 +1016,11 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-library-cover { width:58px; height:58px; flex:0 0 58px; border-radius:5px; }
 .mobile-library-cover.liked-cover { background:var(--brand-gradient); color:#29252e; }
 .android-app .home-quick-grid.home-library-links { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-.android-app .home-quick-card { min-height:64px; gap:9px; border-radius:7px; background:#29292c; }
-.android-app .home-quick-art { width:58px; height:58px; flex-basis:58px; border-radius:5px; }
+.android-app .home-quick-card { min-height:64px; gap:7px; border-radius:7px; background:#29292c; }
+.android-app .home-quick-art { width:50px; height:50px; flex-basis:50px; border-radius:5px; }
 .android-app .home-youtube-link .home-quick-art { display:grid; place-items:center; background:var(--youtube-red); color:#fff; }
-.android-app .home-quick-card > span:last-child { display:grid; min-width:0; gap:4px; text-align:left; }
-.android-app .home-quick-card strong { overflow:hidden; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
+.android-app .home-quick-card > span:last-child { display:grid; min-width:0; gap:4px; padding-right:5px; text-align:left; }
+.android-app .home-quick-card strong { display:-webkit-box; overflow:hidden; font-size:12px; line-height:1.2; text-overflow:clip; white-space:normal; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .android-app .home-quick-card small { overflow:hidden; color:#b8b4bc; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .android-app .mobile-bottom-nav { grid-template-columns:repeat(5,minmax(0,1fr)); }
 .android-app .mobile-bottom-nav button { min-height:51px; }
@@ -1265,9 +1267,11 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 @media (max-width:380px) {
   .android-app .home-section { padding-inline:13px; }
   .android-app .folder-grid { gap:6px; }
-  .android-app .folder-grid .collection-open { grid-template-columns:48px minmax(0,1fr); gap:6px; }
+  .android-app .folder-grid > .media-card { grid-template-columns:minmax(0,1fr) 26px; }
+  .android-app .folder-grid .collection-open { grid-template-columns:46px minmax(0,1fr); gap:5px; }
   .android-app .folder-grid .card-cover { width:48px; height:58px; }
   .android-app .folder-grid .collection-open > strong { font-size:12px; }
+  .android-app .folder-grid .collection-play-button { width:22px; height:22px; margin-right:1px; }
   .mobile-player-screen { padding-inline:18px; }
   .mobile-queue-sheet { max-height:84dvh; padding-inline:12px; }
   .mobile-queue-row { gap:8px; }
