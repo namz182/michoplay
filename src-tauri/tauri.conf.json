@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: https://ytimg.com https://*.ytimg.com; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; frame-src https://www.youtube-nocookie.com https://www.youtube.com"
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: https://ytimg.com https://*.ytimg.com; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://api.github.com; frame-src https://www.youtube-nocookie.com https://www.youtube.com"
     }
   },
   "bundle": {

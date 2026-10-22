@@ -600,6 +600,14 @@ body.resizing { cursor: col-resize; user-select: none; }
 .scan-banner { display: flex; align-items: center; gap: 9px; padding: 12px 25px; background: #242326; color: #ccc9ce; font-size: 11px; }
 .scan-banner .loading-indicator { width: 13px; height: 13px; }
 .status-message { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 25px; background: #292729; color: #d2cfd2; font-size: 11px; line-height: 1.6; }
+.update-notice { display:flex; align-items:center; gap:12px; margin:12px 20px; padding:12px 14px; border:1px solid rgba(245,198,190,.28); border-radius:10px; background:linear-gradient(110deg,rgba(245,198,190,.12),rgba(245,238,232,.055) 60%,rgba(216,238,228,.09)); }
+.update-notice-icon { display:grid; width:34px; height:34px; flex:0 0 34px; place-items:center; border-radius:50%; background:var(--brand-gradient); color:#302b38; }
+.update-notice-copy { display:grid; min-width:0; flex:1; gap:3px; }
+.update-notice-copy strong { overflow:hidden; color:var(--text); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.update-notice-copy small { color:var(--muted); font-size:10px; }
+.update-download-button { display:flex; min-height:34px; flex:0 0 auto; align-items:center; justify-content:center; gap:7px; padding:0 12px; border:0; border-radius:999px; background:var(--brand-gradient); color:#302b38; font-size:11px; font-weight:800; cursor:pointer; }
+.update-download-button:hover { filter:brightness(1.06); }
+.update-dismiss { width:28px; height:30px; flex:0 0 28px; }
 .inline-link { padding: 0; border: 0; background: transparent; color: var(--brand-highlight); font-size: inherit; text-decoration: underline; cursor: pointer; }
 .track-row, .table-head { grid-template-columns: 27px minmax(0,1.65fr) minmax(0,1fr) minmax(65px,.7fr) 110px; gap: 9px; }
 .track-title-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -1262,6 +1270,11 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .mobile-bottom-nav button svg { width:21px; height:21px; }
 .android-app .mobile-bottom-nav button span { font-size:10px; font-weight:650; }
 .android-app .status-message { margin:8px 12px; }
+.android-app .update-notice { gap:9px; margin:10px 12px; padding:10px; }
+.android-app .update-notice-icon { width:30px; height:30px; flex-basis:30px; }
+.android-app .update-notice-copy strong { font-size:11px; }
+.android-app .update-download-button { min-height:32px; gap:5px; padding:0 9px; font-size:10px; }
+.android-app .update-dismiss { width:24px; flex-basis:24px; }
 .android-app .settings-page { padding:12px 17px 24px; }
 .android-app .settings-page h1 { font-size:27px; }
 @media (max-width:380px) {

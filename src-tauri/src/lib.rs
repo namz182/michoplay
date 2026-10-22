@@ -2723,6 +2723,7 @@ pub fn run() {
         })))
         .manage(YoutubeDownloadState::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(MediaBridge(Mutex::new(None)))
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("michoplay-media")

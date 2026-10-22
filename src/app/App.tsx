@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion, onBackButtonPress } from "@tauri-apps/api/app";
@@ -34,6 +35,23 @@ const trackSortOptions: { key: TrackSort; label: string }[] = [
   { key: "releaseDate", label: "Release date" }, { key: "duration", label: "Duration" },
 ];
 const youtubeSizeEstimateStorageKey = "michoplay-youtube-size-estimates";
+const latestReleaseApiUrl = "https://api.github.com/repos/namz182/michoplay/releases/latest";
+const releasesPageUrl = "https://github.com/namz182/michoplay/releases";
+function isNewerVersion(candidate: string, current: string) {
+  const parts = (version: string) => {
+    const normalized = version.trim().replace(/^v/i, "").split(/[+-]/, 1)[0];
+    if (!/^\d+(\.\d+)*$/.test(normalized)) return null;
+    return normalized.split(".").map(Number);
+  };
+  const latest = parts(candidate);
+  const installed = parts(current);
+  if (!latest || !installed) return false;
+  for (let index = 0; index < Math.max(latest.length, installed.length); index += 1) {
+    const difference = (latest[index] ?? 0) - (installed[index] ?? 0);
+    if (difference !== 0) return difference > 0;
+  }
+  return false;
+}
 function savedYoutubeSizeEstimates(): Record<string, number> {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(youtubeSizeEstimateStorageKey) ?? "{}");
@@ -140,6 +158,7 @@ export default function App() {
   const [fullMode, setFullMode] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [appVersion, setAppVersion] = useState(packageInfo.version);
+  const [availableUpdate, setAvailableUpdate] = useState<string | null>(null);
   const [fullPanelTab, setFullPanelTab] = useState<"queue" | "browse">("queue");
   const [fullBrowseTab, setFullBrowseTab] = useState<"playlists" | "library">("playlists");
   const [fullBrowsePlaylistId, setFullBrowsePlaylistId] = useState<string | null>(null);
@@ -327,6 +346,53 @@ export default function App() {
   useEffect(() => {
     void getVersion().then(setAppVersion).catch(() => {});
   }, []);
+  useEffect(() => {
+    if (!isTauri() || !appVersion) return;
+    let active = true;
+    let controller: AbortController | undefined;
+    let requestId = 0;
+    const checkForUpdate = async () => {
+      if (!active || !navigator.onLine) return;
+      controller?.abort();
+      const requestController = new AbortController();
+      controller = requestController;
+      const currentRequest = ++requestId;
+      const timeout = window.setTimeout(() => requestController.abort(), 8000);
+      try {
+        const response = await fetch(latestReleaseApiUrl, {
+          headers: { Accept: "application/vnd.github+json" },
+          signal: requestController.signal,
+        });
+        if (!response.ok) return;
+        const release: unknown = await response.json();
+        if (!active || currentRequest !== requestId) return;
+        if (!release || typeof release !== "object" || !("tag_name" in release)) return;
+        const tag = (release as { tag_name?: unknown }).tag_name;
+        if (typeof tag !== "string") return;
+        const latestVersion = tag.trim().replace(/^v/i, "");
+        if (!isNewerVersion(latestVersion, appVersion)) {
+          setAvailableUpdate(null);
+          return;
+        }
+        if (stored("dismissed-update-version", "") === latestVersion) setAvailableUpdate(null);
+        else setAvailableUpdate(latestVersion);
+      } catch {
+        // Update checks are optional; stay quiet when offline or GitHub is unavailable.
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    };
+    const onOnline = () => { void checkForUpdate(); };
+    void checkForUpdate();
+    const interval = window.setInterval(() => { void checkForUpdate(); }, 12 * 60 * 60 * 1000);
+    window.addEventListener("online", onOnline);
+    return () => {
+      active = false;
+      controller?.abort();
+      window.clearInterval(interval);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [appVersion]);
   useEffect(() => {
     if (!isTauri()) return;
     void api.volume(stored("volume", 0.75));
@@ -1171,6 +1237,12 @@ export default function App() {
       <header className="topbar"><div className="history-nav"><div className="app-menu-anchor"><button className="icon-button menu-trigger" aria-label="Application menu" aria-expanded={appMenu} onClick={() => { setAppMenu(!appMenu); setMenu(null); }}><MoreHorizontal size={22}/></button>{appMenu && <div className="action-menu app-menu"><button onClick={() => { chooseLibrarySource(); setAppMenu(false); }}><Plus size={15}/>{isAndroid ? "Import audio files" : "Add music folder"}</button><button onClick={() => { void refresh(); setAppMenu(false); }}><RefreshCw size={15}/>Refresh library</button><button onClick={() => newPlaylist()}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><button onClick={() => navigate({ section: "Settings" })}><Settings2 size={15}/>Settings</button><button onClick={() => { setAboutOpen(true); setAppMenu(false); }}><AudioLines size={15}/>About MichoPlay</button></div>}</div><button className="icon-button" aria-label="Go back" disabled={history.index === 0} onClick={() => travel(-1)}><ChevronLeft size={24}/></button><button className="icon-button" aria-label="Go forward" disabled={history.index === history.entries.length - 1} onClick={() => travel(1)}><ChevronRight size={24}/></button></div><div className={`search-box global-search ${searchOpen ? "expanded" : ""}`} role="search"><Search size={17}/><input aria-label="Search all music" aria-expanded={searchOpen} aria-controls="global-search-results" placeholder="What do you want to play?" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { setSearch(event.target.value); setSearchOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") setSearchOpen(false); else if (event.key === "ArrowDown") { event.preventDefault(); document.querySelector<HTMLButtonElement>(".global-search-result")?.focus(); } else if (event.key === "Enter") { event.preventDefault(); if (searchResults[0]) chooseSearchResult(searchResults[0]); else if (globalYoutubeResults[0]) requestYoutubeDownload(globalYoutubeResults[0], search); } }}/>{search && <button className="icon-button" aria-label="Clear search" onClick={() => { setSearch(""); setSearchOpen(true); }}><X size={15}/></button>}{searchOpen && <div className="global-search-popover" id="global-search-results" role="listbox" aria-label="Search results">{globalSearchContent}</div>}</div><button className={`topbar-downloads ${showPanel && panelView === "downloads" ? "active" : ""}`} aria-label="Downloads" title="Downloads" onClick={() => { setPanelView("downloads"); setShowPanel(true); }}><Download size={18}/></button><button className={`topbar-settings ${page.section === "Settings" ? "active" : ""}`} aria-label="Settings" title="Settings" onClick={() => navigate({ section: "Settings" })}><Settings2 size={18}/></button></header>
       <div className={`work-area ${showPanel ? "with-panel" : "without-panel"}`}>
         <section className="content-scroll" aria-label={heading}>
+          {availableUpdate && <div className="update-notice" role="status">
+            <span className="update-notice-icon"><Download size={17}/></span>
+            <span className="update-notice-copy"><strong>MichoPlay {availableUpdate} is available</strong><small>Installed version {appVersion}</small></span>
+            <button className="update-download-button" onClick={() => { void openUrl(releasesPageUrl).catch((error) => setMessage(`Could not open the releases page: ${String(error)}`)); }}><Download size={14}/>Download</button>
+            <button className="icon-button update-dismiss" aria-label="Dismiss update notice" title="Remind me later" onClick={() => { localStorage.setItem("michoplay-dismissed-update-version", availableUpdate); setAvailableUpdate(null); }}><X size={15}/></button>
+          </div>}
           {scanning && <div className="scan-banner" role="status"><span className="loading-indicator"/>Scanning music and artwork…</div>}
           {message && <div className="status-message" role="status"><span>{message.includes("Refresh the folder") ? <>{message.split("Refresh the folder")[0]}<button className="inline-link" onClick={() => void refresh()}>Refresh the folder</button>{message.split("Refresh the folder")[1]}</> : message}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage("")}><X size={13}/></button></div>}
           {isAndroid && mobileTab === "downloads" ? <div className="mobile-downloads-page">
