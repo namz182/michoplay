@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MichoPlay",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "app.michoplay.desktop",
   "build": {
     "beforeDevCommand": "npm run tauri:prepare-tools && npm run dev",
-    "devUrl": "http://127.0.0.1:1420",
+    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run tauri:prepare-tools && npm run build",
     "frontendDist": "../dist"
   },
@@ -18,7 +18,8 @@
         "minWidth": 720,
         "minHeight": 540,
         "center": true,
-        "resizable": true
+        "resizable": true,
+        "devtools": false
       }
     ],
     "security": {
@@ -30,7 +31,8 @@
     "resources": ["resources/THIRD-PARTY-LICENSES.txt"],
     "category": "Music",
     "android": {
-      "minSdkVersion": 26
+      "minSdkVersion": 26,
+      "versionCode": 1002
     },
     "shortDescription": "Offline music for your desktop",
     "longDescription": "A private, offline-first music player for your local collection.",

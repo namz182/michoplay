@@ -8,8 +8,10 @@ use rodio::{
     source::SeekError, ChannelCount, Decoder, OutputStream, OutputStreamBuilder, SampleRate, Sink,
     Source,
 };
+#[cfg(target_os = "android")]
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "linux")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use souvlaki::{MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
 use std::{
     collections::{HashMap, HashSet},
@@ -24,9 +26,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use tauri::Emitter;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
@@ -274,9 +274,158 @@ struct AppState(Mutex<PlayerCore>);
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 struct MediaBridge(Mutex<Option<tauri::plugin::PluginHandle<tauri::Wry>>>);
 
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct PendingMediaActions {
+    actions: Vec<String>,
+}
+
+#[cfg(target_os = "android")]
+fn android_media_plugin(
+    state: &State<'_, MediaBridge>,
+) -> Result<tauri::plugin::PluginHandle<tauri::Wry>, String> {
+    state
+        .0
+        .lock()
+        .map_err(|_| "Android media services are unavailable.".to_owned())?
+        .clone()
+        .ok_or_else(|| "Android media services are still starting. Try again shortly.".to_owned())
+}
+
+#[cfg(target_os = "android")]
+fn apply_android_media_action(core: &mut PlayerCore, action: &str) -> Result<(), String> {
+    match action {
+        "play" | "toggle" => {
+            core.discard_failed_output();
+            if core.current_queue_index.is_none() {
+                let first = core
+                    .queue
+                    .first()
+                    .copied()
+                    .ok_or_else(|| "Add a music folder first.".to_owned())?;
+                core.play_track(first)
+            } else if core.sink.as_ref().map_or(true, Sink::empty) {
+                core.play_queue_index(core.current_queue_index.unwrap_or(0))
+            } else if let Some(sink) = &core.sink {
+                if action == "toggle" && core.is_playing {
+                    sink.pause();
+                    core.is_playing = false;
+                } else {
+                    sink.play();
+                    core.is_playing = true;
+                }
+                Ok(())
+            } else {
+                Ok(())
+            }
+        }
+        "pause" => {
+            if let Some(sink) = &core.sink {
+                sink.pause();
+            }
+            core.is_playing = false;
+            Ok(())
+        }
+        "next" => {
+            if core.queue.is_empty() {
+                return Err("Add a music folder first.".to_owned());
+            }
+            if let Some(next) = core
+                .current_queue_index
+                .and_then(|index| core.next_index(index))
+            {
+                core.play_queue_index(next)
+            } else {
+                core.is_playing = false;
+                if let Some(sink) = &core.sink {
+                    sink.stop();
+                }
+                Ok(())
+            }
+        }
+        "previous" => {
+            if core.queue.is_empty() {
+                return Err("Add a music folder first.".to_owned());
+            }
+            if core.current_queue_index.is_none() {
+                return core.play_queue_index(0);
+            }
+            if core
+                .sink
+                .as_ref()
+                .is_some_and(|sink| sink.get_pos() > Duration::from_secs(3))
+            {
+                return core
+                    .sink
+                    .as_ref()
+                    .expect("sink checked above")
+                    .try_seek(Duration::ZERO)
+                    .map_err(|_| "This audio format can’t seek.".to_owned());
+            }
+            let index = core.current_queue_index.unwrap_or(0);
+            if index == 0 && core.repeat_mode == "off" {
+                return core
+                    .sink
+                    .as_ref()
+                    .ok_or_else(|| "No song is loaded.".to_owned())?
+                    .try_seek(Duration::ZERO)
+                    .map_err(|_| "This audio format can’t seek.".to_owned());
+            }
+            core.play_queue_index(if index == 0 {
+                core.queue.len() - 1
+            } else {
+                index - 1
+            })
+        }
+        action if action.starts_with("seek:") => {
+            let position = action[5..]
+                .parse::<u64>()
+                .map_err(|_| "Invalid playback position.".to_owned())?;
+            core.sink
+                .as_ref()
+                .ok_or_else(|| "No song is loaded.".to_owned())?
+                .try_seek(Duration::from_millis(position))
+                .map_err(|_| "This audio format can’t seek.".to_owned())
+        }
+        action if action.starts_with("seek-by:") => {
+            let delta = action[8..]
+                .parse::<i64>()
+                .map_err(|_| "Invalid seek distance.".to_owned())?;
+            let sink = core
+                .sink
+                .as_ref()
+                .ok_or_else(|| "No song is loaded.".to_owned())?;
+            let duration = core
+                .current_queue_index
+                .and_then(|index| core.queue.get(index))
+                .and_then(|id| core.tracks.iter().find(|track| track.track.id == *id))
+                .map(|track| track.track.duration_ms)
+                .unwrap_or(0);
+            let position = sink.get_pos().as_millis() as i64;
+            sink.try_seek(Duration::from_millis(
+                (position + delta).clamp(0, duration as i64) as u64,
+            ))
+            .map_err(|_| "This audio format can’t seek.".to_owned())
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn call_android_media<T: DeserializeOwned>(
+    plugin: tauri::plugin::PluginHandle<tauri::Wry>,
+    command: &'static str,
+    payload: serde_json::Value,
+) -> Result<T, String> {
+    plugin
+        .run_mobile_plugin_async(command, payload)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 struct DesktopMediaBridge(Mutex<Option<MediaControls>>);
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 struct DesktopMediaBridge;
 
 struct PendingAudioOpens(Mutex<Vec<String>>);
@@ -303,6 +452,29 @@ fn media_take_opened_audio(
         if let Some(handle) = bridge.as_ref() {
             return handle
                 .run_mobile_plugin("takeOpenedAudio", ())
+                .map_err(|error| error.to_string());
+        }
+        return Ok(Vec::new());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = state;
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+fn media_take_pending_actions(state: State<'_, MediaBridge>) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let bridge = state
+            .0
+            .lock()
+            .map_err(|_| "Media controls are unavailable.".to_owned())?;
+        if let Some(handle) = bridge.as_ref() {
+            return handle
+                .run_mobile_plugin::<PendingMediaActions>("takePendingActions", ())
+                .map(|response| response.actions)
                 .map_err(|error| error.to_string());
         }
         return Ok(Vec::new());
@@ -421,6 +593,7 @@ fn media_update(
     is_playing: bool,
     duration_ms: u64,
     position_ms: u64,
+    artwork_data_url: Option<String>,
     state: State<'_, MediaBridge>,
     desktop: State<'_, DesktopMediaBridge>,
 ) -> Result<(), String> {
@@ -440,12 +613,13 @@ fn media_update(
                         "isPlaying": is_playing,
                         "durationMs": duration_ms,
                         "positionMs": position_ms,
+                        "artworkDataUrl": artwork_data_url,
                     }),
                 )
                 .map_err(|error| error.to_string())?;
         }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let mut controls = desktop
             .0
@@ -453,11 +627,13 @@ fn media_update(
             .map_err(|_| "System media controls are unavailable.".to_owned())?;
         if let Some(controls) = controls.as_mut() {
             if let Some(title) = title.as_deref() {
+                let cover_url = artwork_data_url.as_deref().and_then(save_media_artwork);
                 controls
                     .set_metadata(MediaMetadata {
                         title: Some(title),
                         artist: artist.as_deref(),
                         duration: Some(Duration::from_millis(duration_ms)),
+                        cover_url: cover_url.as_deref(),
                         ..Default::default()
                     })
                     .map_err(|error| error.to_string())?;
@@ -477,15 +653,47 @@ fn media_update(
         }
         let _ = &state;
     }
-    #[cfg(not(any(target_os = "android", target_os = "linux")))]
-    let _ = (title, artist, is_playing, duration_ms, position_ms, state);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "ios")]
+    let _ = (
+        title,
+        artist,
+        is_playing,
+        duration_ms,
+        position_ms,
+        artwork_data_url,
+        state,
+    );
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = desktop;
     Ok(())
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn save_media_artwork(data_url: &str) -> Option<String> {
+    let (header, encoded) = data_url.split_once(',')?;
+    let bytes = STANDARD.decode(encoded).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    let extension = if header.contains("image/png") {
+        "png"
+    } else if header.contains("image/webp") {
+        "webp"
+    } else {
+        "jpg"
+    };
+    let path =
+        std::env::temp_dir().join(format!("michoplay-art-{:x}.{extension}", hasher.finish()));
+    std::fs::write(&path, bytes).ok()?;
+    url::Url::from_file_path(path)
+        .ok()
+        .map(|url| url.to_string())
+}
+
 #[tauri::command]
-fn media_stop(state: State<'_, MediaBridge>) -> Result<(), String> {
+fn media_stop(
+    state: State<'_, MediaBridge>,
+    desktop: State<'_, DesktopMediaBridge>,
+) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         let bridge = state
@@ -498,8 +706,21 @@ fn media_stop(state: State<'_, MediaBridge>) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Ok(mut controls) = desktop.0.lock() {
+            if let Some(controls) = controls.as_mut() {
+                controls
+                    .set_playback(MediaPlayback::Stopped)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        let _ = state;
+    }
+    #[cfg(target_os = "ios")]
     let _ = state;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = desktop;
     Ok(())
 }
 
@@ -1169,13 +1390,24 @@ async fn library_import_and_play_audio_files(
     Ok(views)
 }
 
+#[derive(Deserialize)]
+struct YoutubeMusicDirectory { path: String }
+
 #[tauri::command]
-fn youtube_music_directory(app: AppHandle) -> Result<String, String> {
+async fn youtube_music_directory(
+    bridge: State<'_, MediaBridge>,
+    app: AppHandle,
+) -> Result<String, String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        let directory: YoutubeMusicDirectory = call_android_media(plugin, "youtubeMusicDirectory", serde_json::json!({})).await?;
+        return Ok(directory.path);
+    }
 
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let directory = app
             .path()
             .audio_dir()
@@ -1190,7 +1422,7 @@ fn youtube_music_directory(app: AppHandle) -> Result<String, String> {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct YoutubeSearchResult {
     id: String,
@@ -1201,7 +1433,15 @@ struct YoutubeSearchResult {
     is_playlist: bool,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedMusicFolder {
+    path: String,
+    count: usize,
+    name: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct YoutubeDownloadItem {
     id: String,
@@ -1213,6 +1453,7 @@ struct YoutubeDownloadItem {
     percent: Option<f32>,
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
+    estimated_bytes: Option<u64>,
     message: String,
 }
 
@@ -1255,7 +1496,7 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) {
     let Some(progress) = line.strip_prefix("__MICHOPLAY_PROGRESS__") else {
         return;
     };
-    let mut fields = progress.splitn(5, '|');
+    let mut fields = progress.splitn(6, '|');
     let raw_percent = fields.next().unwrap_or_default();
     let downloaded_bytes = fields
         .next()
@@ -1270,6 +1511,7 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) {
         .and_then(|value| value.trim().parse::<u64>().ok());
     let total_bytes = total_bytes.or(total_bytes_estimate);
     let title = fields.next().unwrap_or_default();
+    let speed = fields.next().unwrap_or_default().trim();
     let percent = raw_percent
         .trim()
         .trim_end_matches('%')
@@ -1286,10 +1528,10 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) {
             task.item.percent = percent.or(task.item.percent);
             task.item.downloaded_bytes = downloaded_bytes.or(task.item.downloaded_bytes);
             task.item.total_bytes = total_bytes.or(task.item.total_bytes);
-            task.item.message = if task.item.is_playlist && !title.trim().is_empty() {
-                format!("Downloading: {}", title.trim())
+            task.item.message = if !speed.is_empty() && speed != "NA" {
+                speed.to_owned()
             } else {
-                "Downloading audio".to_owned()
+                String::new()
             };
         }
     }
@@ -1318,12 +1560,35 @@ fn bundled_desktop_tool(name: &str) -> Result<std::path::PathBuf, String> {
 }
 
 #[tauri::command]
-async fn youtube_search(query: String) -> Result<Vec<YoutubeSearchResult>, String> {
+async fn library_pick_music_folder(
+    bridge: State<'_, MediaBridge>,
+) -> Result<PickedMusicFolder, String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube search is available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(plugin, "chooseMusicFolder", serde_json::json!({})).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        Err("Choose a music folder from the Android app.".to_owned())
+    }
+}
+
+#[tauri::command]
+async fn youtube_search(
+    query: String,
+    bridge: State<'_, MediaBridge>,
+) -> Result<Vec<YoutubeSearchResult>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(plugin, "youtubeSearch", serde_json::json!({ "query": query })).await
+    }
 
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let query = query.trim().to_owned();
         if query.is_empty() || query.chars().count() > 200 {
             return Err("Enter a search or YouTube link (up to 200 characters).".to_owned());
@@ -1480,28 +1745,51 @@ fn valid_youtube_thumbnail(raw: &str) -> bool {
 }
 
 #[tauri::command]
-fn youtube_downloads_state(state: State<'_, YoutubeDownloadState>) -> Vec<YoutubeDownloadItem> {
-    state
-        .0
-        .lock()
-        .map(|manager| manager.snapshot())
-        .unwrap_or_default()
+async fn youtube_downloads_state(
+    state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
+) -> Result<Vec<YoutubeDownloadItem>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(plugin, "youtubeDownloadsState", serde_json::json!({})).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        Ok(state
+            .0
+            .lock()
+            .map(|manager| manager.snapshot())
+            .unwrap_or_default())
+    }
 }
 
 #[tauri::command]
-fn youtube_download_enqueue(
+async fn youtube_download_enqueue(
     url: String,
     title: String,
     thumbnail: Option<String>,
     is_playlist: bool,
+    estimated_bytes: Option<u64>,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<YoutubeDownloadItem, String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadEnqueue",
+            serde_json::json!({ "url": url, "title": title, "thumbnail": thumbnail, "isPlaylist": is_playlist, "estimatedBytes": estimated_bytes }),
+        )
+        .await
+    }
 
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let url = validate_youtube_url(&url)?;
         let thumbnail = thumbnail.filter(|url| valid_youtube_thumbnail(url));
         let is_playlist = is_playlist
@@ -1528,6 +1816,7 @@ fn youtube_download_enqueue(
                 percent: None,
                 downloaded_bytes: None,
                 total_bytes: None,
+                estimated_bytes,
                 message: "Waiting to download".to_owned(),
             };
             manager.tasks.push(YoutubeDownloadTask {
@@ -1543,15 +1832,25 @@ fn youtube_download_enqueue(
 }
 
 #[tauri::command]
-fn youtube_download_pause(
+async fn youtube_download_pause(
     id: String,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadPause",
+            serde_json::json!({ "id": id }),
+        )
+        .await
+    }
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let pid = {
             let mut manager = state
                 .0
@@ -1578,15 +1877,25 @@ fn youtube_download_pause(
 }
 
 #[tauri::command]
-fn youtube_download_resume(
+async fn youtube_download_resume(
     id: String,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadResume",
+            serde_json::json!({ "id": id }),
+        )
+        .await
+    }
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         {
             let mut manager = state
                 .0
@@ -1610,15 +1919,25 @@ fn youtube_download_resume(
 }
 
 #[tauri::command]
-fn youtube_download_cancel(
+async fn youtube_download_cancel(
     id: String,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    return Err("YouTube audio downloads are available in the desktop app.".to_owned());
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadCancel",
+            serde_json::json!({ "id": id }),
+        )
+        .await
+    }
     #[cfg(not(target_os = "android"))]
     {
+        let _ = bridge;
         let pid = {
             let mut manager = state
                 .0
@@ -1645,11 +1964,24 @@ fn youtube_download_cancel(
 }
 
 #[tauri::command]
-fn youtube_download_remove(
+async fn youtube_download_remove(
     id: String,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        return call_android_media(
+            plugin,
+            "youtubeDownloadRemove",
+            serde_json::json!({ "id": id }),
+        )
+        .await;
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = bridge;
     let mut manager = state
         .0
         .lock()
@@ -1699,7 +2031,7 @@ fn youtube_download_worker(app: AppHandle) {
                 .find(|task| task.item.status == "queued")
             {
                 task.item.status = "downloading".to_owned();
-                task.item.message = "Starting download".to_owned();
+                task.item.message.clear();
                 Some((task.item.id.clone(), task.item.url.clone()))
             } else {
                 manager.active_workers = manager.active_workers.saturating_sub(1);
@@ -1792,7 +2124,7 @@ fn run_youtube_download(
         .arg("--convert-thumbnails")
         .arg("jpg")
         .arg("--progress-template")
-        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(info.title)s")
+        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(info.title)s|%(progress._speed_str)s")
         .arg("--output")
         .arg(output_template)
         .arg("--")
@@ -2145,6 +2477,38 @@ fn player_toggle(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn player_set_playing(is_playing: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let mut core = state
+        .0
+        .lock()
+        .map_err(|_| "The player is unavailable.".to_owned())?;
+    core.discard_failed_output();
+    if !is_playing {
+        if let Some(sink) = &core.sink {
+            sink.pause();
+        }
+        core.is_playing = false;
+        return Ok(());
+    }
+    if core.current_queue_index.is_none() {
+        let first = core
+            .queue
+            .first()
+            .copied()
+            .ok_or_else(|| "Add a music folder first.".to_owned())?;
+        return core.play_track(first);
+    }
+    if core.sink.as_ref().map_or(true, Sink::empty) {
+        let index = core.current_queue_index.unwrap_or(0);
+        core.play_queue_index(index)?;
+    } else if let Some(sink) = &core.sink {
+        sink.play();
+        core.is_playing = true;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn player_next(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -2298,9 +2662,9 @@ fn player_state(state: State<'_, AppState>) -> Result<PlayerSnapshot, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.manage(DesktopMediaBridge(Mutex::new(None)));
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.manage(DesktopMediaBridge);
     let startup_audio_files = {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2379,25 +2743,70 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            #[cfg(target_os = "linux")]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
-                if let Ok(mut controls) = MediaControls::new(PlatformConfig {
+                #[cfg(target_os = "windows")]
+                let controls = app
+                    .get_webview_window("main")
+                    .and_then(|window| window.hwnd().ok())
+                    .and_then(|hwnd| {
+                        MediaControls::new(PlatformConfig {
+                            dbus_name: "michoplay",
+                            display_name: "MichoPlay",
+                            hwnd: Some(hwnd.0 as *mut std::ffi::c_void),
+                        })
+                        .ok()
+                    });
+                #[cfg(not(target_os = "windows"))]
+                let controls = MediaControls::new(PlatformConfig {
                     dbus_name: "michoplay",
                     display_name: "MichoPlay",
                     hwnd: None,
-                }) {
+                })
+                .ok();
+                if let Some(mut controls) = controls {
                     let handle = app.handle().clone();
                     if controls
                         .attach(move |event| {
                             let action = match event {
-                                souvlaki::MediaControlEvent::Play => "play",
-                                souvlaki::MediaControlEvent::Pause => "pause",
-                                souvlaki::MediaControlEvent::Toggle => "toggle",
-                                souvlaki::MediaControlEvent::Next => "next",
-                                souvlaki::MediaControlEvent::Previous => "previous",
+                                souvlaki::MediaControlEvent::Play => "play".to_owned(),
+                                souvlaki::MediaControlEvent::Pause
+                                | souvlaki::MediaControlEvent::Stop => "pause".to_owned(),
+                                souvlaki::MediaControlEvent::Toggle => "toggle".to_owned(),
+                                souvlaki::MediaControlEvent::Next => "next".to_owned(),
+                                souvlaki::MediaControlEvent::Previous => "previous".to_owned(),
+                                souvlaki::MediaControlEvent::SetPosition(position) => {
+                                    format!("seek:{}", position.0.as_millis())
+                                }
+                                souvlaki::MediaControlEvent::Seek(direction) => {
+                                    let delta = match direction {
+                                        souvlaki::SeekDirection::Forward => 10_000_i64,
+                                        souvlaki::SeekDirection::Backward => -10_000_i64,
+                                    };
+                                    format!("seek-by:{delta}")
+                                }
+                                souvlaki::MediaControlEvent::SeekBy(direction, amount) => {
+                                    let delta = match direction {
+                                        souvlaki::SeekDirection::Forward => {
+                                            amount.as_millis() as i64
+                                        }
+                                        souvlaki::SeekDirection::Backward => {
+                                            -(amount.as_millis() as i64)
+                                        }
+                                    };
+                                    format!("seek-by:{delta}")
+                                }
+                                souvlaki::MediaControlEvent::Raise => "raise".to_owned(),
                                 _ => return,
                             };
-                            let _ = handle.emit("system-media-control", action);
+                            if action == "raise" {
+                                if let Some(window) = handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            } else {
+                                let _ = handle.emit("system-media-control", action);
+                            }
                         })
                         .is_ok()
                     {
@@ -2410,15 +2819,100 @@ pub fn run() {
             #[cfg(target_os = "android")]
             {
                 let handle = app.handle().clone();
-                tauri::async_runtime::spawn_blocking::<_, ()>(move || loop {
-                    std::thread::sleep(Duration::from_millis(400));
-                    let state = handle.state::<AppState>();
-                    if let Ok(mut core) = state.0.lock() {
-                        let _ = core.snapshot();
-                    };
+                tauri::async_runtime::spawn_blocking::<_, ()>(move || {
+                    let mut last_media_signature = None;
+                    loop {
+                        std::thread::sleep(Duration::from_millis(400));
+                        let plugin = handle
+                            .state::<MediaBridge>()
+                            .0
+                            .lock()
+                            .ok()
+                            .and_then(|bridge| bridge.clone());
+                        let Some(plugin) = plugin else { continue };
+
+                        let actions = plugin
+                            .run_mobile_plugin::<PendingMediaActions>("takePendingActions", ())
+                            .map(|response| response.actions)
+                            .unwrap_or_default();
+                        let mut received_action = false;
+                        for action in actions {
+                            let handled = handle
+                                .state::<AppState>()
+                                .0
+                                .lock()
+                                .map(|mut core| {
+                                    apply_android_media_action(&mut core, &action).is_ok()
+                                })
+                                .unwrap_or(false);
+                            if handled {
+                                received_action = true;
+                                let _ = handle.emit("android-player-state", ());
+                            }
+                        }
+
+                        let (signature, media) = {
+                            let state = handle.state::<AppState>();
+                            let Ok(mut core) = state.0.lock() else {
+                                continue;
+                            };
+                            let snapshot = core.snapshot();
+                            let media = snapshot.current_track_id.and_then(|id| {
+                                core.tracks
+                                    .iter()
+                                    .find(|track| track.track.id == id)
+                                    .map(|track| {
+                                        let artwork_data_url =
+                                            track.artwork.as_ref().map(|artwork| {
+                                                format!(
+                                                    "data:{};base64,{}",
+                                                    artwork.mime,
+                                                    STANDARD.encode(&artwork.data)
+                                                )
+                                            });
+                                        (
+                                            track.track.title.clone(),
+                                            track.track.artist.clone(),
+                                            snapshot.duration_ms,
+                                            snapshot.position_ms,
+                                            snapshot.is_playing,
+                                            artwork_data_url,
+                                        )
+                                    })
+                            });
+                            ((snapshot.current_track_id, snapshot.is_playing), media)
+                        };
+
+                        if received_action || last_media_signature != Some(signature) {
+                            if let Some((
+                                title,
+                                artist,
+                                duration_ms,
+                                position_ms,
+                                is_playing,
+                                artwork,
+                            )) = media
+                            {
+                                let _ = plugin.run_mobile_plugin::<()>(
+                                    "update",
+                                    serde_json::json!({
+                                        "title": title,
+                                        "artist": artist,
+                                        "isPlaying": is_playing,
+                                        "durationMs": duration_ms,
+                                        "positionMs": position_ms,
+                                        "artworkDataUrl": artwork,
+                                    }),
+                                );
+                            } else {
+                                let _ = plugin.run_mobile_plugin::<()>("stop", ());
+                            }
+                        }
+                        last_media_signature = Some(signature);
+                    }
                 });
             }
-            #[cfg(not(any(target_os = "android", target_os = "linux")))]
+            #[cfg(any(target_os = "android", target_os = "ios"))]
             let _ = app;
             Ok(())
         })
@@ -2426,6 +2920,7 @@ pub fn run() {
             library_import_audio_files,
             library_import_and_play_audio_files,
             library_import_directory,
+            library_pick_music_folder,
             youtube_music_directory,
             youtube_search,
             youtube_downloads_state,
@@ -2442,6 +2937,7 @@ pub fn run() {
             library_open_audio_files,
             system_set_default_player,
             media_take_opened_audio,
+            media_take_pending_actions,
             player_play_collection,
             player_queue_move,
             player_queue_remove,
@@ -2450,6 +2946,7 @@ pub fn run() {
             player_set_autoplay,
             player_set_sleep_timer,
             player_toggle,
+            player_set_playing,
             player_next,
             player_previous,
             player_toggle_shuffle,

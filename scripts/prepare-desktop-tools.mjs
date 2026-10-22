@@ -9,6 +9,10 @@ import { spawnSync } from "node:child_process";
 import { inflateRawSync } from "node:zlib";
 
 const target = process.env.TAURI_ENV_TARGET_TRIPLE ?? hostTarget();
+if (target.includes("-android") || target.includes("-ios")) {
+  console.log(`Skipping desktop downloader tools for mobile target ${target}.`);
+  process.exit(0);
+}
 const targetInfo = targetDetails(target);
 const outputDirectory = fileURLToPath(new URL("../src-tauri/binaries/", import.meta.url));
 mkdirSync(outputDirectory, { recursive: true });

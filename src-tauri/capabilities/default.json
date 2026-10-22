@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default desktop permissions for the MichoPlay window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open", "michoplay-media:default"]
 }
