@@ -203,6 +203,7 @@ export default function App() {
   const mobileSheetDragStartY = useRef<number | null>(null);
   const mobileTrackSwipeStartX = useRef<number | null>(null);
   const [youtubeDirectory, setYoutubeDirectory] = useState("");
+  const [youtubeFolderScanned, setYoutubeFolderScanned] = useState(false);
   const [youtubeQuery, setYoutubeQuery] = useState("");
   const [youtubeSearching, setYoutubeSearching] = useState(false);
   const [youtubeSearchError, setYoutubeSearchError] = useState("");
@@ -290,10 +291,14 @@ export default function App() {
   const refresh = useCallback(async (folders: string[] = roots) => {
     if (!isTauri()) { setMessage("Open the desktop app to load local music."); return; }
     setScanning(true); setMessage("");
-    try { setTracks(await api.refresh(folders)); setPlayer(await api.state()); }
+    try {
+      const scanned = await api.refresh(folders);
+      setTracks(scanned); setPlayer(await api.state());
+      if (youtubeDirectory && folders.includes(youtubeDirectory)) setYoutubeFolderScanned(true);
+    }
     catch (error) { setMessage(String(error)); }
     finally { setScanning(false); }
-  }, [roots]);
+  }, [roots, youtubeDirectory]);
   const syncYoutubeLibrary = useCallback(async () => {
     if (!isTauri() || !youtubeDirectory) return [];
     const nextRoots = [...new Set([...roots, youtubeDirectory])];
@@ -302,25 +307,28 @@ export default function App() {
     try {
       const scanned = await api.refresh(nextRoots);
       setRoots(nextRoots); setTracks(scanned); setPlayer(await api.state());
+      setYoutubeFolderScanned(true);
       const newIds = scanned.filter((track) => track.rootPath === youtubeDirectory && !knownIds.has(track.id)).map((track) => track.id);
-      if (newIds.length) setPlaylists((prior) => {
-        const existing = prior.find((item) => item.name.trim().toLocaleLowerCase() === "youtube");
-        if (!existing) return [{ id: "michoplay-youtube", name: "YouTube", trackIds: newIds }, ...prior];
-        return prior.map((item) => item.id === existing.id
-          ? { ...item, trackIds: [...item.trackIds, ...newIds.filter((id) => !item.trackIds.includes(id))] }
-          : item);
-      });
       if (newIds.length) setMessage(`Saved ${newIds.length} ${newIds.length === 1 ? "song" : "songs"} to Music/YouTube`);
       return newIds;
     } catch (error) { setMessage(String(error)); return []; }
     finally { setScanning(false); }
   }, [youtubeDirectory, roots, tracks]);
   useEffect(() => {
+    if (!youtubeDirectory || !youtubeFolderScanned) return;
+    const folderTrackIds = tracks.filter((track) => track.rootPath === youtubeDirectory).map((track) => track.id);
+    setPlaylists((prior) => {
+      const existing = prior.find((item) => item.name.trim().toLocaleLowerCase() === "youtube");
+      if (!existing) return [{ id: "michoplay-youtube", name: "YouTube", trackIds: folderTrackIds }, ...prior];
+      if (existing.trackIds.length === folderTrackIds.length && existing.trackIds.every((id, index) => id === folderTrackIds[index])) return prior;
+      return prior.map((item) => item.id === existing.id ? { ...item, trackIds: folderTrackIds } : item);
+    });
+  }, [tracks, youtubeDirectory, youtubeFolderScanned]);
+  useEffect(() => {
     void getVersion().then(setAppVersion).catch(() => {});
   }, []);
   useEffect(() => {
     if (!isTauri()) return;
-    if (isAndroid) void refresh(roots);
     void api.volume(stored("volume", 0.75));
     void api.autoplay(stored("autoplay", true));
     void api.equalizer(equalizerBands, equalizerEnabled);
@@ -333,6 +341,7 @@ export default function App() {
     void api.youtubeMusicDirectory().then(async (directory) => {
       if (!active) return;
       setYoutubeDirectory(directory);
+      setYoutubeFolderScanned(false);
       const nextRoots = [...new Set([...roots, directory])];
       setRoots(nextRoots);
       setPlaylists((prior) => prior.some((item) => item.name.trim().toLocaleLowerCase() === "youtube")
@@ -343,6 +352,7 @@ export default function App() {
         if (!active) return;
         setTracks(scanned);
         setPlayer(await api.state());
+        setYoutubeFolderScanned(true);
       } catch (error) {
         if (active) setMessage(String(error));
       }
