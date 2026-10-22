@@ -1193,7 +1193,38 @@ export default function App() {
               {playlists.filter((playlist) => playlist.name.trim().toLocaleLowerCase() !== "youtube").map((playlist) => { const item: Collection = { key: playlist.id, title: playlist.name, subtitle: "", tracks: playlist.trackIds.flatMap((id) => trackMap.get(id) ? [trackMap.get(id)!] : []) }; return <button className="mobile-library-row" key={playlist.id} onClick={() => { setMobileTab("home"); openDetail("Playlists", "playlist", item); }}><Cover className="mobile-library-cover" keys={coverKeys(item.tracks)} icon={<ListMusic size={23}/>}/><span><strong>{playlist.name}</strong><small>{item.tracks.length} songs · Playlist</small></span></button>; })}
               {!playlists.some((playlist) => playlist.name.trim().toLocaleLowerCase() !== "youtube") && <Empty title="Your playlists will appear here" description="Create a playlist or import music using the + button."/>}
             </div>
-          </div> : page.section === "Settings" ? <SettingsPage roots={roots} player={player} equalizerBands={equalizerBands} equalizerEnabled={equalizerEnabled} compact={compact} showPanel={showPanel} keepScreenAwake={keepScreenAwake} onKeepScreenAwake={setKeepScreenAwake} globalYoutubeSearchEnabled={globalYoutubeSearchEnabled} onGlobalYoutubeSearch={(enabled) => { setGlobalYoutubeSearchEnabled(enabled); localStorage.setItem("michoplay-global-youtube-search-enabled", JSON.stringify(enabled)); }} scanning={scanning} mobile={isAndroid} zoomLevel={zoomLevel} onZoom={setZoomLevel} onEqualizer={(bands) => { setEqualizerBands(bands); localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(bands)); void run(() => api.equalizer(bands, equalizerEnabled)); }} onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }} onCompact={setCompact} onPanel={setShowPanel} onAdd={chooseLibrarySource} onRemove={confirmRemoveFolder} onRefresh={() => void refresh()} onVolume={(volume) => { localStorage.setItem("michoplay-volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }} onAutoplay={(enabled) => { localStorage.setItem("michoplay-autoplay", JSON.stringify(enabled)); void run(() => api.autoplay(enabled)); }} onSleepTimer={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))} onDefaultPlayer={() => isAndroid ? setMessage("Open an audio file from your file manager, choose MichoPlay, then tap Always to make it the default.") : void run(() => api.setDefaultPlayer())} /> : <>
+          </div> : page.section === "Settings" ? <SettingsPage
+            roots={roots}
+            player={player}
+            equalizerBands={equalizerBands}
+            equalizerEnabled={equalizerEnabled}
+            compact={compact}
+            showPanel={showPanel}
+            keepScreenAwake={keepScreenAwake}
+            onKeepScreenAwake={setKeepScreenAwake}
+            globalYoutubeSearchEnabled={globalYoutubeSearchEnabled}
+            onGlobalYoutubeSearch={(enabled) => { setGlobalYoutubeSearchEnabled(enabled); localStorage.setItem("michoplay-global-youtube-search-enabled", JSON.stringify(enabled)); }}
+            scanning={scanning}
+            mobile={isAndroid}
+            zoomLevel={zoomLevel}
+            onZoom={setZoomLevel}
+            onEqualizer={(bands) => {
+              setEqualizerBands(bands);
+              localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(bands));
+              void api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)));
+            }}
+            onEqualizerPreview={(bands) => { void api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error))); }}
+            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
+            onCompact={setCompact}
+            onPanel={setShowPanel}
+            onAdd={chooseLibrarySource}
+            onRemove={confirmRemoveFolder}
+            onRefresh={() => void refresh()}
+            onVolume={(volume) => { localStorage.setItem("michoplay-volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
+            onAutoplay={(enabled) => { localStorage.setItem("michoplay-autoplay", JSON.stringify(enabled)); void run(() => api.autoplay(enabled)); }}
+            onSleepTimer={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))}
+            onDefaultPlayer={() => isAndroid ? setMessage("Open an audio file from your file manager, choose MichoPlay, then tap Always to make it the default.") : void run(() => api.setDefaultPlayer())}
+          /> : <>
             <div className={`collection-heading ${listPage ? "detail-heading" : ""}`}>
               {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/> }{isAndroid && listPage && <button className="mobile-detail-back" aria-label="Back" onClick={() => { if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}><ChevronLeft size={24}/></button>}<div className="heading-foreground">{listPage && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={page.detail?.kind === "folder" ? <FolderOpen size={40}/> : page.section === "Favorites" ? <Heart size={36} fill="currentColor"/> : <Music2 size={36}/>}/>}<div className="heading-copy"><h1>{heading}</h1><p>{isYoutubePlaylist ? "Download audio from YouTube by searching or pasting a link." : listPage ? `${collectionTracks.length} songs · ${time(collectionTracks.reduce((sum, track) => sum + track.durationMs, 0))}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : `${playlists.length} playlists`}</p></div></div>
             </div>
@@ -1315,7 +1346,7 @@ export default function App() {
   </main>;
 }
 
-function EqualizerSettings({ bands, enabled, onChange, onToggle }: { bands: number[]; enabled: boolean; onChange: (bands: number[]) => void; onToggle: (enabled: boolean) => void }) {
+function EqualizerSettings({ bands, enabled, onChange, onPreview, onToggle }: { bands: number[]; enabled: boolean; onChange: (bands: number[]) => void; onPreview: (bands: number[]) => void; onToggle: (enabled: boolean) => void }) {
   const presets = [
     { name: "Flat", bands: [0, 0, 0, 0, 0, 0] },
     { name: "Bass boost", bands: [6, 5, 3, 0, -1, 0] },
@@ -1326,45 +1357,116 @@ function EqualizerSettings({ bands, enabled, onChange, onToggle }: { bands: numb
   const [savedPresets, setSavedPresets] = useState<{ name: string; bands: number[] }[]>(() => stored("equalizer-presets", []));
   const [saving, setSaving] = useState(false);
   const [presetName, setPresetName] = useState("");
-  const [dragging, setDragging] = useState<number | null>(null);
+  const [previewBands, setPreviewBands] = useState<number[] | null>(null);
+  const dragIndex = useRef<number | null>(null);
+  const dragSvg = useRef<SVGSVGElement | null>(null);
+  const dragTransform = useRef<DOMMatrix | null>(null);
+  const latestBands = useRef<number[] | null>(null);
+  const dragChanged = useRef(false);
+  const renderFrame = useRef<number | null>(null);
+  const previewTimer = useRef<number | null>(null);
+  const pendingPreview = useRef<number[] | null>(null);
+  const lastPreviewAt = useRef(0);
+  const onPreviewRef = useRef(onPreview);
+  useEffect(() => { onPreviewRef.current = onPreview; }, [onPreview]);
+  const visibleBands = previewBands ?? bands;
   const allPresets = [...presets, ...savedPresets];
-  const activePreset = allPresets.find((preset) => preset.bands.every((gain, index) => gain === bands[index]))?.name;
+  const activePreset = allPresets.find((preset) => preset.bands.every((gain, index) => gain === visibleBands[index]))?.name;
   const builtInName = (name: string) => presets.some((preset) => preset.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase());
   const updateBand = (index: number, value: number) => {
-    const next = [...bands]; next[index] = Math.max(-12, Math.min(12, value)); onChange(next);
+    const next = [...visibleBands]; next[index] = Math.max(-12, Math.min(12, value)); onChange(next);
   };
   const savePreset = () => {
     const name = presetName.trim();
     if (!name || builtInName(name)) return;
-    const next = [...savedPresets.filter((preset) => preset.name.toLocaleLowerCase() !== name.toLocaleLowerCase()), { name, bands: [...bands] }];
+    const next = [...savedPresets.filter((preset) => preset.name.toLocaleLowerCase() !== name.toLocaleLowerCase()), { name, bands: [...visibleBands] }];
     setSavedPresets(next); localStorage.setItem("michoplay-equalizer-presets", JSON.stringify(next));
     setPresetName(""); setSaving(false);
   };
   const chartX = (index: number) => 120 + index * 116;
   const chartY = (gain: number) => 25 + (12 - gain) * (175 / 24);
-  const curve = bands.map((gain, index) => [chartX(index), chartY(gain)] as const);
+  const curve = visibleBands.map((gain, index) => [chartX(index), chartY(gain)] as const);
   const smoothPath = curve.slice(1).reduce((path, [x, y], index) => {
     const [previousX, previousY] = curve[index]; const dx = (x - previousX) / 3;
     return `${path} C ${previousX + dx} ${previousY}, ${x - dx} ${y}, ${x} ${y}`;
   }, `M ${curve[0][0]} ${curve[0][1]}`);
   const fillPath = `M ${curve[0][0]} 112 L ${curve[0][0]} ${curve[0][1]}${smoothPath.slice(smoothPath.indexOf(" C"))} L ${curve[curve.length - 1][0]} 112 Z`;
-  const updateFromPointer = (event: ReactPointerEvent<SVGSVGElement>, index: number) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const svgY = (event.clientY - bounds.top) * 250 / bounds.height;
-    updateBand(index, Math.round(12 - (svgY - 25) * 24 / 175));
+  const queuePreviewRender = () => {
+    if (renderFrame.current !== null) return;
+    renderFrame.current = window.requestAnimationFrame(() => {
+      renderFrame.current = null;
+      setPreviewBands(latestBands.current);
+    });
   };
+  const queueAudioPreview = (next: number[]) => {
+    pendingPreview.current = next;
+    if (previewTimer.current !== null) return;
+    const delay = Math.max(0, 50 - (performance.now() - lastPreviewAt.current));
+    previewTimer.current = window.setTimeout(() => {
+      previewTimer.current = null;
+      const pending = pendingPreview.current;
+      pendingPreview.current = null;
+      if (!pending) return;
+      lastPreviewAt.current = performance.now();
+      onPreviewRef.current(pending);
+    }, delay);
+  };
+  const updateFromPointer = (clientX: number, clientY: number, index: number) => {
+    const svg = dragSvg.current;
+    const transform = dragTransform.current;
+    if (!svg || !transform) return;
+    const point = svg.createSVGPoint();
+    point.x = clientX;
+    point.y = clientY;
+    const svgY = point.matrixTransform(transform).y;
+    const value = Math.max(-12, Math.min(12, Math.round(12 - (svgY - 25) * 24 / 175)));
+    const next = [...(latestBands.current ?? visibleBands)];
+    if (next[index] === value) return;
+    next[index] = value;
+    latestBands.current = next;
+    dragChanged.current = true;
+    queuePreviewRender();
+    queueAudioPreview(next);
+  };
+  const finishDrag = () => {
+    if (dragIndex.current === null) return;
+    dragIndex.current = null;
+    dragSvg.current = null;
+    dragTransform.current = null;
+    if (renderFrame.current !== null) {
+      window.cancelAnimationFrame(renderFrame.current);
+      renderFrame.current = null;
+    }
+    if (previewTimer.current !== null) {
+      window.clearTimeout(previewTimer.current);
+      previewTimer.current = null;
+    }
+    pendingPreview.current = null;
+    const finalBands = latestBands.current;
+    if (dragChanged.current && finalBands) onChange(finalBands);
+    setPreviewBands(null);
+    latestBands.current = null;
+    dragChanged.current = false;
+  };
+  useEffect(() => () => {
+    if (renderFrame.current !== null) window.cancelAnimationFrame(renderFrame.current);
+    if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
+  }, []);
   return <section className="eq-section">
     <header className="eq-header"><h2>Equalizer</h2><button className={`switch ${enabled ? "on" : ""}`} role="switch" aria-label="Equalizer" aria-checked={enabled} onClick={() => onToggle(!enabled)}><span/></button></header>
     <div className={`equalizer-settings ${enabled ? "" : "disabled"}`}>
       <div className="eq-toolbar"><label className="eq-select-wrap"><span className="sr-only">Equalizer preset</span><select aria-label="Equalizer preset" value={activePreset ?? "manual"} onChange={(event) => { const preset = allPresets.find((item) => item.name === event.target.value); if (preset) onChange([...preset.bands]); }}><option value="manual">Manual</option>{presets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}{savedPresets.length > 0 && <optgroup label="My presets">{savedPresets.map((preset) => <option key={`saved-${preset.name}`} value={preset.name}>{preset.name}</option>)}</optgroup>}</select></label>
         {saving ? <form className="eq-save-form" onSubmit={(event) => { event.preventDefault(); savePreset(); }}><input autoFocus maxLength={40} value={presetName} aria-label="Preset name" placeholder="Preset name" onChange={(event) => setPresetName(event.target.value)}/><button type="submit" disabled={!presetName.trim() || builtInName(presetName)}>Save</button><button type="button" onClick={() => { setSaving(false); setPresetName(""); }}>Cancel</button></form> : <button className="eq-save-button" onClick={() => setSaving(true)}>Save preset</button>}
       </div>
-      <div className="eq-chart-wrap"><svg className="eq-chart" viewBox="0 0 760 250" preserveAspectRatio="none" role="group" aria-label="Equalizer controls" onPointerMove={(event) => { if (dragging !== null) updateFromPointer(event, dragging); }} onPointerUp={() => setDragging(null)} onPointerCancel={() => setDragging(null)}>
-        <defs><linearGradient id="eq-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#1ed760" stopOpacity=".62"/><stop offset="100%" stopColor="#1ed760" stopOpacity=".08"/></linearGradient></defs>
+      <div className="eq-chart-wrap"><svg className="eq-chart" viewBox="0 0 760 250" preserveAspectRatio="none" role="group" aria-label="Equalizer controls">
+        <defs>
+          <linearGradient id="eq-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--blush)" stopOpacity=".42"/><stop offset="64%" stopColor="var(--brand-highlight)" stopOpacity=".24"/><stop offset="100%" stopColor="var(--accent)" stopOpacity=".05"/></linearGradient>
+          <linearGradient id="eq-line" x1="0" x2="1" y1="0" y2="0"><stop offset="0%" stopColor="var(--blush)"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="var(--accent)"/></linearGradient>
+        </defs>
         <text className="eq-db-label" x="0" y="30">+12dB</text><text className="eq-db-label" x="0" y="205">−12dB</text>
         {curve.map(([x], index) => <line className="eq-gridline" key={`grid-${index}`} x1={x} x2={x} y1="25" y2="200"/>)}<line className="eq-zero-line" x1="65" x2="700" y1="112" y2="112"/>
         <path className="eq-fill" d={fillPath}/><path className="eq-line" d={smoothPath}/>
-        {curve.map(([x, y], index) => <g key={equalizerFrequencies[index]}><circle className="eq-hit-target" cx={x} cy={y} r="17" onPointerDown={(event) => { event.preventDefault(); event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId); setDragging(index); }}/><circle className="eq-point" cx={x} cy={y} r="4" role="slider" tabIndex={0} aria-label={equalizerFrequencies[index]} aria-valuemin={-12} aria-valuemax={12} aria-valuenow={bands[index]} aria-valuetext={`${bands[index]} dB`} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault(); updateBand(index, bands[index] + 1); } else if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault(); updateBand(index, bands[index] - 1); } }}/><text className="eq-frequency-label" x={x} y="232" textAnchor="middle">{equalizerFrequencies[index]}</text></g>)}
+        {curve.map(([x, y], index) => <g key={equalizerFrequencies[index]}><circle className="eq-hit-target" cx={x} cy={y} r="17" onPointerDown={(event) => { event.preventDefault(); const svg = event.currentTarget.ownerSVGElement; const transform = svg?.getScreenCTM(); if (!svg || !transform) return; event.currentTarget.setPointerCapture(event.pointerId); dragIndex.current = index; dragSvg.current = svg; dragTransform.current = transform.inverse(); latestBands.current = [...visibleBands]; dragChanged.current = false; updateFromPointer(event.clientX, event.clientY, index); }} onPointerMove={(event) => { if (dragIndex.current === index) updateFromPointer(event.clientX, event.clientY, index); }} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}/><circle className="eq-point" cx={x} cy={y} r="4" role="slider" tabIndex={0} aria-label={equalizerFrequencies[index]} aria-valuemin={-12} aria-valuemax={12} aria-valuenow={visibleBands[index]} aria-valuetext={`${visibleBands[index]} dB`} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault(); updateBand(index, visibleBands[index] + 1); } else if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault(); updateBand(index, visibleBands[index] - 1); } }}/><text className="eq-frequency-label" x={x} y="232" textAnchor="middle">{equalizerFrequencies[index]}</text></g>)}
       </svg></div>
       <div className="eq-card-footer"><span>{enabled ? "Changes apply immediately to playback." : "Equalizer is off."}</span><button className="outline-button eq-reset" onClick={() => onChange([0, 0, 0, 0, 0, 0])}>Reset</button></div>
     </div>
@@ -1393,12 +1495,12 @@ function TrackRows({ items, player, favorites, playCounts, showPlayCount = false
   const [dismissedPlayControl, setDismissedPlayControl] = useState<number | null>(null);
   return <div className="track-table" role="table" aria-label="Songs"><div className="table-head" role="row"><span role="columnheader">#</span><span role="columnheader">Title</span><span role="columnheader">Album</span><span role="columnheader">Artist</span><span role="columnheader"><Clock3 size={13}/></span></div>{items.length ? <div className="track-list" role="rowgroup">{items.map((track, index) => { const active = player.currentTrackId === track.id && player.isPlaying; const playCount = playCounts?.get(track.id) ?? 0; const playControlDismissed = dismissedPlayControl === track.id; const playTrack = () => { setDismissedPlayControl(track.id); onPlay(track); }; return <div role="row" key={track.id} className={`track-row ${player.currentTrackId === track.id ? "playing" : ""} ${playControlDismissed ? "suppress-row-play" : ""}`} onMouseLeave={() => { if (playControlDismissed) setDismissedPlayControl(null); }} onContextMenu={(event) => onMenu(track, event)}><button className="track-number" aria-label={`${active ? "Pause" : "Play"} ${track.title}`} onClick={playTrack}>{active ? <span className="playing-animation" aria-label="Playing"><i/><i/><i/></span> : <span className="row-index">{index + 1}</span>}{active ? <Pause className="row-play" size={15} fill="currentColor"/> : <Play className="row-play" size={15} fill="currentColor"/>}</button><div className="track-title-cell" role="cell"><Cover className="row-cover" keys={[track.artworkKey]}/><button className="track-name" onClick={playTrack}><strong>{track.title}</strong><small>{track.artist}{showPlayCount && playCount > 0 && <span className="track-play-count"> · {playCount} {playCount === 1 ? "play" : "plays"}</span>}</small></button></div><span className="track-album" role="cell">{track.album}</span><span className="track-artist-cell" role="cell">{track.artist}</span><span className="track-actions" role="cell"><button className={`row-action favorite-action ${favorites.includes(track.id) ? "selected" : ""}`} aria-label={favorites.includes(track.id) ? "Remove from favorites" : "Add to favorites"} onClick={() => onFavorite(track.id)}><Heart size={15} fill={favorites.includes(track.id) ? "currentColor" : "none"}/></button><span className="track-duration">{time(track.durationMs)}</span><button className="row-action menu-trigger" aria-label={`Actions for ${track.title}`} onClick={(event) => onMenu(track, event)}><MoreHorizontal size={17}/></button></span></div>;})}</div> : <Empty title={emptyTitle} description={emptyMessage} action={emptyAction}/>}</div>;
 }
-function SettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, showPanel, keepScreenAwake, onKeepScreenAwake, globalYoutubeSearchEnabled, onGlobalYoutubeSearch, scanning, mobile, zoomLevel, onZoom, onEqualizer, onEqualizerToggle, onCompact, onPanel, onAdd, onRemove, onRefresh, onVolume, onAutoplay, onSleepTimer, onDefaultPlayer }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; showPanel: boolean; keepScreenAwake: boolean; onKeepScreenAwake: (value: boolean) => void; globalYoutubeSearchEnabled: boolean; onGlobalYoutubeSearch: (value: boolean) => void; scanning: boolean; mobile: boolean; zoomLevel: number; onZoom: (value: number) => void; onEqualizer: (bands: number[]) => void; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onPanel: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onAutoplay: (value: boolean) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onDefaultPlayer: () => void }) {
+function SettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, showPanel, keepScreenAwake, onKeepScreenAwake, globalYoutubeSearchEnabled, onGlobalYoutubeSearch, scanning, mobile, zoomLevel, onZoom, onEqualizer, onEqualizerPreview, onEqualizerToggle, onCompact, onPanel, onAdd, onRemove, onRefresh, onVolume, onAutoplay, onSleepTimer, onDefaultPlayer }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; showPanel: boolean; keepScreenAwake: boolean; onKeepScreenAwake: (value: boolean) => void; globalYoutubeSearchEnabled: boolean; onGlobalYoutubeSearch: (value: boolean) => void; scanning: boolean; mobile: boolean; zoomLevel: number; onZoom: (value: number) => void; onEqualizer: (bands: number[]) => void; onEqualizerPreview: (bands: number[]) => void; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onPanel: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onAutoplay: (value: boolean) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onDefaultPlayer: () => void }) {
   const timerValue = player.sleepTimerAtTrackEnd ? "track" : player.sleepTimerRemainingMs ? String(Math.max(1, Math.ceil(player.sleepTimerRemainingMs / 60_000 / 15) * 15)) : "off";
   const remaining = player.sleepTimerRemainingMs == null ? "" : `${Math.floor(player.sleepTimerRemainingMs / 60_000)}:${String(Math.floor((player.sleepTimerRemainingMs % 60_000) / 1000)).padStart(2, "0")}`;
   const toggle = (title: string, description: string, value: boolean, change: (value: boolean) => void) => <div className="setting-row"><div><strong>{title}</strong><small>{description}</small></div><button className={`switch ${value ? "on" : ""}`} role="switch" aria-label={title} aria-checked={value} onClick={() => change(!value)}><span/></button></div>;
   return <div className="settings-page"><div className="settings-title"><h1>Settings</h1></div><section className="settings-group"><h2>Playback</h2>{toggle("Autoplay", "Continue with the next song when playback ends.", player.autoplay, onAutoplay)}{!mobile && toggle("YouTube in global search", "Include online YouTube matches alongside songs in your library.", globalYoutubeSearchEnabled, onGlobalYoutubeSearch)}
-    <EqualizerSettings bands={equalizerBands} enabled={equalizerEnabled} onChange={onEqualizer} onToggle={onEqualizerToggle}/><div className="setting-row sleep-timer-row"><div><strong>Sleep timer</strong><small>{player.sleepTimerAtTrackEnd ? "Playback will stop at the end of this song." : remaining ? `Playback stops in ${remaining}.` : "Stop playback after a set time or at the end of a song."}</small></div><select className="sleep-timer-select" aria-label="Sleep timer" value={timerValue} onChange={(event) => { const value = event.target.value; onSleepTimer(value === "off" || value === "track" ? null : Number(value), value === "track"); }}><option value="off">Off</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option><option value="90">1.5 hours</option><option value="120">2 hours</option><option value="track" disabled={!player.currentTrackId}>End of current song</option></select></div>
+    <EqualizerSettings bands={equalizerBands} enabled={equalizerEnabled} onChange={onEqualizer} onPreview={onEqualizerPreview} onToggle={onEqualizerToggle}/><div className="setting-row sleep-timer-row"><div><strong>Sleep timer</strong><small>{player.sleepTimerAtTrackEnd ? "Playback will stop at the end of this song." : remaining ? `Playback stops in ${remaining}.` : "Stop playback after a set time or at the end of a song."}</small></div><select className="sleep-timer-select" aria-label="Sleep timer" value={timerValue} onChange={(event) => { const value = event.target.value; onSleepTimer(value === "off" || value === "track" ? null : Number(value), value === "track"); }}><option value="off">Off</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option><option value="90">1.5 hours</option><option value="120">2 hours</option><option value="track" disabled={!player.currentTrackId}>End of current song</option></select></div>
     {mobile && <div className="setting-row"><div><strong>Background playback</strong><small>Keep playing with lock-screen and notification controls.</small></div><span className="setting-value">On</span></div>}<div className="setting-row"><div><strong>Volume</strong><small>Audio output level</small></div><div className="settings-volume"><input type="range" min="0" max="1" step="0.01" value={player.volume} style={{ "--range-value": `${player.volume * 100}%` } as CSSProperties} aria-label="Playback volume" onChange={(event) => onVolume(Number(event.target.value))}/><span className="setting-value">{Math.round(player.volume * 100)}%</span></div></div></section>
     <section className="settings-group zoom-settings"><h2>Zoom level</h2><p className="zoom-description">Adjusting the zoom level can help you make the most of MichoPlay and adapt it to your preferences or needs.</p><p className="zoom-shortcuts">Keyboard controls are listed below.</p><div className="zoom-control"><div className="zoom-landmarks"><button className="zoom-landmark" onClick={() => onZoom(70)} aria-label="Set zoom to 70 percent"><span className="zoom-preview dense" aria-hidden="true">{Array.from({ length: 12 }, (_, i) => <i key={i}/>)}</span><span>Dense</span></button><button className="zoom-landmark" onClick={() => onZoom(mobile ? 120 : 100)} aria-label={`Set zoom to ${mobile ? 120 : 100} percent`}><span className="zoom-preview default" aria-hidden="true">{Array.from({ length: 9 }, (_, i) => <i key={i}/>)}</span><span>Default</span></button><button className="zoom-landmark" onClick={() => onZoom(130)} aria-label="Set zoom to 130 percent"><span className="zoom-preview spacious" aria-hidden="true">{Array.from({ length: 6 }, (_, i) => <i key={i}/>)}</span><span>Spacious</span></button></div><input className="zoom-range" type="range" min="70" max="130" step="10" value={zoomLevel} style={{ "--zoom-progress": `${(zoomLevel - 70) / 60 * 100}%` } as CSSProperties} aria-label="Zoom level" aria-valuetext={`${zoomLevel}%`} onChange={(event) => onZoom(Number(event.target.value))}/><div className="zoom-ticks" aria-hidden="true">{[70, 80, 90, 100, 110, 120, 130].map((value) => <span key={value} className={zoomLevel === value ? "active" : ""}>{value}%</span>)}</div><div className="zoom-reset-row"><button className="outline-button" onClick={() => onZoom(mobile ? 120 : 100)}>Reset</button></div></div></section>
     <section className="settings-group shortcuts-settings"><h2>Keyboard shortcuts</h2><div className="shortcut-list">{keyboardShortcuts.map(({ action, keys }) => <div className="shortcut-row" key={action}><span>{action}</span><span className="shortcut-keys">{keys.map((key, index) => <kbd key={`${key}-${index}`}>{key}</kbd>)}</span></div>)}</div></section><section className="settings-group"><h2>Your library</h2><div className="setting-row"><div><strong>{mobile ? "Imported music" : "Music folders"}</strong><small>{mobile ? "Imported audio is copied into MichoPlay storage for future sessions." : "Music is scanned recursively inside each root."}</small></div><button className="outline-button" disabled={scanning} onClick={onAdd}><Plus size={15}/>{mobile ? "Import audio" : "Add folder"}</button></div>{roots.map((root) => <div className="root-row" key={root}><FolderOpen size={17}/><span title={root}>{root}</span><button className="icon-button" disabled={scanning} aria-label={`Remove ${root} from library`} onClick={() => onRemove(root)}><Trash2 size={15}/></button></div>)}{!roots.length && <p className="no-roots">No music folders added.</p>}<button className="outline-button refresh-button" disabled={scanning || !roots.length} onClick={onRefresh}><RefreshCw size={14}/>{scanning ? "Refreshing…" : "Refresh library"}</button></section><section className="settings-group"><h2>System integration</h2><div className="setting-row"><div><strong>Default music player</strong><small>{mobile ? "Choose MichoPlay from Android’s Open with menu, then select Always to make it the default." : "MichoPlay can open audio files from your file manager. Installed desktop builds register common audio formats."}</small></div><button className="outline-button" onClick={onDefaultPlayer}>{mobile ? "How to set default" : "Set as default"}</button></div></section><section className="settings-group"><h2>Display</h2>{toggle("Now playing panel", "Show artwork and the adjustable playback queue.", showPanel, onPanel)}{toggle("Keep screen awake in full mode", "Prevent the display from sleeping while the full player is open. Enabled by default.", keepScreenAwake, onKeepScreenAwake)}{toggle("Compact song list", "Fit more songs in the library view.", compact, onCompact)}</section></div>;

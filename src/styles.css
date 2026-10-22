@@ -439,10 +439,10 @@ button:disabled { cursor: default; }
 .eq-gridline { stroke: rgba(255,255,255,.11); stroke-width: .8; }
 .eq-zero-line { stroke: rgba(255,255,255,.18); stroke-width: .8; }
 .eq-fill { fill: url(#eq-fill); }
-.eq-line { fill: none; stroke: #1ed760; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+.eq-line { fill: none; stroke: url(#eq-line); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; pointer-events: none; }
 .eq-hit-target { fill: transparent; cursor: ns-resize; touch-action: none; }
-.eq-point { fill: #f4f4f4; stroke: #201f20; stroke-width: 1.5; cursor: ns-resize; }
-.eq-point:focus-visible { stroke: #1ed760; stroke-width: 3; outline: none; }
+.eq-point { fill: #f4f4f4; stroke: #201f20; stroke-width: 1.5; cursor: ns-resize; pointer-events: none; }
+.eq-point:focus-visible { stroke: var(--brand-highlight); stroke-width: 3; outline: none; }
 .eq-frequency-label { fill: #bcb9be; font-size: 12px; font-weight: 600; }
 .eq-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; padding: 4px 8px 0; color: #969299; font-size: 9px; }
 .eq-reset { padding: 7px 14px; }
