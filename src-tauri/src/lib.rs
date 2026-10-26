@@ -470,7 +470,7 @@ fn take_pending_audio_opens(state: State<'_, PendingAudioOpens>) -> Result<Vec<S
 #[tauri::command]
 fn media_take_opened_audio(
     state: State<'_, MediaBridge>,
-) -> Result<Vec<ImportedAudioFile>, String> {
+) -> Result<Vec<String>, String> {
     #[cfg(target_os = "android")]
     {
         let bridge = state
@@ -517,6 +517,7 @@ fn media_take_pending_actions(state: State<'_, MediaBridge>) -> Result<Vec<Strin
 #[tauri::command]
 async fn library_open_audio_files(
     paths: Vec<String>,
+    play: Option<bool>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Vec<Track>, String> {
@@ -572,9 +573,11 @@ async fn library_open_audio_files(
         .lock()
         .map_err(|_| "The player is unavailable.".to_owned())?;
     let views = core.replace_library(roots, tracks);
-    core.queue = selected_ids;
-    core.priority_queue.clear();
-    core.play_queue_index(0)?;
+    if play.unwrap_or(true) {
+        core.queue = selected_ids;
+        core.priority_queue.clear();
+        core.play_queue_index(0)?;
+    }
     Ok(views)
 }
 
@@ -2205,6 +2208,38 @@ async fn library_pick_music_folder(
 }
 
 #[tauri::command]
+async fn library_discover_music_folders(
+    bridge: State<'_, MediaBridge>,
+) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(plugin, "discoverMusicFolders", serde_json::json!({})).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+async fn library_pick_audio_files(
+    bridge: State<'_, MediaBridge>,
+) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(plugin, "chooseAudioFiles", serde_json::json!({})).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        Err("Choose audio files from the Android app.".to_owned())
+    }
+}
+
+#[tauri::command]
 async fn youtube_search(
     query: String,
     bridge: State<'_, MediaBridge>,
@@ -3444,27 +3479,41 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let storage_dir = app.path().home_dir()?.join(".michoplay");
+            // Desktop keeps the user-visible config at ~/.michoplay. Android and iOS
+            // must use their app-local data directories because their home path may
+            // resolve to shared storage that the app cannot write under scoped storage.
+            let storage_dir = {
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                {
+                    app.path().app_local_data_dir()?.join(".michoplay")
+                }
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                {
+                    app.path().home_dir()?.join(".michoplay")
+                }
+            };
             fs::create_dir_all(&storage_dir)?;
             // Preserve saved roots and reusable cache data from the previous app-data location.
             let config_path = storage_dir.join("config.json");
             if let Ok(previous_dir) = app.path().app_local_data_dir() {
                 let previous_storage = previous_dir.join(".michoplay");
-                let previous_config = previous_storage.join("config.json");
-                if !config_path.exists() && previous_config.is_file() {
-                    let _ = fs::copy(previous_config, &config_path);
-                }
-                let previous_index = previous_storage.join("library-index.json");
-                let library_index = storage_dir.join("library-index.json");
-                if !storage_dir.join("library.sqlite").exists()
-                    && !library_index.exists()
-                    && previous_index.is_file()
-                {
-                    let _ = fs::copy(previous_index, library_index);
-                }
-                let previous_artwork = previous_storage.join("artwork");
-                if previous_artwork.is_dir() {
-                    let _ = copy_directory_missing(&previous_artwork, &storage_dir.join("artwork"));
+                if previous_storage != storage_dir {
+                    let previous_config = previous_storage.join("config.json");
+                    if !config_path.exists() && previous_config.is_file() {
+                        let _ = fs::copy(previous_config, &config_path);
+                    }
+                    let previous_index = previous_storage.join("library-index.json");
+                    let library_index = storage_dir.join("library-index.json");
+                    if !storage_dir.join("library.sqlite").exists()
+                        && !library_index.exists()
+                        && previous_index.is_file()
+                    {
+                        let _ = fs::copy(previous_index, library_index);
+                    }
+                    let previous_artwork = previous_storage.join("artwork");
+                    if previous_artwork.is_dir() {
+                        let _ = copy_directory_missing(&previous_artwork, &storage_dir.join("artwork"));
+                    }
                 }
             }
             if let Ok(mut core) = app.state::<AppState>().0.lock() {
@@ -3659,6 +3708,8 @@ pub fn run() {
             library_import_and_play_audio_files,
             library_import_directory,
             library_pick_music_folder,
+            library_discover_music_folders,
+            library_pick_audio_files,
             youtube_music_directory,
             youtube_search,
             youtube_downloads_state,
