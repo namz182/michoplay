@@ -27,6 +27,7 @@ export const api = {
   importDirectory: () => invoke<string>("library_import_directory"),
   discoverMusicFolders: () => invoke<string[]>("library_discover_music_folders"),
   pickAudioFiles: () => invoke<string[]>("library_pick_audio_files"),
+  shareText: (title: string, text: string, url: string) => invoke<void>("media_share_text", { title, text, url }),
   youtubeMusicDirectory: () => invoke<string>("youtube_music_directory"),
   pickMusicFolder: () => invoke<{ path: string; count: number; name: string }>("library_pick_music_folder"),
   youtubeSearch: (query: string) => invoke<YoutubeSearchResult[]>("youtube_search", { query }),
