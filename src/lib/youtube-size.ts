@@ -10,15 +10,9 @@ export function formatYoutubeFileSize(bytes: number) {
   return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[unit]}`;
 }
 
-export function estimateYoutubeDownloadBytes(durationSeconds: number | null, isPlaylist: boolean) {
-  if (isPlaylist || durationSeconds === null || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null;
-  return Math.round(durationSeconds * 16_000);
-}
-
-export function youtubeResultSizeText(durationSeconds: number | null, isPlaylist: boolean) {
+export function youtubeResultSizeText(_durationSeconds: number | null, isPlaylist: boolean) {
   if (isPlaylist) return "Size varies";
-  const estimatedBytes = estimateYoutubeDownloadBytes(durationSeconds, false);
-  return estimatedBytes === null ? "Size pending" : `~${formatYoutubeFileSize(estimatedBytes)} est.`;
+  return "MP3 audio";
 }
 
 export function youtubeDownloadProgressText(item: YoutubeDownload) {
@@ -27,21 +21,9 @@ export function youtubeDownloadProgressText(item: YoutubeDownload) {
   const downloaded = formatYoutubeFileSize(item.downloadedBytes ?? 0);
   const total = item.totalBytes !== null
     ? formatYoutubeFileSize(item.totalBytes)
-    : item.estimatedBytes != null
-      ? `~${formatYoutubeFileSize(item.estimatedBytes)} est.`
-      : "Size pending";
+    : "Size pending";
   parts.push(`${downloaded} / ${total}`);
   const speed = item.message.match(/^\s*([\d.]+\s*(?:B|[KMGT]?i?B)\/s)\s*$/i)?.[1]?.replace(/\s+/g, "");
   if (speed) parts.push(speed);
   return parts.join(" · ");
-}
-
-export function attachYoutubeDownloadEstimate(item: YoutubeDownload, estimates: Record<string, number>): YoutubeDownload {
-  return item.estimatedBytes == null && estimates[item.url] != null
-    ? { ...item, estimatedBytes: estimates[item.url] }
-    : item;
-}
-
-export function attachYoutubeDownloadEstimates(items: YoutubeDownload[], estimates: Record<string, number>) {
-  return items.map((item) => attachYoutubeDownloadEstimate(item, estimates));
 }

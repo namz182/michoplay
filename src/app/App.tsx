@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { PlayerSnapshot, Track, YoutubeDownload, YoutubeSearchResult } from "../lib/api";
-import { attachYoutubeDownloadEstimates, estimateYoutubeDownloadBytes, youtubeDownloadProgressText, youtubeResultSizeText } from "../lib/youtube-size";
+import { youtubeDownloadProgressText, youtubeResultSizeText } from "../lib/youtube-size";
 import { Cover, useArtwork } from "./Artwork";
 import packageInfo from "../../package.json";
 
@@ -34,7 +34,6 @@ const trackSortOptions: { key: TrackSort; label: string }[] = [
   { key: "album", label: "Album" }, { key: "recentlyAdded", label: "Recently added" },
   { key: "releaseDate", label: "Release date" }, { key: "duration", label: "Duration" },
 ];
-const youtubeSizeEstimateStorageKey = "michoplay-youtube-size-estimates";
 const latestReleaseApiUrl = "https://api.github.com/repos/namz182/michoplay/releases/latest";
 const releasesPageUrl = "https://github.com/namz182/michoplay/releases";
 const michoplayGithubUrl = "https://github.com/namz182/michoplay";
@@ -58,20 +57,6 @@ function isNewerVersion(candidate: string, current: string) {
     if (difference !== 0) return difference > 0;
   }
   return false;
-}
-function savedYoutubeSizeEstimates(): Record<string, number> {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(youtubeSizeEstimateStorageKey) ?? "{}");
-    return value && typeof value === "object" ? value as Record<string, number> : {};
-  } catch { return {}; }
-}
-function attachYoutubeSizeEstimates(items: YoutubeDownload[]) {
-  return attachYoutubeDownloadEstimates(items, savedYoutubeSizeEstimates());
-}
-function rememberYoutubeSizeEstimate(url: string, estimatedBytes: number) {
-  const estimates = savedYoutubeSizeEstimates();
-  estimates[url] = estimatedBytes;
-  localStorage.setItem(youtubeSizeEstimateStorageKey, JSON.stringify(estimates));
 }
 const keyboardShortcuts: { action: string; keys: string[] }[] = [
   { action: "Play or pause", keys: ["Space"] },
@@ -102,7 +87,7 @@ function sleepTimerLabel(ms: number) { const seconds = Math.ceil(Math.max(0, ms)
 function durationLabel(seconds: number) { const safeSeconds = Math.max(0, Math.floor(seconds)); return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, "0")}`; }
 function youtubeDownloadDescription(item: YoutubeDownload) {
   if (["queued", "downloading", "paused"].includes(item.status)) return youtubeDownloadProgressText(item);
-  if (item.status === "completed") return "";
+  if (item.status === "completed") return item.totalBytes !== null || item.downloadedBytes !== null ? youtubeDownloadProgressText(item) : "";
   return item.message;
 }
 function isFinishedYoutubeDownload(item: YoutubeDownload) {
@@ -493,11 +478,10 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     const applyDownloads = (items: YoutubeDownload[]) => {
       if (!active) return;
-      const enrichedItems = attachYoutubeSizeEstimates(items);
-      setYoutubeDownloads(enrichedItems);
-      setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => !enrichedItems.some((item) => item.url === url && (item.status === "failed" || item.status === "cancelled"))));
-      const newlyCompletedIds = enrichedItems.filter((item) => item.status === "completed" && !completedYoutubeDownloads.current.has(item.id)).map((item) => item.id);
-      enrichedItems.filter((item) => item.status === "completed").forEach((item) => completedYoutubeDownloads.current.add(item.id));
+      setYoutubeDownloads(items);
+      setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => !items.some((item) => item.url === url && (item.status === "failed" || item.status === "cancelled"))));
+      const newlyCompletedIds = items.filter((item) => item.status === "completed" && !completedYoutubeDownloads.current.has(item.id)).map((item) => item.id);
+      items.filter((item) => item.status === "completed").forEach((item) => completedYoutubeDownloads.current.add(item.id));
       if (newlyCompletedIds.length) void syncYoutubeLibrary().then((trackIds) => {
         if (!trackIds.length) return;
         setCompletedDownloadTrackIds((prior) => ({ ...prior, ...Object.fromEntries(newlyCompletedIds.map((id) => [id, trackIds])) }));
@@ -505,7 +489,7 @@ export default function App() {
     };
     void api.youtubeDownloadsState().then((items) => {
       if (!active) return;
-      setYoutubeDownloads(attachYoutubeSizeEstimates(items));
+      setYoutubeDownloads(items);
       completedYoutubeDownloads.current = new Set(items.filter((item) => item.status === "completed").map((item) => item.id));
     }).catch(() => {});
     const poll = isAndroid ? window.setInterval(() => {
@@ -946,11 +930,8 @@ export default function App() {
   async function queueYoutubeDownload(selected: YoutubeSearchResult) {
     setMessage("");
     try {
-      const estimatedBytes = estimateYoutubeDownloadBytes(selected.durationSeconds, selected.isPlaylist);
-      if (estimatedBytes !== null) rememberYoutubeSizeEstimate(selected.url, estimatedBytes);
-      const item = await api.youtubeDownloadEnqueue(selected.url, selected.title, selected.thumbnail, selected.isPlaylist, estimatedBytes);
-      const queuedItem = estimatedBytes === null || item.estimatedBytes != null ? item : { ...item, estimatedBytes };
-      setYoutubeDownloads((prior) => prior.some((download) => download.id === queuedItem.id) ? prior : [...prior, queuedItem]);
+      const item = await api.youtubeDownloadEnqueue(selected.url, selected.title, selected.thumbnail, selected.isPlaylist);
+      setYoutubeDownloads((prior) => prior.some((download) => download.id === item.id) ? prior : [...prior, item]);
       if (isAndroid) setMobileTab("downloads");
       else { setPanelView("downloads"); setShowPanel(true); }
       return true;
@@ -1020,11 +1001,8 @@ export default function App() {
       for (const item of finished) await api.youtubeDownloadRemove(item.id);
       const remaining = await api.youtubeDownloadsState();
       const remainingUrls = new Set(remaining.map((item) => item.url));
-      setYoutubeDownloads(attachYoutubeSizeEstimates(remaining));
+      setYoutubeDownloads(remaining);
       setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => remainingUrls.has(url)));
-      const estimates = savedYoutubeSizeEstimates();
-      for (const item of finished) if (!remainingUrls.has(item.url)) delete estimates[item.url];
-      localStorage.setItem(youtubeSizeEstimateStorageKey, JSON.stringify(estimates));
     } catch (error) { setMessage(String(error)); }
   }
   function chooseLibrarySource() {
@@ -1543,7 +1521,7 @@ export default function App() {
               : youtubeQuery.trim() && youtubeResults.length ? <><div className="youtube-results-scroll" role="region" aria-label="YouTube search results"><div className="youtube-search-grid">{youtubeResults.slice(0, youtubeVisibleLimit).map((result) => <article className="youtube-result-card" key={result.id}>
                 <div className="youtube-result-preview">
                   <span className="youtube-result-art">{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/> : <Youtube size={24}/>}<span className="youtube-result-duration">{result.durationSeconds === null ? (result.isPlaylist ? "Playlist" : "YouTube") : durationLabel(result.durationSeconds)}</span></span>
-                  <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · M4A audio" : `Video · M4A · ${youtubeResultSize(result)}`}</small></span>
+                  <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · MP3 audio" : `Video · ${youtubeResultSize(result)}`}</small></span>
                 </div>
                 <button className="youtube-result-download" aria-label={`Download ${result.title}`} onClick={() => requestYoutubeDownload(result)} disabled={globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status))}><Download size={14}/><span>{globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) ? "Queued" : "Download"}</span></button>
               </article>)}</div></div>{youtubeHasMore && <button className="youtube-load-more" disabled={youtubeLoadingMore} onClick={() => void loadMoreYoutubeFolderResults()}>{youtubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}</>
