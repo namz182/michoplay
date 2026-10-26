@@ -79,7 +79,7 @@ const navigation: { label: Section; icon: typeof Home }[] = [
   { label: "Home", icon: Home }, { label: "Songs", icon: Music2 },
   { label: "Playlists", icon: ListMusic }, { label: "Favorites", icon: Heart },
 ];
-const initialPlayer: PlayerSnapshot = { currentTrackId: null, isPlaying: false, positionMs: 0, durationMs: 0, volume: 0.75, shuffle: false, repeatMode: "off", queue: [], priorityQueue: [], autoplay: true, sleepTimerRemainingMs: null, sleepTimerAtTrackEnd: false, equalizerBands: Array(6).fill(0), equalizerEnabled: true };
+const initialPlayer: PlayerSnapshot = { currentTrackId: null, isPlaying: false, positionMs: 0, durationMs: 0, volume: 0.75, shuffle: false, repeatMode: "off", queue: [], priorityQueue: [], autoplay: true, sleepTimerRemainingMs: null, sleepTimerAtTrackEnd: false, equalizerBands: Array(6).fill(0), equalizerEnabled: false };
 const equalizerFrequencies = ["60Hz", "150Hz", "400Hz", "1KHz", "2.4KHz", "15KHz"];
 function stored<T>(key: string, fallback: T): T {
   try { const value = localStorage.getItem(`michoplay-${key}`); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; }
@@ -169,7 +169,7 @@ export default function App() {
     const migrated = saved.length === 10 ? [saved[1], (saved[2] + saved[3]) / 2, saved[4], saved[5], (saved[6] + saved[7]) / 2, saved[9]] : saved;
     return migrated.length === 6 ? migrated.map((value) => Math.max(-12, Math.min(12, Number(value) || 0))) : Array(6).fill(0);
   });
-  const [equalizerEnabled, setEqualizerEnabled] = useState(() => stored("equalizer-enabled", true));
+  const [equalizerEnabled, setEqualizerEnabled] = useState(() => stored("equalizer-enabled", false));
   const [favorites, setFavorites] = useState<number[]>(() => stored("favorites", []));
   const [playlists, setPlaylists] = useState<Playlist[]>(() => stored("playlists", []));
   const [listeningHistory, setListeningHistory] = useState<ListeningRecord[]>(() => stored("listening-history", []));
@@ -250,7 +250,9 @@ export default function App() {
   const importInput = useRef<HTMLInputElement>(null);
   const lastStartedTrack = useRef<number | null>(null);
   const playbackRestoreStarted = useRef(false);
+  const playbackRestoreComplete = useRef(false);
   const lastPlaybackSaveAt = useRef(0);
+  const latestPlayerSnapshot = useRef<PlayerSnapshot>(initialPlayer);
   const youtubeSearchVersion = useRef(0);
   const globalYoutubeSearchVersion = useRef(0);
   const youtubeSearchCache = useRef(new Map<string, { results: YoutubeSearchResult[]; savedAt: number }>());
@@ -629,6 +631,17 @@ export default function App() {
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
+    const savePlaybackSession = (state: PlayerSnapshot) => {
+      const queue = state.currentTrackId === null ? state.queue : [state.currentTrackId, ...state.queue];
+      localStorage.setItem("michoplay-playback-session", JSON.stringify({ currentTrackId: state.currentTrackId, queue, positionMs: state.positionMs, isPlaying: state.isPlaying } satisfies SavedPlaybackSession));
+    };
+    const flushPlaybackSession = () => {
+      if (!playbackRestoreComplete.current || tracks.length === 0) return;
+      savePlaybackSession(latestPlayerSnapshot.current);
+    };
+    const onVisibilityChange = () => { if (document.visibilityState === "hidden") flushPlaybackSession(); };
+    window.addEventListener("pagehide", flushPlaybackSession);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     const tick = async () => {
       try {
         let state = await api.state();
@@ -644,24 +657,33 @@ export default function App() {
               for (const id of [...queue].reverse()) await api.queueAdd(id);
             } else {
               await api.playCollection(queue, startId);
+              await api.setPlaying(false);
               if (saved.positionMs > 0) await api.seek(saved.positionMs);
-              if (!saved.isPlaying) await api.toggle();
             }
             state = await api.state();
           }
+          playbackRestoreComplete.current = true;
         }
         if (!active) return;
+        latestPlayerSnapshot.current = state;
         setPlayer(state);
         const now = Date.now();
-        if (now - lastPlaybackSaveAt.current >= 5000) {
+        if (playbackRestoreComplete.current && now - lastPlaybackSaveAt.current >= 5000) {
           lastPlaybackSaveAt.current = now;
-          const queue = state.currentTrackId === null ? state.queue : [state.currentTrackId, ...state.queue];
-          localStorage.setItem("michoplay-playback-session", JSON.stringify({ currentTrackId: state.currentTrackId, queue, positionMs: state.positionMs, isPlaying: state.isPlaying } satisfies SavedPlaybackSession));
+          savePlaybackSession(state);
         }
-      } catch { /* The player can become available after the library loads. */ }
+      } catch {
+        if (!playbackRestoreComplete.current) playbackRestoreStarted.current = false;
+        /* The player can become available after the library loads. */
+      }
     };
     tick(); const timer = window.setInterval(tick, 400);
-    return () => { active = false; window.clearInterval(timer); };
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("pagehide", flushPlaybackSession);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [tracks]);
   useEffect(() => { localStorage.setItem("michoplay-library-roots", JSON.stringify(roots)); }, [roots]);
   useEffect(() => {

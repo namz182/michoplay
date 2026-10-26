@@ -720,9 +720,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .collection-play-button.active { color: #332d3d; }
 @media (hover: hover) and (min-width: 561px) {
   .media-card.folder-card:not(.playing):hover { background: rgba(255,255,255,.035); }
-  .media-card.folder-card .card-cover { transition: none; }
+  .media-card.folder-card { transform: none; transition: none; }
+  .media-card.folder-card .card-cover { transform: none; transition: none; }
   .media-card.folder-card:hover .card-cover, .media-card.folder-card:focus-within .card-cover { filter: none; }
-  .media-card.folder-card:hover .collection-play-button, .media-card.folder-card:focus-within .collection-play-button { opacity: 1; transform: none; pointer-events: auto; }
+  .media-card.folder-card .collection-play-button { transform: none; transition: opacity 150ms ease; }
+  .media-card.folder-card:hover .collection-play-button, .media-card.folder-card:focus-within .collection-play-button { opacity: 1; pointer-events: auto; }
+  .media-card.folder-card .collection-play-button:hover { transform: none; }
 }
 .media-card.playing { background: rgba(245,238,232,.09); }
 .track-row { cursor: default; }
