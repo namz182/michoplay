@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Default desktop permissions for the MichoPlay window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "michoplay-media:default", { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://github.com/namz182/michoplay/releases" }] }]
+  "permissions": ["core:default", "dialog:allow-open", "michoplay-media:default", { "identifier": "opener:allow-open-url", "allow": [
+    { "url": "https://github.com/namz182/michoplay" },
+    { "url": "https://github.com/namz182/michoplay/issues/new" },
+    { "url": "https://github.com/namz182/michoplay/releases" },
+    { "url": "https://mainza.dev" },
+    { "url": "https://michoplay.mainza.dev/" }
+  ] }]
 }

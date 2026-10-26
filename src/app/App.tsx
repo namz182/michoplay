@@ -11,7 +11,7 @@ import {
   Trash2, X, PanelRightClose, PanelRightOpen, ChevronLeft, ChevronRight,
   ChevronUp, ChevronDown, GripVertical, RefreshCw, Pencil, Clock3, Youtube,
   ListFilter, List, AlignJustify, Check, Library, Timer, Share2, Download,
-  Maximize2, Minimize2, MoreVertical,
+  Maximize2, Minimize2, MoreVertical, Github, Globe2, Bug,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { PlayerSnapshot, Track, YoutubeDownload, YoutubeSearchResult } from "../lib/api";
@@ -37,6 +37,10 @@ const trackSortOptions: { key: TrackSort; label: string }[] = [
 const youtubeSizeEstimateStorageKey = "michoplay-youtube-size-estimates";
 const latestReleaseApiUrl = "https://api.github.com/repos/namz182/michoplay/releases/latest";
 const releasesPageUrl = "https://github.com/namz182/michoplay/releases";
+const michoplayGithubUrl = "https://github.com/namz182/michoplay";
+const michoplayIssueUrl = "https://github.com/namz182/michoplay/issues/new";
+const michoplayDeveloperUrl = "https://mainza.dev";
+const michoplayWebsiteUrl = "https://michoplay.mainza.dev/";
 function isNewerVersion(candidate: string, current: string) {
   const parts = (version: string) => {
     const normalized = version.trim().replace(/^v/i, "").split(/[+-]/, 1)[0];
@@ -156,13 +160,14 @@ export default function App() {
   const lastAudibleVolume = useRef(Math.max(0.01, stored("volume", 0.75)));
   const [fullMode, setFullMode] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [mobileAboutOpen, setMobileAboutOpen] = useState(false);
   const [appVersion, setAppVersion] = useState(packageInfo.version);
   const [availableUpdate, setAvailableUpdate] = useState<string | null>(null);
   const [fullPanelTab, setFullPanelTab] = useState<"queue" | "browse">("queue");
   const [fullBrowseTab, setFullBrowseTab] = useState<"playlists" | "library">("playlists");
   const [fullBrowsePlaylistId, setFullBrowsePlaylistId] = useState<string | null>(null);
   const [fullBrowseVisibleLimit, setFullBrowseVisibleLimit] = useState(100);
-  const [keepScreenAwake, setKeepScreenAwake] = useState(() => stored("keep-screen-awake-in-full-mode", true));
+  const [keepScreenAwake, setKeepScreenAwake] = useState(() => stored("keep-screen-awake-in-full-mode", false));
   const [equalizerBands, setEqualizerBands] = useState<number[]>(() => {
     const saved = stored<number[]>("equalizer-bands", Array(6).fill(0));
     if (!Array.isArray(saved)) return Array(6).fill(0);
@@ -191,6 +196,8 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ phase: string; processed: number; total: number } | null>(null);
+  const [startupLoading, setStartupLoading] = useState(() => isTauri());
+  const [startupPhase, setStartupPhase] = useState("Preparing your library…");
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
@@ -417,10 +424,12 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri()) { setStartupLoading(false); return; }
     let active = true;
+    setStartupPhase("Preparing your library…");
     void api.youtubeMusicDirectory().then(async (directory) => {
       if (!active) return;
+      setStartupPhase("Loading saved music…");
       const savedRoots = await api.librarySavedRoots().catch(() => []);
       const discoveredRoots = isAndroid ? await api.discoverMusicFolders().catch((error) => {
         if (active) setMessage(String(error));
@@ -435,9 +444,14 @@ export default function App() {
         ? prior
         : [{ id: "michoplay-youtube", name: "YouTube", trackIds: [] }, ...prior]);
       try {
+        setStartupPhase("Loading cached songs…");
         const cached = await api.cachedTracks().catch(() => []);
         if (!active) return;
-        if (cached.length) setTracks(cached);
+        if (cached.length) {
+          setTracks(cached);
+          setStartupLoading(false);
+        }
+        setStartupPhase("Scanning music and artwork…");
         setScanning(true);
         const scanned = await api.refresh(nextRoots);
         if (!active) return;
@@ -448,10 +462,19 @@ export default function App() {
         if (active) setMessage(String(error));
       } finally {
         if (active) setScanning(false);
+        if (active) setStartupLoading(false);
       }
-    }).catch((error) => { if (active) setMessage(String(error)); });
+    }).catch((error) => { if (active) { setMessage(String(error)); setStartupLoading(false); } });
     return () => { active = false; };
   }, [isAndroid]);
+  useEffect(() => {
+    if (!startupLoading) return;
+    const timeout = window.setTimeout(() => {
+      setStartupLoading(false);
+      setMessage("The library is still loading in the background.");
+    }, 20_000);
+    return () => window.clearTimeout(timeout);
+  }, [startupLoading]);
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
@@ -1239,6 +1262,18 @@ export default function App() {
     if (navigator.share) void navigator.share(details).catch(() => {});
     else setMessage("Sharing isn't available on this device.");
   }
+  async function shareMichoPlay() {
+    const details = { title: "MichoPlay", text: "MichoPlay — offline music player", url: michoplayWebsiteUrl };
+    if (navigator.share) {
+      try { await navigator.share(details); return; } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(michoplayWebsiteUrl);
+      setMessage("MichoPlay website copied to the clipboard.");
+    } catch { setMessage("Copy this website to share MichoPlay: " + michoplayWebsiteUrl); }
+  }
   function newPlaylist(target?: Track, playlist?: Playlist) { setDialog({ target, playlist }); setPlaylistName(playlist?.name ?? ""); setMenu(null); }
   function savePlaylist() {
     const name = playlistName.trim(); if (!name || !dialog) return;
@@ -1292,6 +1327,17 @@ export default function App() {
 
   return <main className={`app-frame ${compact ? "compact" : ""} ${isAndroid ? "android-app" : "desktop-app"}`} style={{ "--sidebar-width": `${sidebarWidth}px`, "--panel-width": `${panelWidth}px` } as CSSProperties}>
     <svg className="mobile-svg-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="michoplay-brand-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#f5c6be"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="#d8eee4"/></linearGradient></defs></svg>
+    {startupLoading && <div className="startup-loading" role="status" aria-live="polite" aria-label="Loading MichoPlay">
+      <div className="startup-loading-card">
+        <span className="startup-loading-mark"><AudioLines size={24}/></span>
+        <div className="startup-loading-copy">
+          <strong>Loading MichoPlay</strong>
+          <span>{scanProgress?.phase ?? startupPhase}</span>
+          {scanProgress?.total ? <small>{scanProgress.processed.toLocaleString()} of {scanProgress.total.toLocaleString()} audio files</small> : <small>Preparing your library…</small>}
+        </div>
+        <span className="startup-loading-spinner" aria-hidden="true"/>
+      </div>
+    </div>}
     {!isAndroid && <input ref={importInput} className="audio-import-input" type="file" accept="audio/*,.mp3,.flac,.wav,.ogg,.opus,.m4a,.aac,.aiff,.aif" multiple aria-label="Choose audio files" onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; void importAudioFiles(files); }}/>}
     <aside className="sidebar" aria-label="Main navigation">
       <button className="brand" onClick={() => navigate({ section: "Home" })}><span className="brand-mark"><AudioLines size={19}/></span><span>Micho<span className="brand-light">Play</span></span></button>
@@ -1302,7 +1348,7 @@ export default function App() {
     </aside>
     <div className="resize-handle sidebar-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" onPointerDown={(event) => startResize("sidebar", event)}/>
     <section className="workspace">
-      {isAndroid && !mobilePlayerOpen && !listPage && <header className="mobile-header">
+      {isAndroid && !mobilePlayerOpen && !listPage && page.section !== "Settings" && <header className="mobile-header">
         <div className="mobile-header-title">
           <span className="brand-mark"><AudioLines size={19}/></span>
           <h1>{mobileTab === "downloads" ? "Downloads" : page.section === "Home" ? mobileTab === "home" ? "MichoPlay" : mobileTab === "search" ? "Search" : mobileTab === "youtube" ? "YouTube" : "Your Library" : page.section}</h1>
@@ -1325,7 +1371,33 @@ export default function App() {
           </div>}
           {scanning && <div className="scan-banner" role="status"><span className="loading-indicator"/><span>{scanProgress?.phase ?? "Scanning music and artwork…"}{scanProgress?.phase === "Finding audio files" && scanProgress.processed ? ` · ${scanProgress.processed.toLocaleString()} found` : scanProgress?.total ? ` · ${scanProgress.processed.toLocaleString()} of ${scanProgress.total.toLocaleString()}` : ""}</span><button className="scan-cancel-button" onClick={() => void api.cancelScan().catch(() => {})}>Cancel</button></div>}
           {message && <div className="status-message" role="status"><span>{message.includes("Refresh the folder") ? <>{message.split("Refresh the folder")[0]}<button className="inline-link" onClick={() => void refresh()}>Refresh the folder</button>{message.split("Refresh the folder")[1]}</> : message}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage("")}><X size={13}/></button></div>}
-          {isAndroid && mobileTab === "downloads" ? <div className="mobile-downloads-page">
+          {isAndroid && page.section === "Settings" ? mobileAboutOpen ? <MobileAboutPage version={appVersion} onBack={() => setMobileAboutOpen(false)} onOpenUrl={(url) => { void openUrl(url).catch((error) => setMessage(`Could not open the link: ${String(error)}`)); }} onShare={() => { void shareMichoPlay(); }} /> : <MobileSettingsPage
+            roots={roots}
+            player={player}
+            equalizerBands={equalizerBands}
+            equalizerEnabled={equalizerEnabled}
+            compact={compact}
+            keepScreenAwake={keepScreenAwake}
+            scanning={scanning}
+            zoomLevel={zoomLevel}
+            onBack={() => { setMobileTab("home"); if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}
+            onKeepScreenAwake={setKeepScreenAwake}
+            onEqualizer={onEqualizer => {
+              setEqualizerBands(onEqualizer);
+              localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(onEqualizer));
+              void api.equalizer(onEqualizer, equalizerEnabled).catch((error) => setMessage(String(error)));
+            }}
+            onEqualizerPreview={(bands) => { void api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error))); }}
+            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
+            onCompact={setCompact}
+            onAdd={chooseLibrarySource}
+            onRemove={confirmRemoveFolder}
+            onRefresh={() => void refresh()}
+            onVolume={(volume) => { localStorage.setItem("michoplay-volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
+            onSleepTimer={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))}
+            onZoom={setZoomLevel}
+            onAbout={() => setMobileAboutOpen(true)}
+          /> : isAndroid && mobileTab === "downloads" ? <div className="mobile-downloads-page">
             <div className="mobile-downloads-destination"><FolderOpen size={20}/><span><strong>Music / MichoPlay / YouTube</strong><small>Saved to your phone and added to Your Library</small></span></div>
             <div className="section-title-row"><h2>Your downloads</h2><span>{youtubeDownloads.filter((item) => item.status === "downloading" || item.status === "queued").length} active</span>{clearableYoutubeDownloads && <button className="download-clear-button" onClick={() => void clearYoutubeDownloads()}><Trash2 size={14}/>Clear</button>}</div>
             {youtubeDownloads.length ? <div className="mobile-download-list">{youtubeDownloads.map((item) => <article className={`mobile-download-row status-${item.status}`} key={item.id}>
@@ -1437,12 +1509,12 @@ export default function App() {
       </section>}
     </section>
     {isAndroid && !mobilePlayerOpen && <>
-      <div className="mobile-mini-player">
+      <div className={`mobile-mini-player ${page.section === "Settings" ? "settings-open" : ""}`}>
         <button className="mobile-mini-track" onClick={() => setMobilePlayerOpen(true)} disabled={!footerTrack}>{footerTrack && <Cover className="mobile-mini-cover" keys={[footerTrack.artworkKey]}/>}<span><strong>{footerTrack?.title ?? "Nothing playing"}</strong><small>{footerTrack?.artist ?? "Choose a song to start"}</small></span></button>
         {footerTrack && <><button className={`mobile-mini-action ${favorites.includes(footerTrack.id) ? "selected" : ""}`} aria-label={favorites.includes(footerTrack.id) ? "Remove from liked songs" : "Add to liked songs"} onClick={() => toggleFavorite(footerTrack.id)}><Heart size={19} fill={favorites.includes(footerTrack.id) ? "currentColor" : "none"}/></button><button className="mobile-mini-skip" aria-label="Previous track" onClick={() => void run(api.previous)}><SkipBack size={17} fill="currentColor"/></button><button className="mobile-mini-play" aria-label={player.isPlaying ? "Pause" : "Play"} onClick={() => void run(current ? api.toggle : () => api.play(footerTrack.id))}>{player.isPlaying ? <Pause size={18} fill="currentColor"/> : <Play size={18} fill="currentColor"/>}</button><button className="mobile-mini-skip" aria-label="Next track" onClick={() => void run(api.next)}><SkipForward size={17} fill="currentColor"/></button></>}
         <div className="mobile-mini-progress" role="progressbar" aria-label="Playback progress" aria-valuemin={0} aria-valuemax={player.durationMs || 0} aria-valuenow={Math.min(player.positionMs, player.durationMs)}><span style={{ width: `${Math.min(100, player.durationMs ? player.positionMs / player.durationMs * 100 : 0)}%` }}/></div>
       </div>
-      <nav className="mobile-bottom-nav" aria-label="Main navigation">
+      <nav className={`mobile-bottom-nav ${page.section === "Settings" ? "settings-open" : ""}`} aria-label="Main navigation">
         <button className={mobileTab === "home" && page.section !== "Settings" ? "active" : ""} onClick={() => { setMobileTab("home"); if (page.section !== "Home" || page.detail) navigate({ section: "Home" }); }}><Home size={22}/><span>Home</span></button>
         <button className={mobileTab === "search" ? "active" : ""} onClick={() => { setMobileTab("search"); setSearch(""); }}><Search size={22}/><span>Search</span></button>
         <button className={mobileTab === "library" ? "active" : ""} onClick={() => setMobileTab("library")}><Library size={22}/><span>Your Library</span></button>
@@ -1499,7 +1571,7 @@ export default function App() {
   </main>;
 }
 
-function EqualizerSettings({ bands, enabled, onChange, onPreview, onToggle }: { bands: number[]; enabled: boolean; onChange: (bands: number[]) => void; onPreview: (bands: number[]) => void; onToggle: (enabled: boolean) => void }) {
+function EqualizerSettings({ bands, enabled, mobile = false, onChange, onPreview, onToggle }: { bands: number[]; enabled: boolean; mobile?: boolean; onChange: (bands: number[]) => void; onPreview: (bands: number[]) => void; onToggle: (enabled: boolean) => void }) {
   const presets = [
     { name: "Flat", bands: [0, 0, 0, 0, 0, 0] },
     { name: "Bass boost", bands: [6, 5, 3, 0, -1, 0] },
@@ -1536,7 +1608,7 @@ function EqualizerSettings({ bands, enabled, onChange, onPreview, onToggle }: { 
     setSavedPresets(next); localStorage.setItem("michoplay-equalizer-presets", JSON.stringify(next));
     setPresetName(""); setSaving(false);
   };
-  const chartX = (index: number) => 120 + index * 116;
+  const chartX = (index: number) => mobile ? 65 + index * 127 : 120 + index * 116;
   const chartY = (gain: number) => 25 + (12 - gain) * (175 / 24);
   const curve = visibleBands.map((gain, index) => [chartX(index), chartY(gain)] as const);
   const smoothPath = curve.slice(1).reduce((path, [x, y], index) => {
@@ -1605,7 +1677,7 @@ function EqualizerSettings({ bands, enabled, onChange, onPreview, onToggle }: { 
     if (renderFrame.current !== null) window.cancelAnimationFrame(renderFrame.current);
     if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
   }, []);
-  return <section className="eq-section">
+  return <section className={`eq-section ${mobile ? "mobile-equalizer-editor" : ""}`}>
     <header className="eq-header"><h2>Equalizer</h2><button className={`switch ${enabled ? "on" : ""}`} role="switch" aria-label="Equalizer" aria-checked={enabled} onClick={() => onToggle(!enabled)}><span/></button></header>
     <div className={`equalizer-settings ${enabled ? "" : "disabled"}`}>
       <div className="eq-toolbar"><label className="eq-select-wrap"><span className="sr-only">Equalizer preset</span><select aria-label="Equalizer preset" value={activePreset ?? "manual"} onChange={(event) => { const preset = allPresets.find((item) => item.name === event.target.value); if (preset) onChange([...preset.bands]); }}><option value="manual">Manual</option>{presets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}{savedPresets.length > 0 && <optgroup label="My presets">{savedPresets.map((preset) => <option key={`saved-${preset.name}`} value={preset.name}>{preset.name}</option>)}</optgroup>}</select></label>
@@ -1616,7 +1688,7 @@ function EqualizerSettings({ bands, enabled, onChange, onPreview, onToggle }: { 
           <linearGradient id="eq-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--blush)" stopOpacity=".42"/><stop offset="64%" stopColor="var(--brand-highlight)" stopOpacity=".24"/><stop offset="100%" stopColor="var(--accent)" stopOpacity=".05"/></linearGradient>
           <linearGradient id="eq-line" x1="0" x2="1" y1="0" y2="0"><stop offset="0%" stopColor="var(--blush)"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="var(--accent)"/></linearGradient>
         </defs>
-        <text className="eq-db-label" x="0" y="30">+12dB</text><text className="eq-db-label" x="0" y="205">−12dB</text>
+        <text className="eq-db-label" x="0" y="30">+12dB</text><text className="eq-db-label" x="0" y="117">0dB</text><text className="eq-db-label" x="0" y="205">−12dB</text>
         {curve.map(([x], index) => <line className="eq-gridline" key={`grid-${index}`} x1={x} x2={x} y1="25" y2="200"/>)}<line className="eq-zero-line" x1="65" x2="700" y1="112" y2="112"/>
         <path className="eq-fill" d={fillPath}/><path className="eq-line" d={smoothPath}/>
         {curve.map(([x, y], index) => <g key={equalizerFrequencies[index]}><circle className="eq-hit-target" cx={x} cy={y} r="17" onPointerDown={(event) => { event.preventDefault(); const svg = event.currentTarget.ownerSVGElement; const transform = svg?.getScreenCTM(); if (!svg || !transform) return; event.currentTarget.setPointerCapture(event.pointerId); dragIndex.current = index; dragSvg.current = svg; dragTransform.current = transform.inverse(); latestBands.current = [...visibleBands]; dragChanged.current = false; updateFromPointer(event.clientX, event.clientY, index); }} onPointerMove={(event) => { if (dragIndex.current === index) updateFromPointer(event.clientX, event.clientY, index); }} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}/><circle className="eq-point" cx={x} cy={y} r="4" role="slider" tabIndex={0} aria-label={equalizerFrequencies[index]} aria-valuemin={-12} aria-valuemax={12} aria-valuenow={visibleBands[index]} aria-valuetext={`${visibleBands[index]} dB`} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault(); updateBand(index, visibleBands[index] + 1); } else if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault(); updateBand(index, visibleBands[index] - 1); } }}/><text className="eq-frequency-label" x={x} y="232" textAnchor="middle">{equalizerFrequencies[index]}</text></g>)}
@@ -1624,6 +1696,69 @@ function EqualizerSettings({ bands, enabled, onChange, onPreview, onToggle }: { 
       <div className="eq-card-footer"><span>{enabled ? "Changes apply immediately to playback." : "Equalizer is off."}</span><button className="outline-button eq-reset" onClick={() => onChange([0, 0, 0, 0, 0, 0])}>Reset</button></div>
     </div>
   </section>;
+}
+
+function MobileSettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, keepScreenAwake, scanning, zoomLevel, onBack, onKeepScreenAwake, onEqualizer, onEqualizerPreview, onEqualizerToggle, onCompact, onAdd, onRemove, onRefresh, onVolume, onSleepTimer, onZoom, onAbout }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; keepScreenAwake: boolean; scanning: boolean; zoomLevel: number; onBack: () => void; onKeepScreenAwake: (value: boolean) => void; onEqualizer: (bands: number[]) => void; onEqualizerPreview: (bands: number[]) => void; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onZoom: (value: number) => void; onAbout: () => void }) {
+  const [query, setQuery] = useState("");
+  const [equalizerOpen, setEqualizerOpen] = useState(false);
+  const [foldersOpen, setFoldersOpen] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
+  useEffect(() => {
+    document.querySelector<HTMLElement>(".content-scroll")?.scrollTo({ top: 0, behavior: "auto" });
+  }, []);
+  const timerValue = player.sleepTimerAtTrackEnd ? "track" : player.sleepTimerRemainingMs ? String(Math.max(1, Math.ceil(player.sleepTimerRemainingMs / 60_000 / 15) * 15)) : "off";
+  const matches = (value: string) => !query.trim() || value.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  const toggle = (label: string, value: boolean, change: (next: boolean) => void) => <button className={`mobile-settings-switch ${value ? "on" : ""}`} role="switch" aria-label={label} aria-checked={value} onClick={(event) => { event.stopPropagation(); change(!value); }}><span/></button>;
+  const row = (icon: React.ReactNode, title: string, description: string, trailing: React.ReactNode, onClick?: () => void, className = "") => <div className={`mobile-settings-row ${onClick ? "action" : ""} ${className}`}>{onClick ? <button className="mobile-settings-row-button" onClick={onClick}>{icon}<span><strong>{title}</strong><small>{description}</small></span><span className="mobile-settings-row-trailing">{trailing}</span></button> : <>{icon}<span><strong>{title}</strong><small>{description}</small></span><span className="mobile-settings-row-trailing">{trailing}</span></>}</div>;
+  const section = (title: string, children: React.ReactNode, visible: boolean) => visible ? <section className="mobile-settings-section"><h2>{title}</h2><div className="mobile-settings-card">{children}</div></section> : null;
+  const eqMatches = matches("equalizer audio sound bass treble");
+  const sleepMatches = matches("sleep timer playback");
+  const volumeMatches = matches("volume audio playback");
+  const libraryMatches = matches("music folders library songs original files");
+  const refreshMatches = matches("refresh library scan");
+  const downloadsMatches = matches("downloads music folder youtube");
+  const appearanceMatches = matches("screen awake display compact song list");
+  const zoomMatches = matches("zoom level scale size text dense spacious");
+  const aboutMatches = matches("about michoplay version");
+  const playbackVisible = eqMatches || sleepMatches || volumeMatches;
+  const libraryVisible = libraryMatches || refreshMatches || downloadsMatches;
+  const appearanceVisible = appearanceMatches || zoomMatches;
+  const aboutVisible = aboutMatches;
+  return <div className="mobile-settings-page">
+    <header className="mobile-settings-header"><button aria-label="Back to music" onClick={onBack}><ChevronLeft size={27}/></button><h1>Settings</h1><span/></header>
+    <label className="mobile-settings-search"><Search size={21}/><input aria-label="Find a setting" placeholder="Find a setting" value={query} onChange={(event) => setQuery(event.target.value)}/>{query && <button aria-label="Clear settings search" onClick={() => setQuery("")}><X size={18}/></button>}</label>
+    {section("Playback", <>
+      {eqMatches && <div className={`mobile-settings-row mobile-settings-eq ${equalizerOpen ? "expanded" : ""}`}><button className="mobile-settings-row-button" aria-expanded={equalizerOpen} onClick={() => setEqualizerOpen((open) => !open)}><ListFilter size={21}/><span><strong>Equalizer</strong><small>{equalizerEnabled ? "On · Shape the sound for your headphones." : "Off · Playback stays flat."}</small></span><span className="mobile-settings-row-trailing"><span className="mobile-settings-value">{equalizerEnabled ? "On" : "Off"}</span>{equalizerOpen ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}</span></button>{equalizerOpen && <div className="mobile-eq-panel"><div className="mobile-eq-toggle"><span>Enable equalizer</span>{toggle("Enable equalizer", equalizerEnabled, onEqualizerToggle)}</div><EqualizerSettings bands={equalizerBands} enabled={equalizerEnabled} mobile onChange={onEqualizer} onPreview={onEqualizerPreview} onToggle={onEqualizerToggle}/></div>}</div>}
+      {sleepMatches && row(<Timer size={21}/>, "Sleep timer", player.sleepTimerAtTrackEnd ? "Stops at the end of this song." : player.sleepTimerRemainingMs ? `Stops in ${sleepTimerLabel(player.sleepTimerRemainingMs)}.` : "Stop playback after a set time.", <select className="mobile-settings-select" aria-label="Sleep timer" value={timerValue} onChange={(event) => { const value = event.target.value; onSleepTimer(value === "off" || value === "track" ? null : Number(value), value === "track"); }} onClick={(event) => event.stopPropagation()}><option value="off">Off</option><option value="15">15 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">1 hour</option><option value="track" disabled={!player.currentTrackId}>Track end</option></select>)}
+      {volumeMatches && row(<Volume2 size={21}/>, "Volume", "Audio output level.", <span className="mobile-settings-volume"><input type="range" min="0" max="1" step="0.01" value={player.volume} aria-label="Volume" style={{ "--range-value": `${player.volume * 100}%` } as CSSProperties} onChange={(event) => onVolume(Number(event.target.value))}/><output>{Math.round(player.volume * 100)}%</output></span>)}
+    </>, playbackVisible)}
+    {section("Library & storage", <>
+      {libraryMatches && <div className={`mobile-settings-row mobile-settings-folders ${foldersOpen ? "expanded" : ""}`}><button className="mobile-settings-row-button" aria-expanded={foldersOpen} onClick={() => setFoldersOpen((open) => !open)}><FolderOpen size={21}/><span><strong>Music folders</strong><small>{roots.length ? `${roots.length} folder${roots.length === 1 ? "" : "s"} · Songs stay in place.` : "Add a folder to find music on your phone."}</small></span><span className="mobile-settings-row-trailing">{foldersOpen ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}</span></button>{foldersOpen && <div className="mobile-folder-manager">{roots.length ? roots.map((root) => <div className="mobile-folder-row" key={root}><FolderOpen size={16}/><span className={`mobile-folder-path ${root.length > 34 ? "long" : ""}`} title={root}><span className="mobile-folder-path-track"><span>{root}</span>{root.length > 34 && <span aria-hidden="true">{root}</span>}</span></span><button aria-label={`Remove ${root} from library`} disabled={scanning} onClick={(event) => { event.stopPropagation(); onRemove(root); }}><Trash2 size={16}/></button></div>) : <p className="mobile-folder-empty">No music folders added yet.</p>}<button className="mobile-folder-add" disabled={scanning} onClick={onAdd}><Plus size={15}/>{scanning ? "Scanning…" : "Add music folder"}</button></div>}</div>}
+      {refreshMatches && row(<RefreshCw size={21}/>, "Refresh library", scanning ? "Scanning your music…" : "Look for new songs and artwork.", scanning ? <span className="mobile-settings-spinner"/> : <ChevronRight size={18}/>, scanning ? undefined : onRefresh)}
+      {downloadsMatches && row(<Download size={21}/>, "Download location", "Music / MichoPlay / YouTube", <span className="mobile-settings-value">Phone</span>)}
+    </>, libraryVisible)}
+    {section("Look & feel", <>
+      {appearanceMatches && row(<Settings2 size={21}/>, "Keep screen awake", "Keep the display on while you listen.", toggle("Keep screen awake", keepScreenAwake, onKeepScreenAwake))}
+      {appearanceMatches && row(<List size={21}/>, "Compact song list", "Fit more songs on the library screen.", toggle("Compact song list", compact, onCompact))}
+      {zoomMatches && <div className={`mobile-settings-row mobile-settings-zoom ${zoomOpen ? "expanded" : ""}`}><button className="mobile-settings-row-button" aria-expanded={zoomOpen} onClick={() => setZoomOpen((open) => !open)}><Maximize2 size={21}/><span><strong>Zoom level</strong><small>{zoomLevel}% · Adjust the size of the app interface.</small></span><span className="mobile-settings-row-trailing"><span className="mobile-settings-value">{zoomLevel}%</span>{zoomOpen ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}</span></button>{zoomOpen && <div className="mobile-zoom-panel"><div className="mobile-zoom-presets"><button className={zoomLevel === 70 ? "selected" : ""} onClick={() => onZoom(70)}>Dense</button><button className={zoomLevel === 120 ? "selected" : ""} onClick={() => onZoom(120)}>Default</button><button className={zoomLevel === 130 ? "selected" : ""} onClick={() => onZoom(130)}>Spacious</button></div><input className="mobile-zoom-range" type="range" min="70" max="130" step="10" value={zoomLevel} aria-label="Zoom level" style={{ "--zoom-progress": `${(zoomLevel - 70) / 60 * 100}%` } as CSSProperties} onChange={(event) => onZoom(Number(event.target.value))}/><div className="mobile-zoom-ticks" aria-hidden="true">{[70, 80, 90, 100, 110, 120, 130].map((value) => <span key={value} className={zoomLevel === value ? "active" : ""}>{value}%</span>)}</div><button className="mobile-zoom-reset" onClick={() => onZoom(120)}>Reset to default</button></div>}</div>}
+    </>, appearanceVisible)}
+    {section("About", <>{aboutMatches && row(<AudioLines size={21}/>, "About MichoPlay", `Version ${packageInfo.version} · Offline music`, <ChevronRight size={18}/>, onAbout)}</>, aboutVisible)}
+    {query.trim() && !playbackVisible && !libraryVisible && !appearanceVisible && !aboutVisible && <div className="mobile-settings-empty"><Search size={25}/><strong>No settings found</strong><span>Try a different word.</span></div>}
+  </div>;
+}
+
+function MobileAboutPage({ version, onBack, onOpenUrl, onShare }: { version: string; onBack: () => void; onOpenUrl: (url: string) => void; onShare: () => void }) {
+  return <div className="mobile-about-page">
+    <header className="mobile-about-header"><button aria-label="Back to settings" onClick={onBack}><ChevronLeft size={27}/></button><h1>About</h1></header>
+    <section className="mobile-about-hero">
+      <div className="mobile-about-mark"><AudioLines size={46}/></div>
+      <h2>MichoPlay</h2>
+      <span className="mobile-about-version">Version {version}</span>
+      <div className="mobile-about-actions"><button onClick={() => onOpenUrl(michoplayGithubUrl)}><Github size={18}/>GitHub</button><button onClick={() => onOpenUrl(michoplayIssueUrl)}><Bug size={18}/>Report issue</button></div>
+    </section>
+    <section className="mobile-about-section"><h2>Links</h2><div className="mobile-about-links"><button onClick={() => onOpenUrl(michoplayDeveloperUrl)}><Globe2 size={19}/><span><strong>Developer</strong></span><ChevronRight size={18}/></button><button onClick={() => onOpenUrl(michoplayWebsiteUrl)}><AudioLines size={19}/><span><strong>MichoPlay website</strong></span><ChevronRight size={18}/></button><button onClick={onShare}><Share2 size={19}/><span><strong>Share MichoPlay</strong></span><ChevronRight size={18}/></button></div></section>
+   
+  </div>;
 }
 
 function Empty({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
@@ -1691,5 +1826,5 @@ function SettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact
     <EqualizerSettings bands={equalizerBands} enabled={equalizerEnabled} onChange={onEqualizer} onPreview={onEqualizerPreview} onToggle={onEqualizerToggle}/><div className="setting-row sleep-timer-row"><div><strong>Sleep timer</strong><small>{player.sleepTimerAtTrackEnd ? "Playback will stop at the end of this song." : remaining ? `Playback stops in ${remaining}.` : "Stop playback after a set time or at the end of a song."}</small></div><select className="sleep-timer-select" aria-label="Sleep timer" value={timerValue} onChange={(event) => { const value = event.target.value; onSleepTimer(value === "off" || value === "track" ? null : Number(value), value === "track"); }}><option value="off">Off</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option><option value="90">1.5 hours</option><option value="120">2 hours</option><option value="track" disabled={!player.currentTrackId}>End of current song</option></select></div>
     {mobile && <div className="setting-row"><div><strong>Background playback</strong><small>Keep playing with lock-screen and notification controls.</small></div><span className="setting-value">On</span></div>}<div className="setting-row"><div><strong>Volume</strong><small>Audio output level</small></div><div className="settings-volume"><input type="range" min="0" max="1" step="0.01" value={player.volume} style={{ "--range-value": `${player.volume * 100}%` } as CSSProperties} aria-label="Playback volume" onChange={(event) => onVolume(Number(event.target.value))}/><span className="setting-value">{Math.round(player.volume * 100)}%</span></div></div></section>
     <section className="settings-group zoom-settings"><h2>Zoom level</h2><p className="zoom-description">Adjusting the zoom level can help you make the most of MichoPlay and adapt it to your preferences or needs.</p><p className="zoom-shortcuts">Keyboard controls are listed below.</p><div className="zoom-control"><div className="zoom-landmarks"><button className="zoom-landmark" onClick={() => onZoom(70)} aria-label="Set zoom to 70 percent"><span className="zoom-preview dense" aria-hidden="true">{Array.from({ length: 12 }, (_, i) => <i key={i}/>)}</span><span>Dense</span></button><button className="zoom-landmark" onClick={() => onZoom(mobile ? 120 : 100)} aria-label={`Set zoom to ${mobile ? 120 : 100} percent`}><span className="zoom-preview default" aria-hidden="true">{Array.from({ length: 9 }, (_, i) => <i key={i}/>)}</span><span>Default</span></button><button className="zoom-landmark" onClick={() => onZoom(130)} aria-label="Set zoom to 130 percent"><span className="zoom-preview spacious" aria-hidden="true">{Array.from({ length: 6 }, (_, i) => <i key={i}/>)}</span><span>Spacious</span></button></div><input className="zoom-range" type="range" min="70" max="130" step="10" value={zoomLevel} style={{ "--zoom-progress": `${(zoomLevel - 70) / 60 * 100}%` } as CSSProperties} aria-label="Zoom level" aria-valuetext={`${zoomLevel}%`} onChange={(event) => onZoom(Number(event.target.value))}/><div className="zoom-ticks" aria-hidden="true">{[70, 80, 90, 100, 110, 120, 130].map((value) => <span key={value} className={zoomLevel === value ? "active" : ""}>{value}%</span>)}</div><div className="zoom-reset-row"><button className="outline-button" onClick={() => onZoom(mobile ? 120 : 100)}>Reset</button></div></div></section>
-    <section className="settings-group shortcuts-settings"><h2>Keyboard shortcuts</h2><div className="shortcut-list">{keyboardShortcuts.map(({ action, keys }) => <div className="shortcut-row" key={action}><span>{action}</span><span className="shortcut-keys">{keys.map((key, index) => <kbd key={`${key}-${index}`}>{key}</kbd>)}</span></div>)}</div></section><section className="settings-group"><h2>Your library</h2><div className="setting-row"><div><strong>Music folders</strong><small>{mobile ? "MichoPlay reads songs from their original folders. Only metadata and artwork are cached." : "Music is scanned recursively inside each root."}</small></div><button className="outline-button" disabled={scanning} onClick={onAdd}><Plus size={15}/>Add folder</button></div>{roots.map((root) => <div className="root-row" key={root}><FolderOpen size={17}/><span title={root}>{root}</span><button className="icon-button" disabled={scanning} aria-label={`Remove ${root} from library`} onClick={() => onRemove(root)}><Trash2 size={15}/></button></div>)}{!roots.length && <p className="no-roots">No music folders added.</p>}<button className="outline-button refresh-button" disabled={scanning || !roots.length} onClick={onRefresh}><RefreshCw size={14}/>{scanning ? "Refreshing…" : "Refresh library"}</button></section><section className="settings-group"><h2>System integration</h2><div className="setting-row"><div><strong>Default music player</strong><small>{mobile ? "Choose MichoPlay from Android’s Open with menu, then select Always to make it the default." : "MichoPlay can open audio files from your file manager. Installed desktop builds register common audio formats."}</small></div><button className="outline-button" onClick={onDefaultPlayer}>{mobile ? "How to set default" : "Set as default"}</button></div></section><section className="settings-group"><h2>Display</h2>{toggle("Now playing panel", "Show artwork and the adjustable playback queue.", showPanel, onPanel)}{toggle("Keep screen awake in full mode", "Prevent the display from sleeping while the full player is open. Enabled by default.", keepScreenAwake, onKeepScreenAwake)}{toggle("Compact song list", "Fit more songs in the library view.", compact, onCompact)}</section></div>;
+    <section className="settings-group shortcuts-settings"><h2>Keyboard shortcuts</h2><div className="shortcut-list">{keyboardShortcuts.map(({ action, keys }) => <div className="shortcut-row" key={action}><span>{action}</span><span className="shortcut-keys">{keys.map((key, index) => <kbd key={`${key}-${index}`}>{key}</kbd>)}</span></div>)}</div></section><section className="settings-group"><h2>Your library</h2><div className="setting-row"><div><strong>Music folders</strong><small>{mobile ? "MichoPlay reads songs from their original folders. Only metadata and artwork are cached." : "Music is scanned recursively inside each root."}</small></div><button className="outline-button" disabled={scanning} onClick={onAdd}><Plus size={15}/>Add folder</button></div>{roots.map((root) => <div className="root-row" key={root}><FolderOpen size={17}/><span title={root}>{root}</span><button className="icon-button" disabled={scanning} aria-label={`Remove ${root} from library`} onClick={() => onRemove(root)}><Trash2 size={15}/></button></div>)}{!roots.length && <p className="no-roots">No music folders added.</p>}<button className="outline-button refresh-button" disabled={scanning || !roots.length} onClick={onRefresh}><RefreshCw size={14}/>{scanning ? "Refreshing…" : "Refresh library"}</button></section><section className="settings-group"><h2>System integration</h2><div className="setting-row"><div><strong>Default music player</strong><small>{mobile ? "Choose MichoPlay from Android’s Open with menu, then select Always to make it the default." : "MichoPlay can open audio files from your file manager. Installed desktop builds register common audio formats."}</small></div><button className="outline-button" onClick={onDefaultPlayer}>{mobile ? "How to set default" : "Set as default"}</button></div></section><section className="settings-group"><h2>Display</h2>{toggle("Now playing panel", "Show artwork and the adjustable playback queue.", showPanel, onPanel)}{toggle("Keep screen awake in full mode", "Prevent the display from sleeping while the full player is open. Off by default.", keepScreenAwake, onKeepScreenAwake)}{toggle("Compact song list", "Fit more songs in the library view.", compact, onCompact)}</section></div>;
 }
