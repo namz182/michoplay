@@ -1,5 +1,6 @@
-import { Fragment, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
@@ -15,7 +16,7 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { PlayerSnapshot, Track, YoutubeDownload, YoutubeSearchResult } from "../lib/api";
-import { youtubeDownloadProgressText, youtubeResultSizeText } from "../lib/youtube-size";
+import { youtubeDownloadErrorText, youtubeDownloadProgressText, youtubeResultSizeText } from "../lib/youtube-size";
 import { Cover, useArtwork } from "./Artwork";
 import packageInfo from "../../package.json";
 
@@ -25,6 +26,15 @@ type Page = { section: Section; detail?: Detail };
 type Playlist = { id: string; name: string; trackIds: number[] };
 type Collection = { key: string; title: string; subtitle: string; tracks: Track[] };
 type TrackMenu = { track: Track; x: number; y: number };
+function playlistSubmenuPlacement(menuX: number) {
+  const menuWidth = 228;
+  const submenuWidth = 256;
+  const gap = 5;
+  const edge = 8;
+  if (menuX + menuWidth + gap + submenuWidth <= window.innerWidth - edge) return "opens-right";
+  if (menuX - gap - submenuWidth >= edge) return "";
+  return "submenu-inline";
+}
 type ListeningRecord = { trackId: number; lastPlayedAt: number; playCount: number; positionMs: number; durationMs: number };
 type SavedPlaybackSession = { currentTrackId: number | null; queue: number[]; positionMs: number; isPlaying: boolean };
 type GlobalSearchResult = { type: "Song" | "Folder" | "Album" | "Artist" | "Playlist"; title: string; subtitle: string; artworkKey: string | null; trackId?: number; page?: Page };
@@ -87,7 +97,8 @@ function sleepTimerLabel(ms: number) { const seconds = Math.ceil(Math.max(0, ms)
 function durationLabel(seconds: number) { const safeSeconds = Math.max(0, Math.floor(seconds)); return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, "0")}`; }
 function youtubeDownloadDescription(item: YoutubeDownload) {
   if (["queued", "downloading", "paused"].includes(item.status)) return youtubeDownloadProgressText(item);
-  if (item.status === "completed") return item.totalBytes !== null || item.downloadedBytes !== null ? youtubeDownloadProgressText(item) : "";
+  if (item.status === "completed") return youtubeDownloadProgressText(item);
+  if (item.status === "failed") return youtubeDownloadErrorText(item.message, item.isPlaylist);
   return item.message;
 }
 function isFinishedYoutubeDownload(item: YoutubeDownload) {
@@ -201,6 +212,9 @@ export default function App() {
     return () => { active = false; unlisten?.(); };
   }, []);
   const [menu, setMenu] = useState<TrackMenu | null>(null);
+  const appFrameRef = useRef<HTMLElement>(null);
+  const trackMenuRef = useRef<HTMLDivElement>(null);
+  const playlistSubmenuRef = useRef<HTMLDivElement>(null);
   const [playlistSubmenu, setPlaylistSubmenu] = useState(false);
   const [playlistSearch, setPlaylistSearch] = useState("");
   const [appMenu, setAppMenu] = useState(false);
@@ -263,6 +277,26 @@ export default function App() {
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const completedYoutubeDownloads = useRef(new Set<string>());
   const isAndroid = useMemo(() => /android/i.test(navigator.userAgent), []);
+  useLayoutEffect(() => {
+    if (!menu || isAndroid) return;
+    const menuElement = trackMenuRef.current;
+    if (!menuElement) return;
+    const menuTop = Math.max(8, Math.min(menu.y, window.innerHeight - menuElement.offsetHeight - 8));
+    menuElement.style.top = `${menuTop}px`;
+    const submenu = playlistSubmenuRef.current;
+    if (!submenu || submenu.classList.contains("submenu-inline")) return;
+    const bounds = submenu.getBoundingClientRect();
+    const adjustment = bounds.bottom > window.innerHeight - 8
+      ? window.innerHeight - 8 - bounds.bottom
+      : bounds.top < 8 ? 8 - bounds.top : 0;
+    submenu.style.transform = `translateY(${adjustment}px)`;
+  }, [menu, playlistSubmenu, isAndroid]);
+  useEffect(() => {
+    if (!menu || isAndroid) return;
+    const closeOnResize = () => setMenu(null);
+    window.addEventListener("resize", closeOnResize);
+    return () => window.removeEventListener("resize", closeOnResize);
+  }, [menu, isAndroid]);
   const clearableYoutubeDownloads = youtubeDownloads.some(isFinishedYoutubeDownload);
   const selectedPlaylist = page.detail?.kind === "playlist" ? playlists.find((item) => item.id === page.detail?.key) : undefined;
   const addSongsSearchTerm = addSongsSearch.trim().toLocaleLowerCase();
@@ -525,8 +559,8 @@ export default function App() {
         const hasMore = youtubeSearchCanContinue(query, results.length);
         setYoutubeResults(results); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(hasMore);
         youtubeSearchCache.current.set(query.toLocaleLowerCase(), { results, hasMore, savedAt: Date.now() });
-      }).catch((error) => {
-        if (youtubeSearchVersion.current === version) { setYoutubeResults([]); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(false); setYoutubeSearchError(String(error)); }
+      }).catch(() => {
+        if (youtubeSearchVersion.current === version) { setYoutubeResults([]); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(false); setYoutubeSearchError(navigator.onLine ? "Couldn't search YouTube. Try again." : "YouTube search needs an internet connection."); }
       }).finally(() => { if (youtubeSearchVersion.current === version) setYoutubeSearching(false); });
     }, 500);
     return () => window.clearTimeout(timer);
@@ -935,7 +969,7 @@ export default function App() {
       if (isAndroid) setMobileTab("downloads");
       else { setPanelView("downloads"); setShowPanel(true); }
       return true;
-    } catch (error) { setMessage(String(error)); return false; }
+    } catch (error) { setMessage(youtubeDownloadErrorText(String(error), selected.isPlaylist)); return false; }
   }
   function requestYoutubeDownload(selected: YoutubeSearchResult, query?: string) {
     if (query) rememberSearch(query);
@@ -992,7 +1026,7 @@ export default function App() {
       else if (action === "cancel") await api.youtubeDownloadCancel(id);
       else await api.youtubeDownloadRemove(id);
       if (item && (action === "cancel" || action === "remove")) setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => url !== item.url));
-    } catch (error) { setMessage(String(error)); }
+    } catch (error) { setMessage(youtubeDownloadErrorText(String(error))); }
   }
   async function clearYoutubeDownloads() {
     try {
@@ -1332,8 +1366,8 @@ export default function App() {
       });
       setYoutubeHasMore(youtubeSearchCanContinue(query, next.length));
       setYoutubeVisibleLimit((limit) => limit + youtubeSearchPageSize);
-    } catch (error) {
-      if (youtubeSearchVersion.current === version) setMessage(`Could not load more YouTube results: ${String(error)}`);
+    } catch {
+      if (youtubeSearchVersion.current === version) setMessage("Couldn't load more YouTube results. Try again.");
     } finally {
       setYoutubeLoadingMore(false);
     }
@@ -1355,8 +1389,8 @@ export default function App() {
       });
       setGlobalYoutubeHasMore(youtubeSearchCanContinue(query, next.length));
       setGlobalYoutubeVisibleLimit((limit) => limit + youtubeSearchPageSize);
-    } catch (error) {
-      if (globalYoutubeSearchVersion.current === version) setMessage(`Could not load more YouTube results: ${String(error)}`);
+    } catch {
+      if (globalYoutubeSearchVersion.current === version) setMessage("Couldn't load more YouTube results. Try again.");
     } finally {
       setGlobalYoutubeLoadingMore(false);
     }
@@ -1383,7 +1417,8 @@ export default function App() {
     }) : <div className="global-search-empty"><strong>No matches in your library for “{search}”</strong><span>Try a song, artist, album, folder, or playlist name.</span></div>}
   </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); localStorage.removeItem("michoplay-recent-searches"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
 
-  return <main className={`app-frame ${compact ? "compact" : ""} ${isAndroid ? "android-app" : "desktop-app"}`} style={{ "--sidebar-width": `${sidebarWidth}px`, "--panel-width": `${panelWidth}px` } as CSSProperties}>
+  const submenuPlacement = menu && !isAndroid ? playlistSubmenuPlacement(menu.x) : "";
+  return <main ref={appFrameRef} className={`app-frame ${compact ? "compact" : ""} ${isAndroid ? "android-app" : "desktop-app"}`} style={{ "--sidebar-width": `${sidebarWidth}px`, "--panel-width": `${panelWidth}px` } as CSSProperties}>
     <svg className="mobile-svg-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="michoplay-brand-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#f5c6be"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="#d8eee4"/></linearGradient></defs></svg>
     {startupLoading && <div className="startup-loading" role="status" aria-live="polite" aria-label="Loading MichoPlay">
       <div className="startup-loading-card">
@@ -1599,10 +1634,10 @@ export default function App() {
       </section>
     </div>}
     {isAndroid && mobileSleepTimerOpen && <div className="mobile-sheet-layer sleep-timer-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileSleepTimerOpen(false); }}><section className="mobile-sleep-timer-sheet" role="dialog" aria-modal="true" aria-label="Sleep timer"><div className="mobile-sheet-handle"/><h2>Sleep timer</h2>{[[5, "5 minutes"], [10, "10 minutes"], [15, "15 minutes"], [30, "30 minutes"], [45, "45 minutes"], [60, "1 hour"]].map(([minutes, label]) => <button key={minutes} onClick={() => { void run(() => api.sleepTimer(Number(minutes), false)); setMobileSleepTimerOpen(false); }}>{label}</button>)}<button onClick={() => { void run(() => api.sleepTimer(null, true)); setMobileSleepTimerOpen(false); }}>End of track</button>{(player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd) && <button className="sleep-timer-cancel" onClick={() => { void run(() => api.sleepTimer(null, false)); setMobileSleepTimerOpen(false); }}>Turn off timer</button>}</section></div>}
-    {menu && <>{isAndroid && <button className="mobile-sheet-backdrop" aria-label="Close song actions" onClick={() => setMenu(null)}/>}<div className={`action-menu track-menu ${isAndroid ? "mobile-action-sheet" : ""}`} role="menu" style={{ left: menu.x, top: menu.y }}>
+    {menu && createPortal(<>{isAndroid && <button className="mobile-sheet-backdrop" aria-label="Close song actions" onClick={() => setMenu(null)}/>}<div ref={trackMenuRef} className={`action-menu track-menu ${isAndroid ? "mobile-action-sheet" : ""} ${submenuPlacement === "submenu-inline" ? "submenu-inline" : ""}`} role="menu" style={{ left: menu.x, top: menu.y }}>
       {isAndroid && <div className="mobile-action-heading"><div className="mobile-sheet-handle" role="presentation" onPointerDown={beginMobileSheetDrag} onPointerUp={(event) => finishMobileSheetDrag(event, () => setMenu(null))} onPointerCancel={() => { mobileSheetDragStartY.current = null; }}/><div className="mobile-action-track"><Cover className="mobile-queue-cover" keys={[menu.track.artworkKey]}/><span><strong>{menu.track.title}</strong><small>{menu.track.artist}</small></span></div></div>}
-      <div className="playlist-menu-wrap" onMouseEnter={() => setPlaylistSubmenu(true)}><button role="menuitem" aria-expanded={playlistSubmenu} onClick={() => setPlaylistSubmenu(!playlistSubmenu)}><Plus size={15}/>Add to playlist<ChevronRight size={14} className="menu-arrow"/></button>{playlistSubmenu && <div className={`playlist-submenu ${menu.x < 250 ? "opens-right" : ""}`}><label className="playlist-find"><Search size={15}/><input autoFocus placeholder="Find a playlist" aria-label="Find a playlist" value={playlistSearch} onChange={(event) => setPlaylistSearch(event.target.value)}/></label><button onClick={() => newPlaylist(menu.track)}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><div className="playlist-options">{playlists.filter((item) => item.name.toLocaleLowerCase().includes(playlistSearch.toLocaleLowerCase())).map((item) => <button key={item.id} onClick={() => addToPlaylist(item, menu.track)}><ListMusic size={15}/>{item.name}</button>)}</div>{!playlists.length && <p>Create your first playlist above.</p>}</div>}</div>{!isAndroid && <button role="menuitem" onClick={() => { shareTrack(menu.track); setMenu(null); }}><Share2 size={15}/>Share</button>}{selectedPlaylist && <button role="menuitem" onClick={() => confirmRemovePlaylistTrack(selectedPlaylist, menu.track)}><Trash2 size={15}/>Remove from playlist</button>}<button role="menuitem" onClick={() => { toggleFavorite(menu.track.id); setMenu(null); }}><Heart size={15}/>{favorites.includes(menu.track.id) ? "Remove from favorites" : "Save to favorites"}</button><button role="menuitem" onClick={() => { void run(() => api.queueAdd(menu.track.id)); setMenu(null); }}><ListMusic size={15}/>Add to queue</button><button role="menuitem" onClick={() => { playCollection(menu.track); setMenu(null); }}><Play size={15}/>Play now</button><div className="menu-separator"/><button role="menuitem" onClick={() => navigate({ section: "Artists", detail: { kind: "artist", key: menu.track.artist, title: menu.track.artist } })}><AudioLines size={15}/>Go to artist</button><button role="menuitem" onClick={() => navigate({ section: "Albums", detail: { kind: "album", key: albumKey(menu.track), title: menu.track.album } })}><Disc3 size={15}/>Go to album</button>
-    </div></>}
+      <div className="playlist-menu-wrap" onMouseEnter={() => setPlaylistSubmenu(true)}><button role="menuitem" aria-expanded={playlistSubmenu} onClick={() => setPlaylistSubmenu(!playlistSubmenu)}><Plus size={15}/>Add to playlist<ChevronRight size={14} className="menu-arrow"/></button>{playlistSubmenu && <div ref={playlistSubmenuRef} className={`playlist-submenu ${submenuPlacement}`}><label className="playlist-find"><Search size={15}/><input autoFocus placeholder="Find a playlist" aria-label="Find a playlist" value={playlistSearch} onChange={(event) => setPlaylistSearch(event.target.value)}/></label><button onClick={() => newPlaylist(menu.track)}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><div className="playlist-options">{playlists.filter((item) => item.name.toLocaleLowerCase().includes(playlistSearch.toLocaleLowerCase())).map((item) => <button key={item.id} onClick={() => addToPlaylist(item, menu.track)}><ListMusic size={15}/>{item.name}</button>)}</div>{!playlists.length && <p>Create your first playlist above.</p>}</div>}</div>{!isAndroid && <button role="menuitem" onClick={() => { shareTrack(menu.track); setMenu(null); }}><Share2 size={15}/>Share</button>}{selectedPlaylist && <button role="menuitem" onClick={() => confirmRemovePlaylistTrack(selectedPlaylist, menu.track)}><Trash2 size={15}/>Remove from playlist</button>}<button role="menuitem" onClick={() => { toggleFavorite(menu.track.id); setMenu(null); }}><Heart size={15}/>{favorites.includes(menu.track.id) ? "Remove from favorites" : "Save to favorites"}</button><button role="menuitem" onClick={() => { void run(() => api.queueAdd(menu.track.id)); setMenu(null); }}><ListMusic size={15}/>Add to queue</button><button role="menuitem" onClick={() => { playCollection(menu.track); setMenu(null); }}><Play size={15}/>Play now</button><div className="menu-separator"/><button role="menuitem" onClick={() => navigate({ section: "Artists", detail: { kind: "artist", key: menu.track.artist, title: menu.track.artist } })}><AudioLines size={15}/>Go to artist</button><button role="menuitem" onClick={() => navigate({ section: "Albums", detail: { kind: "album", key: albumKey(menu.track), title: menu.track.album } })}><Disc3 size={15}/>Go to album</button>
+    </div></>, isAndroid ? appFrameRef.current ?? document.body : document.body)}
     {aboutOpen && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><div className="about-dialog-head"><div className="about-product"><span className="about-mark"><AudioLines size={21}/></span><strong id="about-title">MichoPlay</strong></div><button className="icon-button" aria-label="Close About" onClick={() => setAboutOpen(false)}><X size={19}/></button></div><p className="about-caption">Desktop music player</p><div className="about-version"><span>Current version</span><strong>{appVersion}</strong></div></section></div>}
     {dialog && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setDialog(null); }}><form className="playlist-dialog" role="dialog" aria-modal="true" aria-labelledby="playlist-dialog-title" onSubmit={(event) => { event.preventDefault(); savePlaylist(); }}><div className="dialog-title"><h2 id="playlist-dialog-title">{dialog.playlist ? "Rename playlist" : "Create playlist"}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={() => setDialog(null)}><X size={18}/></button></div><label>Playlist name<input autoFocus required maxLength={120} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)}/></label>{dialog.target && <p>“{dialog.target.title}” will be added.</p>}<button className="primary-button" type="submit" disabled={!playlistName.trim()}>{dialog.playlist ? "Save" : "Create playlist"}</button></form></div>}
     {addSongsPlaylistId && <div className="dialog-overlay add-songs-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAddSongsPlaylistId(null); }}>
