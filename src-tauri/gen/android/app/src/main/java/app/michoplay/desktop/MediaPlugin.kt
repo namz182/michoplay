@@ -7,11 +7,10 @@ import android.content.Intent
 import android.content.ContentValues
 import android.net.Uri
 import android.os.Build
+import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
-import android.provider.OpenableColumns
 import android.os.Environment
-import android.util.Base64
 import app.tauri.annotation.Command
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.InvokeArg
@@ -92,18 +91,70 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun chooseMusicFolder(invoke: Invoke) {
-    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-      putExtra("android.content.extra.SHOW_ADVANCED", true)
+    withAudioPermission(invoke) {
+      val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        putExtra("android.content.extra.SHOW_ADVANCED", true)
+      }
+      activity.runOnUiThread { startActivityForResult(invoke, intent, "onMusicFolderChosen") }
     }
-    startActivityForResult(invoke, intent, "onMusicFolderChosen")
+  }
+
+  @Command
+  fun discoverMusicFolders(invoke: Invoke) {
+    withAudioPermission(invoke) {
+      io.execute {
+        try {
+          val roots = linkedSetOf<String>()
+          val projection = arrayOf(MediaStore.Audio.Media.DATA)
+          activity.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, null, null, null)?.use { cursor ->
+            val pathColumn = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+            if (pathColumn >= 0) while (cursor.moveToNext()) {
+              val path = cursor.getString(pathColumn) ?: continue
+              val file = File(path)
+              if (file.isFile && file.canRead() && isAudioName(file.name)) {
+                libraryRootFor(file)?.let { roots.add(it.canonicalPath) }
+              }
+            }
+          }
+          invoke.resolveObject(roots.toList())
+        } catch (error: Exception) { invoke.reject(error.message ?: "Could not discover music on this device.") }
+      }
+    }
+  }
+
+  private fun withAudioPermission(invoke: Invoke, action: () -> Unit) {
+    val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
+    if (ContextCompat.checkSelfPermission(activity, permission) == PackageManager.PERMISSION_GRANTED) {
+      action()
+      return
+    }
+    activity.runOnUiThread {
+      (activity as? MainActivity)?.requestPermissions(arrayOf(permission)) { granted ->
+        if (granted == true) action()
+        else invoke.reject("Allow Music and audio access to use songs from their original folders.")
+      } ?: invoke.reject("Music access is unavailable on this device.")
+    }
+  }
+
+  private fun libraryRootFor(file: File): File? {
+    val parent = file.parentFile ?: return null
+    val path = file.canonicalPath
+    val primary = Environment.getExternalStorageDirectory().canonicalPath
+    val volumeRoot = when {
+      path.startsWith("$primary/") -> primary
+      path.startsWith("/storage/") -> path.split('/').take(3).joinToString("/")
+      else -> return parent
+    }
+    val relative = path.removePrefix("$volumeRoot/")
+    val topLevel = relative.substringBefore('/')
+    return if (topLevel.isBlank()) parent else File(volumeRoot, topLevel)
   }
 
   @Command
   fun youtubeMusicDirectory(invoke: Invoke) {
-    val directory = File(activity.filesDir, "Music/YouTube")
-    if (!directory.exists() && !directory.mkdirs()) { invoke.reject("MichoPlay couldn’t create its music library folder."); return }
-    invoke.resolve(JSObject().apply { put("path", directory.canonicalPath) })
+    val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
+    invoke.resolve(JSObject().apply { put("path", directory.absolutePath) })
   }
 
   @ActivityCallback
@@ -114,43 +165,44 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       try {
         activity.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         val name = queryTreeName(uri) ?: "Imported music"
-        val destination = File(activity.filesDir, "Music/Imported/${safeName(name)}")
-        if (!destination.exists()) destination.mkdirs()
-        val copied = copyAudioTree(uri, destination)
-        if (copied == 0) { invoke.reject("No supported audio files were found in that folder."); return@execute }
-        invoke.resolve(JSObject().apply { put("path", destination.canonicalPath); put("count", copied); put("name", name) })
-      } catch (error: Exception) { invoke.reject(error.message ?: "Could not import that music folder.") }
+        val folder = directPathForUri(uri)?.takeIf { it.isDirectory && it.canRead() }
+          ?: throw IllegalArgumentException("Choose an on-device music folder that MichoPlay can read directly.")
+        val count = folder.walkTopDown().maxDepth(32).filter { it.isFile && isAudioName(it.name) }.take(5000).count()
+        if (count == 0) throw IllegalArgumentException("No supported audio files were found in that folder.")
+        invoke.resolve(JSObject().apply { put("path", folder.canonicalPath); put("count", count); put("name", name) })
+      } catch (error: Exception) { invoke.reject(error.message ?: "Could not add that music folder.") }
     }
   }
 
-  private fun copyAudioTree(tree: Uri, target: File): Int {
-    var copied = 0
-    val rootId = DocumentsContract.getTreeDocumentId(tree)
-    fun visit(parentId: String, destination: File, depth: Int) {
-      if (depth > 32 || copied >= 5000) return
-      val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
-      activity.contentResolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE), null, null, null)?.use { cursor ->
-        val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-        val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-        val mimeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
-        while (cursor.moveToNext() && copied < 5000) {
-          val id = cursor.getString(idCol)
-          val name = safeName(cursor.getString(nameCol) ?: "audio")
-          val mime = if (mimeCol >= 0) cursor.getString(mimeCol) else null
-          if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-            val child = File(destination, name).apply { mkdirs() }
-            visit(id, child, depth + 1)
-          } else if (isAudioName(name)) {
-            val doc = DocumentsContract.buildDocumentUriUsingTree(tree, id)
-            val outputFile = File(destination, name)
-            activity.contentResolver.openInputStream(doc)?.use { input -> outputFile.outputStream().use { input.copyTo(it) } }
-            if (outputFile.isFile) copied++
-          }
+  private fun directPathForUri(uri: Uri): File? {
+    if (uri.scheme == "file") return uri.path?.let(::File)?.canonicalFile
+    if (DocumentsContract.isDocumentUri(activity, uri) || DocumentsContract.isTreeUri(uri)) {
+      val id = try {
+        if (DocumentsContract.isTreeUri(uri)) DocumentsContract.getTreeDocumentId(uri)
+        else DocumentsContract.getDocumentId(uri)
+      } catch (_: Exception) { null }
+      if (uri.authority == "com.android.externalstorage.documents" && id != null) {
+        val volume = id.substringBefore(':')
+        val relative = id.substringAfter(':', "")
+        if (relative.split('/').any { it == ".." }) return null
+        val base = if (volume.equals("primary", ignoreCase = true)) Environment.getExternalStorageDirectory()
+          else if (Build.VERSION.SDK_INT >= 30) {
+            activity.getSystemService(StorageManager::class.java).storageVolumes
+              .firstOrNull { it.uuid.equals(volume, ignoreCase = true) }?.directory
+          } else File("/storage/$volume")
+        if (base != null) {
+          val canonicalBase = base.canonicalFile
+          val candidate = File(canonicalBase, relative).canonicalFile
+          if (candidate == canonicalBase || candidate.path.startsWith("${canonicalBase.path}/")) return candidate
         }
       }
     }
-    visit(rootId, target, 0)
-    return copied
+    return try {
+      activity.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
+        val column = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+        if (column >= 0 && cursor.moveToFirst()) cursor.getString(column)?.let { File(it).canonicalFile } else null
+      }
+    } catch (_: Exception) { null }
   }
 
   private fun queryTreeName(tree: Uri): String? = try {
@@ -159,8 +211,46 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
     }
   } catch (_: Exception) { null }
-  private fun safeName(value: String): String = value.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifEmpty { "Music" }
   private fun isAudioName(name: String): Boolean = name.substringAfterLast('.', "").lowercase() in setOf("mp3", "flac", "wav", "ogg", "opus", "m4a", "aac", "aiff", "aif")
+
+  @Command
+  fun chooseAudioFiles(invoke: Invoke) {
+    withAudioPermission(invoke) {
+      val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "audio/*"
+        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+      }
+      activity.runOnUiThread { startActivityForResult(invoke, intent, "onAudioFilesChosen") }
+    }
+  }
+
+  @ActivityCallback
+  fun onAudioFilesChosen(invoke: Invoke, result: ActivityResult) {
+    if (result.resultCode != Activity.RESULT_OK) { invoke.reject("Audio selection cancelled."); return }
+    val uris = linkedSetOf<Uri>()
+    result.data?.data?.let { uris.add(it) }
+    result.data?.clipData?.let { clip -> for (index in 0 until clip.itemCount) clip.getItemAt(index).uri?.let { uris.add(it) } }
+    resolveAudioPaths(invoke, uris)
+  }
+
+  private fun resolveAudioPaths(invoke: Invoke, uris: Collection<Uri>) {
+    io.execute {
+      try {
+        val paths = linkedSetOf<String>()
+        for (uri in uris.take(100)) {
+          try { activity.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+          catch (_: Exception) { /* Shared audio intents can grant access only for this launch. */ }
+          val file = directPathForUri(uri)?.takeIf { it.isFile && it.canRead() && isAudioName(it.name) }
+            ?: throw IllegalArgumentException("Choose on-device audio that MichoPlay can read directly.")
+          paths.add(file.canonicalPath)
+        }
+        if (paths.isEmpty()) throw IllegalArgumentException("No supported audio files were selected.")
+        invoke.resolveObject(paths.toList())
+      } catch (error: Exception) { invoke.reject(error.message ?: "Could not open the selected audio files.") }
+    }
+  }
 
   @Command
   fun youtubeSearch(invoke: Invoke) {
@@ -225,11 +315,11 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       activeDownloads.incrementAndGet()
       item["status"] = "downloading"; item["message"] = ""; emitDownloads()
       io.execute {
+        val staging = File(activity.cacheDir, "youtube/${item["id"]}")
         try {
           if (!downloaderReady && !initializeDownloader()) throw IllegalStateException(downloaderError ?: "YouTube tools couldn’t start.")
           updateDownloaderIfNeeded(item)
-          val root = File(activity.filesDir, "Music/YouTube").apply { mkdirs() }
-          val staging = File(activity.cacheDir, "youtube/${item["id"]}").apply { deleteRecursively(); mkdirs() }
+          staging.deleteRecursively(); staging.mkdirs()
           val request = YoutubeDLRequest(item["url"] as String)
           request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--newline")
           if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
@@ -259,17 +349,12 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           if (item["status"] != "paused" && item["status"] != "cancelled") {
             val audioFiles = staging.walkTopDown().filter { it.isFile && isAudioName(it.name) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
-            audioFiles.forEach { source ->
-              val libraryCopy = File(root, source.name)
-              source.copyTo(libraryCopy, overwrite = true)
-              publishAudioToMusic(libraryCopy)
-            }
+            audioFiles.forEach(::publishAudioToMusic)
             item["status"] = "completed"; item["percent"] = 100.0; item["message"] = "Saved to Music/MichoPlay/YouTube"
           }
-          staging.deleteRecursively()
         } catch (error: Exception) {
           if (item["status"] != "paused" && item["status"] != "cancelled") { item["status"] = "failed"; item["message"] = error.message ?: "Download failed" }
-        } finally { activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads() }
+        } finally { staging.deleteRecursively(); activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads() }
       }
     }
   }
@@ -395,51 +480,24 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   @Suppress("DEPRECATION")
   fun takeOpenedAudio(invoke: Invoke) {
-    try {
-      val intent = activity.intent
-      val uris = linkedSetOf<Uri>()
-      when (intent?.action) {
-        Intent.ACTION_VIEW -> intent.data?.let { uris.add(it) }
-        Intent.ACTION_SEND -> {
-          if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)?.let { uris.add(it) }
-          else intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
-        }
-        Intent.ACTION_SEND_MULTIPLE -> {
-          if (Build.VERSION.SDK_INT >= 33) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)?.let { uris.addAll(it) }
-          else intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
-        }
+    val intent = activity.intent
+    val uris = linkedSetOf<Uri>()
+    when (intent?.action) {
+      Intent.ACTION_VIEW -> intent.data?.let { uris.add(it) }
+      Intent.ACTION_SEND -> {
+        if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)?.let { uris.add(it) }
+        else intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
       }
-      intent?.clipData?.let { clip -> for (index in 0 until clip.itemCount) clip.getItemAt(index).uri?.let { uris.add(it) } }
-      val result = mutableListOf<Map<String, String>>()
-      var totalBytes = 0L
-      for (uri in uris.take(100)) {
-        val bytes = activity.contentResolver.openInputStream(uri)?.use { input ->
-          val output = java.io.ByteArrayOutputStream()
-          var fileBytes = 0L
-          val buffer = ByteArray(16 * 1024)
-          while (true) {
-            val count = input.read(buffer)
-            if (count < 0) break
-            fileBytes += count
-            totalBytes += count
-            if (fileBytes > 256L * 1024 * 1024 || totalBytes > 1024L * 1024 * 1024) throw IllegalArgumentException("Selected audio exceeds the import size limit.")
-            output.write(buffer, 0, count)
-          }
-          output.toByteArray()
-        } ?: continue
-        val name = activity.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-          val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-          if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
-        } ?: "audio-${result.size + 1}.mp3"
-        result.add(mapOf(
-          "name" to name,
-          "dataBase64" to Base64.encodeToString(bytes, Base64.NO_WRAP)
-        ))
+      Intent.ACTION_SEND_MULTIPLE -> {
+        if (Build.VERSION.SDK_INT >= 33) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)?.let { uris.addAll(it) }
+        else intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
       }
+    }
+    intent?.clipData?.let { clip -> for (index in 0 until clip.itemCount) clip.getItemAt(index).uri?.let { uris.add(it) } }
+    if (uris.isEmpty()) { invoke.resolveObject(emptyList<String>()); return }
+    withAudioPermission(invoke) {
       activity.setIntent(Intent(Intent.ACTION_MAIN))
-      invoke.resolveObject(result)
-    } catch (error: Exception) {
-      invoke.reject(error.message ?: "Could not open the selected audio files.")
+      resolveAudioPaths(invoke, uris)
     }
   }
 }
