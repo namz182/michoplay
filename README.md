@@ -58,7 +58,7 @@ MichoPlay is available for Linux, Windows, macOS, and Android.
 
 ## Local library data
 
-MichoPlay keeps its library support files in the `.michoplay` directory in the current user's home folder (for example, `/home/namz/.michoplay` on Linux). It stores saved music roots in `config.json`, reusable track metadata in `library-index.json`, and deduplicated artwork files in `artwork/`. The metadata index is rebuildable; removing it makes the next scan read tags again. Artwork cache data is capped at 256 MiB. On upgrade, saved library roots are copied from the previous app-data `.michoplay/config.json` location when no new config exists.
+MichoPlay keeps its library support files in the `.michoplay` directory in the current user's home folder (for example, `/home/user/.michoplay` on Linux). It stores saved music roots and optional scan settings in `config.json`, the track index in `library.sqlite`, and deduplicated artwork files in `artwork/`. The first scan after launch checks the folders; while the app stays open, filesystem watchers let unchanged refreshes reuse the index. File changes mark a library root dirty so the next refresh reconciles it. If watcher support is unavailable, MichoPlay falls back to a normal scan. The database can be rebuilt by refreshing the library. Artwork cache data is capped at 256 MiB. On upgrade, the previous app-data config, JSON index, and artwork cache are copied when their new locations are empty. `scanWorkers` may be set from 1 to 8 in `config.json`; if omitted, MichoPlay chooses a conservative limit based on available CPU cores. `watchLibrary` defaults to `true` and can be set to `false` to disable the watcher.
 
 ## Requirements
 
