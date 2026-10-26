@@ -112,6 +112,11 @@ button:disabled { cursor: default; }
 .global-youtube-download { position: absolute; top: 50%; right: 12px; display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 50%; background: var(--brand-gradient); color: #302b38; opacity: 0; pointer-events: none; transform: translateY(calc(-50% + 3px)); transition: opacity 140ms ease, transform 140ms ease; cursor: pointer; }
 .global-youtube-result-row:hover .global-youtube-download, .global-youtube-result-row:focus-within .global-youtube-download { opacity: 1; pointer-events: auto; transform: translateY(-50%); }
 .global-youtube-download:hover, .global-youtube-download:focus-visible { outline: 2px solid rgba(255,255,255,.72); outline-offset: 2px; }
+.global-youtube-results-scroll { overflow: visible; }
+.youtube-load-more { display: inline-flex; min-height: 31px; align-items: center; justify-content: center; gap: 7px; margin: 5px auto 1px; padding: 0 13px; border: 1px solid rgba(245,238,232,.25); border-radius: 999px; background: rgba(255,255,255,.055); color: #f3eef4; font: inherit; font-size: 10px; font-weight: 700; cursor: pointer; }
+.youtube-load-more:hover, .youtube-load-more:focus-visible { border-color: rgba(245,238,232,.55); background: rgba(255,255,255,.11); outline: none; }
+.youtube-load-more:disabled { opacity: .68; cursor: wait; }
+.global-youtube-load-more { display: flex; width: max-content; }
 .global-search-youtube-skeleton { display: grid; min-height: 54px; grid-template-columns: 42px minmax(0, 1fr); align-content: center; gap: 6px 11px; padding: 5px 8px; }
 .global-search-youtube-skeleton > span { width: 42px; height: 42px; grid-row: span 2; border-radius: 4px; background: linear-gradient(100deg, #252329 20%, #39343e 42%, #252329 64%); background-size: 220% 100%; animation: youtube-shimmer 1.5s ease-in-out infinite; }
 .global-search-youtube-skeleton > i { width: 68%; height: 8px; align-self: end; border-radius: 4px; background: linear-gradient(100deg, #252329 20%, #39343e 42%, #252329 64%); background-size: 220% 100%; animation: youtube-shimmer 1.5s ease-in-out infinite; }
@@ -175,6 +180,7 @@ button:disabled { cursor: default; }
 .startup-loading-copy span { overflow: hidden; color: #c1bbc4; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .startup-loading-copy small { color: #8f8994; font-size: 10px; }
 .startup-loading-spinner { width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.18); border-top-color: var(--brand-highlight); border-radius: 50%; animation: spin .8s linear infinite; }
+.android-app .startup-loading { display: none; }
 .loading-indicator { width: 19px; height: 19px; border: 2px solid rgba(245,238,232,.25); border-top-color: var(--brand-highlight); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .selected-folder { max-width: 70%; overflow: hidden; margin-top: 14px; color: #98929e; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
@@ -785,6 +791,16 @@ body.resizing { cursor: col-resize; user-select: none; }
 .youtube-search-input input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #f5f3f6; font-size: 11px; }
 .youtube-search-input input::placeholder { color: #817c86; }
 .youtube-search-input button { display: grid; width: 23px; height: 25px; flex: 0 0 23px; place-items: center; border: 0; background: transparent; color: #aaa2b0; cursor: pointer; }
+.youtube-downloader-featured { gap: 13px; }
+.youtube-downloader-featured .youtube-search-header { justify-content: stretch; }
+.youtube-downloader-featured .youtube-search-form { width: min(760px, 100%); }
+.youtube-search-input-featured { min-height: 51px; height: auto; gap: 11px; padding: 7px 13px; border-color: rgba(245,198,190,.42); border-radius: 10px; background: linear-gradient(115deg, rgba(245,198,190,.12), rgba(245,238,232,.055) 48%, rgba(216,238,228,.08)); box-shadow: 0 7px 20px rgba(0,0,0,.13), 0 0 0 1px rgba(245,198,190,.06); color: var(--blush); }
+.youtube-search-input-featured:focus-within { border-color: var(--blush); box-shadow: 0 0 0 3px rgba(245,198,190,.14), 0 7px 20px rgba(0,0,0,.17); }
+.youtube-search-input-featured > svg { flex: 0 0 auto; color: var(--blush); }
+.youtube-search-input-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
+.youtube-search-input-copy strong { color: #f4eef4; font-size: 11px; font-weight: 750; }
+.youtube-search-input-copy input { font-size: 12px; }
+.youtube-results-scroll { overflow: visible; }
 .youtube-search-spinner { display: inline-flex; align-items: center; gap: 7px; color: #aaa2b0; font-size: 10px; }
 .youtube-search-spinner::before { width: 12px; height: 12px; border: 1.5px solid rgba(245,238,232,.25); border-top-color: var(--brand-highlight); border-radius: 50%; animation: spin .8s linear infinite; content: ""; }
 .youtube-search-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
@@ -1151,7 +1167,12 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .youtube-downloader { padding:13px 13px 5px; }
 .android-app .youtube-search-header { margin:0; }
 .android-app .youtube-search-input { min-height:49px; border-radius:9px; }
+.android-app .youtube-search-input-featured { min-height:58px; padding:8px 13px; border-color:rgba(245,198,190,.58); border-radius:11px; }
+.android-app .youtube-search-input-copy strong { font-size:12px; }
+.android-app .youtube-search-input-copy input { font-size:13px; }
 .android-app .youtube-search-grid { grid-template-columns:1fr; gap:9px; margin-top:12px; }
+.android-app .youtube-results-scroll { overflow: visible; }
+.android-app .youtube-load-more { width:100%; min-height:39px; margin-top:7px; border-radius:9px; font-size:12px; }
 .android-app .youtube-result-card { min-height:84px; grid-template-columns:minmax(0,1fr) 46px; align-items:center; gap:8px; padding:7px; border-radius:8px; }
 .android-app .youtube-result-preview { grid-template-columns:104px minmax(0,1fr); align-items:center; gap:10px; }
 .android-app .youtube-result-art { height:64px; aspect-ratio:auto; border-radius:5px; }
@@ -1190,6 +1211,8 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-youtube-search-results { display:grid; gap:5px; margin:0 13px 14px; }
 .mobile-youtube-search-results h2 { margin:0 3px 5px; font-size:15px; }
 .mobile-youtube-search-results > p { margin:2px 4px; color:#aaa6af; font-size:12px; }
+.mobile-youtube-results-scroll { overflow: visible; }
+.mobile-youtube-load-more { width:100%; margin-top:5px; }
 .mobile-youtube-search-result { display:flex; min-height:60px; align-items:center; gap:8px; padding:4px; border-radius:7px; background:#242326; }
 .mobile-youtube-search-open { display:flex; min-width:0; flex:1; align-items:center; gap:10px; border:0; background:transparent; color:#f4f1f5; text-align:left; }
 .mobile-youtube-search-open > span:first-child { display:grid; width:48px; height:48px; flex:0 0 48px; place-items:center; overflow:hidden; border-radius:5px; background:#38353b; color:#ccc7d0; }

@@ -2267,15 +2267,20 @@ async fn library_pick_audio_files(
 #[tauri::command]
 async fn youtube_search(
     query: String,
+    limit: Option<usize>,
+    offset: Option<usize>,
     bridge: State<'_, MediaBridge>,
 ) -> Result<Vec<YoutubeSearchResult>, String> {
+    let limit = limit.unwrap_or(15).clamp(1, 30);
+    let offset = offset.unwrap_or(0).min(50);
+    let search_end = offset.saturating_add(limit).min(50);
     #[cfg(target_os = "android")]
     {
         let plugin = android_media_plugin(&bridge)?;
         call_android_media(
             plugin,
             "youtubeSearch",
-            serde_json::json!({ "query": query }),
+            serde_json::json!({ "query": query, "limit": limit, "offset": offset }),
         )
         .await
     }
@@ -2300,7 +2305,7 @@ async fn youtube_search(
             let search = if is_url {
                 query
             } else {
-                format!("ytsearch10:{query}")
+                format!("ytsearch{search_end}:{query}")
             };
             let output = hidden_command(yt_dlp)
                 .arg("--ignore-config")
@@ -2308,7 +2313,7 @@ async fn youtube_search(
                 .arg("--flat-playlist")
                 .arg("--dump-single-json")
                 .arg("--playlist-end")
-                .arg("10")
+                .arg(search_end.to_string())
                 .arg("--skip-download")
                 .arg("--")
                 .arg(&search)
@@ -2366,6 +2371,8 @@ async fn youtube_search(
                 .unwrap_or_else(|| vec![&document]);
             let results = entries
                 .into_iter()
+                .skip(offset)
+                .take(limit)
                 .filter_map(|entry| {
                     let id = entry.get("id")?.as_str()?.to_owned();
                     let title = entry.get("title")?.as_str()?.trim().to_owned();
@@ -2400,7 +2407,6 @@ async fn youtube_search(
                         is_playlist: false,
                     })
                 })
-                .take(10)
                 .collect::<Vec<_>>();
             Ok(results)
         })
