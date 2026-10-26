@@ -58,7 +58,7 @@ MichoPlay is available for Linux, Windows, macOS, and Android.
 
 ## Local library data
 
-MichoPlay keeps its library support files in a `.michoplay` directory inside the operating system’s per-user app data directory. It stores saved music roots in `config.json`, reusable track metadata in `library-index.json`, and deduplicated artwork files in `artwork/`. The metadata index is rebuildable; removing it makes the next scan read tags again. Artwork cache data is capped at 256 MiB.
+MichoPlay keeps its library support files in the `.michoplay` directory in the current user's home folder (for example, `/home/namz/.michoplay` on Linux). It stores saved music roots in `config.json`, reusable track metadata in `library-index.json`, and deduplicated artwork files in `artwork/`. The metadata index is rebuildable; removing it makes the next scan read tags again. Artwork cache data is capped at 256 MiB. On upgrade, saved library roots are copied from the previous app-data `.michoplay/config.json` location when no new config exists.
 
 ## Requirements
 

@@ -3038,11 +3038,21 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let storage_dir = app.path().app_local_data_dir()?.join(".michoplay");
+            let storage_dir = app.path().home_dir()?.join(".michoplay");
             fs::create_dir_all(&storage_dir)?;
+            // Preserve saved library roots when upgrading from the previous app-data location.
+            let config_path = storage_dir.join("config.json");
+            if !config_path.exists() {
+                if let Ok(previous_dir) = app.path().app_local_data_dir() {
+                    let previous_config = previous_dir.join(".michoplay").join("config.json");
+                    if previous_config.is_file() {
+                        let _ = fs::copy(previous_config, &config_path);
+                    }
+                }
+            }
             if let Ok(mut core) = app.state::<AppState>().0.lock() {
                 core.storage_dir = storage_dir.clone();
-                if let Ok(bytes) = fs::read(storage_dir.join("config.json")) {
+                if let Ok(bytes) = fs::read(&config_path) {
                     if let Ok(config) = serde_json::from_slice::<LibraryConfig>(&bytes) {
                         if config.version == 1 {
                             core.roots = config.roots.into_iter().map(PathBuf::from).collect();
