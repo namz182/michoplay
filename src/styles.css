@@ -172,7 +172,7 @@ button:disabled { cursor: default; }
 .primary-button { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 15px; border: 0; border-radius: 999px; background: linear-gradient(135deg, var(--blush), var(--brand-highlight) 64%, var(--accent)); color: #302b38; font-size: 11px; font-weight: 800; cursor: pointer; }
 .primary-button:hover:not(:disabled) { filter: brightness(1.07); transform: scale(1.02); }
 .primary-button:disabled { opacity: .6; }
-.startup-loading { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(9,9,11,.96); color: #f7f5f8; backdrop-filter: blur(18px); }
+.startup-loading { position: fixed; z-index: 1000; inset: 0; display: none; place-items: center; padding: 24px; background: rgba(9,9,11,.96); color: #f7f5f8; backdrop-filter: blur(18px); }
 .startup-loading-card { display: grid; width: min(420px, 100%); grid-template-columns: 48px minmax(0, 1fr) 24px; align-items: center; gap: 14px; padding: 18px; border: 1px solid rgba(255,255,255,.12); border-radius: 18px; background: rgba(29,27,30,.98); box-shadow: 0 18px 50px rgba(0,0,0,.35); }
 .startup-loading-mark { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 15px; background: var(--brand-gradient); color: #302b38; }
 .startup-loading-copy { display: grid; min-width: 0; gap: 4px; }
@@ -1092,6 +1092,9 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .detail-heading .heading-copy { width:100%; }
 .android-app .detail-heading .heading-copy h1 { margin:0; font-size:29px; line-height:1.08; letter-spacing:-.8px; }
 .android-app .detail-heading .heading-copy p { margin:7px 0 0; color:#c2bec6; font-size:13px; }
+.android-app .youtube-detail-heading { padding-bottom:0; background:transparent; }
+.android-app .youtube-detail-heading::after, .android-app .youtube-detail-heading .cover-backdrop { display:none; }
+.android-app .youtube-detail-heading .heading-cover, .android-app .youtube-detail-heading .heading-copy { display:none; }
 .android-app .mobile-detail-back { position:absolute; z-index:2; top:9px; left:13px; display:grid; width:38px; height:38px; place-items:center; border:0; border-radius:50%; background:rgba(0,0,0,.32); color:#fff; }
 .android-app .home-section { padding:2px 18px 22px; }
 .android-app .section-title-row { margin:17px 0 11px; }
