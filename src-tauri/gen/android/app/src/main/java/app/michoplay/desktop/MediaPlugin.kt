@@ -41,7 +41,7 @@ class MediaUpdateArgs {
 }
 
 @InvokeArg
-class YoutubeSearchArgs { var query: String = "" }
+class YoutubeSearchArgs { var query: String = ""; var limit: Int = 15; var offset: Int = 0 }
 
 @InvokeArg
 class YoutubeDownloadArgs {
@@ -292,7 +292,11 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun youtubeSearch(invoke: Invoke) {
-    val query = invoke.parseArgs(YoutubeSearchArgs::class.java).query.trim()
+    val args = invoke.parseArgs(YoutubeSearchArgs::class.java)
+    val query = args.query.trim()
+    val limit = args.limit.coerceIn(1, 30)
+    val offset = args.offset.coerceIn(0, 50)
+    val searchEnd = (offset + limit).coerceAtMost(50)
     if (query.isEmpty() || query.length > 200) { invoke.reject("Enter a YouTube search or link (up to 200 characters)."); return }
     io.execute {
       try {
@@ -300,9 +304,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         val isUrl = query.startsWith("https://") || query.startsWith("http://")
         if (isUrl && !isYoutubeUrl(query)) throw IllegalArgumentException("Enter a valid YouTube video or playlist URL.")
         val isPlaylist = isUrl && query.contains("list=")
-        val request = YoutubeDLRequest(if (isUrl) query else "ytsearch10:$query")
+        val request = YoutubeDLRequest(if (isUrl) query else "ytsearch$searchEnd:$query")
         request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--flat-playlist")
-        request.addOption("--dump-single-json"); request.addOption("--playlist-end", "10"); request.addOption("--skip-download")
+        request.addOption("--dump-single-json"); request.addOption("--playlist-end", searchEnd.toString()); request.addOption("--skip-download")
         val json = JSONObject(YoutubeDL.getInstance().execute(request).out)
         val results = mutableListOf<Map<String, Any?>>()
         if (isPlaylist) {
@@ -310,7 +314,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           results.add(mapOf("id" to id, "title" to json.optString("title", "YouTube playlist"), "url" to query, "thumbnail" to json.optString("thumbnail").takeIf { it.startsWith("https://") }, "durationSeconds" to null, "isPlaylist" to true))
         } else {
           val entries = json.optJSONArray("entries")
-          if (entries == null) addSearchEntry(results, json) else for (index in 0 until minOf(entries.length(), 10)) addSearchEntry(results, entries.optJSONObject(index) ?: JSONObject())
+          if (entries == null) addSearchEntry(results, json) else for (index in offset until minOf(entries.length(), offset + limit)) addSearchEntry(results, entries.optJSONObject(index) ?: JSONObject())
         }
         invoke.resolveObject(results)
       } catch (error: Exception) { invoke.reject(error.message ?: "YouTube search failed.") }

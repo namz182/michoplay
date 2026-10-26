@@ -30,7 +30,7 @@ export const api = {
   shareText: (title: string, text: string, url: string) => invoke<void>("media_share_text", { title, text, url }),
   youtubeMusicDirectory: () => invoke<string>("youtube_music_directory"),
   pickMusicFolder: () => invoke<{ path: string; count: number; name: string }>("library_pick_music_folder"),
-  youtubeSearch: (query: string) => invoke<YoutubeSearchResult[]>("youtube_search", { query }),
+  youtubeSearch: (query: string, limit = 15, offset = 0) => invoke<YoutubeSearchResult[]>("youtube_search", { query, limit, offset }),
   youtubeDownloadsState: () => invoke<YoutubeDownload[]>("youtube_downloads_state"),
   youtubeDownloadEnqueue: (url: string, title: string, thumbnail: string | null, isPlaylist: boolean, estimatedBytes: number | null) => invoke<YoutubeDownload>("youtube_download_enqueue", { url, title, thumbnail, isPlaylist, estimatedBytes }),
   youtubeDownloadPause: (id: string) => invoke<void>("youtube_download_pause", { id }),

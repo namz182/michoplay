@@ -41,6 +41,9 @@ const michoplayGithubUrl = "https://github.com/namz182/michoplay";
 const michoplayIssueUrl = "https://github.com/namz182/michoplay/issues/new";
 const michoplayDeveloperUrl = "https://mainza.dev";
 const michoplayWebsiteUrl = "https://michoplay.mainza.dev/";
+const youtubeSearchPageSize = 15;
+const youtubeGlobalInitialResultLimit = youtubeSearchPageSize;
+const youtubeFolderInitialResultLimit = youtubeSearchPageSize;
 function isNewerVersion(candidate: string, current: string) {
   const parts = (version: string) => {
     const normalized = version.trim().replace(/^v/i, "").split(/[+-]/, 1)[0];
@@ -107,6 +110,9 @@ function isFinishedYoutubeDownload(item: YoutubeDownload) {
 }
 function youtubeResultSize(result: YoutubeSearchResult) {
   return youtubeResultSizeText(result.durationSeconds, result.isPlaylist);
+}
+function youtubeSearchCanContinue(query: string, count: number) {
+  return count > 0 && !/^https?:\/\//i.test(query.trim());
 }
 function normalizeZoom(value: number) { return Math.max(70, Math.min(130, Math.round(value / 10) * 10)); }
 function initialZoomLevel() {
@@ -248,8 +254,14 @@ export default function App() {
   const [youtubeSearching, setYoutubeSearching] = useState(false);
   const [youtubeSearchError, setYoutubeSearchError] = useState("");
   const [youtubeResults, setYoutubeResults] = useState<YoutubeSearchResult[]>([]);
+  const [youtubeVisibleLimit, setYoutubeVisibleLimit] = useState(youtubeFolderInitialResultLimit);
+  const [youtubeHasMore, setYoutubeHasMore] = useState(false);
+  const [youtubeLoadingMore, setYoutubeLoadingMore] = useState(false);
   const [youtubeDownloads, setYoutubeDownloads] = useState<YoutubeDownload[]>([]);
   const [globalYoutubeDownloadRequested, setGlobalYoutubeDownloadRequested] = useState<string[]>([]);
+  const [globalYoutubeVisibleLimit, setGlobalYoutubeVisibleLimit] = useState(youtubeGlobalInitialResultLimit);
+  const [globalYoutubeHasMore, setGlobalYoutubeHasMore] = useState(false);
+  const [globalYoutubeLoadingMore, setGlobalYoutubeLoadingMore] = useState(false);
   const [completedDownloadTrackIds, setCompletedDownloadTrackIds] = useState<Record<string, number[]>>({});
   const [zoomLevel, setZoomLevel] = useState(initialZoomLevel);
   const [draggedQueue, setDraggedQueue] = useState<number | null>(null);
@@ -262,7 +274,7 @@ export default function App() {
   const latestPlayerSnapshot = useRef<PlayerSnapshot>(initialPlayer);
   const youtubeSearchVersion = useRef(0);
   const globalYoutubeSearchVersion = useRef(0);
-  const youtubeSearchCache = useRef(new Map<string, { results: YoutubeSearchResult[]; savedAt: number }>());
+  const youtubeSearchCache = useRef(new Map<string, { results: YoutubeSearchResult[]; savedAt: number; hasMore?: boolean }>());
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const completedYoutubeDownloads = useRef(new Set<string>());
   const isAndroid = useMemo(() => /android/i.test(navigator.userAgent), []);
@@ -509,26 +521,28 @@ export default function App() {
     const query = youtubeQuery.trim();
     const version = ++youtubeSearchVersion.current;
     if (!query) {
-      setYoutubeResults([]); setYoutubeSearchError(""); setYoutubeSearching(false);
+      setYoutubeResults([]); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(false); setYoutubeSearchError(""); setYoutubeSearching(false);
       return;
     }
     const cached = youtubeSearchCache.current.get(query.toLocaleLowerCase());
     if (cached && Date.now() - cached.savedAt < 60_000) {
-      setYoutubeResults(cached.results); setYoutubeSearchError(""); setYoutubeSearching(false);
+      const hasMore = cached.hasMore ?? youtubeSearchCanContinue(query, cached.results.length);
+      setYoutubeResults(cached.results); setYoutubeVisibleLimit(hasMore ? youtubeFolderInitialResultLimit : cached.results.length); setYoutubeHasMore(hasMore); setYoutubeSearchError(""); setYoutubeSearching(false);
       return;
     }
     if (!browserOnline) {
-      setYoutubeResults([]); setYoutubeSearchError("YouTube search needs an internet connection."); setYoutubeSearching(false);
+      setYoutubeResults([]); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(false); setYoutubeSearchError("YouTube search needs an internet connection."); setYoutubeSearching(false);
       return;
     }
-    setYoutubeSearching(true); setYoutubeSearchError(""); setYoutubeResults([]);
+    setYoutubeSearching(true); setYoutubeSearchError(""); setYoutubeResults([]); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(false);
     const timer = window.setTimeout(() => {
-      void api.youtubeSearch(query).then((results) => {
+      void api.youtubeSearch(query, youtubeSearchPageSize, 0).then((results) => {
         if (youtubeSearchVersion.current !== version) return;
-        setYoutubeResults(results);
-        youtubeSearchCache.current.set(query.toLocaleLowerCase(), { results, savedAt: Date.now() });
+        const hasMore = youtubeSearchCanContinue(query, results.length);
+        setYoutubeResults(results); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(hasMore);
+        youtubeSearchCache.current.set(query.toLocaleLowerCase(), { results, hasMore, savedAt: Date.now() });
       }).catch((error) => {
-        if (youtubeSearchVersion.current === version) { setYoutubeResults([]); setYoutubeSearchError(String(error)); }
+        if (youtubeSearchVersion.current === version) { setYoutubeResults([]); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(false); setYoutubeSearchError(String(error)); }
       }).finally(() => { if (youtubeSearchVersion.current === version) setYoutubeSearching(false); });
     }, 500);
     return () => window.clearTimeout(timer);
@@ -543,28 +557,32 @@ export default function App() {
     const query = search.trim();
     const version = ++globalYoutubeSearchVersion.current;
     if (!isTauri() || !globalYoutubeSearchEnabled || query.length < 2) {
-      setGlobalYoutubeResults([]); setGlobalYoutubeError(""); setGlobalYoutubeSearching(false);
+      setGlobalYoutubeResults([]); setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit); setGlobalYoutubeHasMore(false); setGlobalYoutubeError(""); setGlobalYoutubeSearching(false);
       return;
     }
     const cacheKey = query.toLocaleLowerCase();
     const cached = youtubeSearchCache.current.get(cacheKey);
     if (cached && Date.now() - cached.savedAt < 60_000) {
-      setGlobalYoutubeResults(cached.results.slice(0, 5)); setGlobalYoutubeError(""); setGlobalYoutubeSearching(false);
+      const hasMore = cached.hasMore ?? youtubeSearchCanContinue(query, cached.results.length);
+      setGlobalYoutubeResults(cached.results); setGlobalYoutubeVisibleLimit(hasMore ? youtubeGlobalInitialResultLimit : cached.results.length); setGlobalYoutubeHasMore(hasMore); setGlobalYoutubeError(""); setGlobalYoutubeSearching(false);
       return;
     }
     if (!browserOnline) {
-      setGlobalYoutubeResults([]); setGlobalYoutubeError("YouTube search is unavailable offline. Your local matches are still shown."); setGlobalYoutubeSearching(false);
+      setGlobalYoutubeResults([]); setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit); setGlobalYoutubeHasMore(false); setGlobalYoutubeError("YouTube search is unavailable offline. Your local matches are still shown."); setGlobalYoutubeSearching(false);
       return;
     }
-    setGlobalYoutubeResults([]); setGlobalYoutubeError(""); setGlobalYoutubeSearching(true);
+    setGlobalYoutubeResults([]); setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit); setGlobalYoutubeHasMore(false); setGlobalYoutubeError(""); setGlobalYoutubeSearching(true);
     const timer = window.setTimeout(() => {
-      void api.youtubeSearch(query).then((results) => {
+      void api.youtubeSearch(query, youtubeSearchPageSize, 0).then((results) => {
         if (globalYoutubeSearchVersion.current !== version) return;
-        setGlobalYoutubeResults(results.slice(0, 5));
-        youtubeSearchCache.current.set(cacheKey, { results, savedAt: Date.now() });
+        const hasMore = youtubeSearchCanContinue(query, results.length);
+        setGlobalYoutubeResults(results); setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit); setGlobalYoutubeHasMore(hasMore);
+        youtubeSearchCache.current.set(cacheKey, { results, hasMore, savedAt: Date.now() });
       }).catch(() => {
         if (globalYoutubeSearchVersion.current === version) {
           setGlobalYoutubeResults([]);
+          setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit);
+          setGlobalYoutubeHasMore(false);
           setGlobalYoutubeError(navigator.onLine ? "YouTube search couldn't load. Check your connection and try again." : "YouTube search is unavailable offline. Your local matches are still shown.");
         }
       }).finally(() => { if (globalYoutubeSearchVersion.current === version) setGlobalYoutubeSearching(false); });
@@ -1319,16 +1337,67 @@ export default function App() {
   }
   const playCounts = useMemo(() => new Map(listeningHistory.map((entry) => [entry.trackId, entry.playCount])), [listeningHistory]);
   const rows = (items: Track[], emptyTitle = "No songs here") => <TrackRows items={items} player={player} favorites={favoriteSet} compact={compact} playCounts={playCounts} showPlayCount={page.section === "Recently Played"} onPlay={(track) => playCollection(track, items)} onFavorite={toggleFavorite} onMenu={openTrackMenu} emptyTitle={scanning ? "Scanning music…" : search || inlineSearch ? "No results" : emptyTitle} emptyMessage={scanning ? "Reading local audio and artwork." : search || inlineSearch ? "Try another search." : page.section === "Favorites" ? "Save songs with the heart in their action menu." : page.section === "Recently Played" ? "Songs will appear here after you play them." : page.detail?.kind === "playlist" ? "Add songs to this playlist from your library." : "Add a music folder to get started."} emptyAction={!scanning && !search && !inlineSearch && selectedPlaylist && selectedPlaylist.name.toLocaleLowerCase() !== "youtube" ? <button className="primary-button playlist-add-songs" onClick={() => { setAddSongsPlaylistId(selectedPlaylist.id); setAddSongsSelected([]); setAddSongsSearch(""); setAddSongsVisibleLimit(100); }}><Plus size={15}/>Add songs</button> : undefined} />;
+  async function loadMoreYoutubeFolderResults() {
+    const query = youtubeQuery.trim();
+    if (!query || youtubeSearching || youtubeLoadingMore || !youtubeHasMore) return;
+    const version = youtubeSearchVersion.current;
+    const offset = youtubeResults.length;
+    setYoutubeLoadingMore(true);
+    try {
+      const next = await api.youtubeSearch(query, youtubeSearchPageSize, offset);
+      if (youtubeSearchVersion.current !== version) return;
+      setYoutubeResults((current) => {
+        const known = new Set(current.map((result) => result.id));
+        const merged = [...current, ...next.filter((result) => !known.has(result.id))];
+        youtubeSearchCache.current.set(query.toLocaleLowerCase(), { results: merged, hasMore: youtubeSearchCanContinue(query, next.length), savedAt: Date.now() });
+        return merged;
+      });
+      setYoutubeHasMore(youtubeSearchCanContinue(query, next.length));
+      setYoutubeVisibleLimit((limit) => limit + youtubeSearchPageSize);
+    } catch (error) {
+      if (youtubeSearchVersion.current === version) setMessage(`Could not load more YouTube results: ${String(error)}`);
+    } finally {
+      setYoutubeLoadingMore(false);
+    }
+  }
+  async function loadMoreGlobalYoutubeResults() {
+    const query = search.trim();
+    if (!query || globalYoutubeSearching || globalYoutubeLoadingMore || !globalYoutubeHasMore) return;
+    const version = globalYoutubeSearchVersion.current;
+    const offset = globalYoutubeResults.length;
+    setGlobalYoutubeLoadingMore(true);
+    try {
+      const next = await api.youtubeSearch(query, youtubeSearchPageSize, offset);
+      if (globalYoutubeSearchVersion.current !== version) return;
+      setGlobalYoutubeResults((current) => {
+        const known = new Set(current.map((result) => result.id));
+        const merged = [...current, ...next.filter((result) => !known.has(result.id))];
+        youtubeSearchCache.current.set(query.toLocaleLowerCase(), { results: merged, hasMore: youtubeSearchCanContinue(query, next.length), savedAt: Date.now() });
+        return merged;
+      });
+      setGlobalYoutubeHasMore(youtubeSearchCanContinue(query, next.length));
+      setGlobalYoutubeVisibleLimit((limit) => limit + youtubeSearchPageSize);
+    } catch (error) {
+      if (globalYoutubeSearchVersion.current === version) setMessage(`Could not load more YouTube results: ${String(error)}`);
+    } finally {
+      setGlobalYoutubeLoadingMore(false);
+    }
+  }
   const globalSearchContent = search.trim() ? <>
     {!isAndroid && isTauri() && globalYoutubeSearchEnabled && search.trim().length >= 2 && <section className="global-search-group global-youtube-search-group">
       <h2>YouTube</h2>
-      {globalYoutubeSearching ? Array.from({ length: 3 }, (_, index) => <div className="global-search-youtube-skeleton" key={index}><span/><i/><i/></div>) : globalYoutubeError ? <p className="global-search-status" role="status">{globalYoutubeError}</p> : globalYoutubeResults.length ? globalYoutubeResults.map((result) => <div className="global-youtube-result-row" key={result.id}>
-        <button className="global-search-result global-youtube-result" role="option" aria-label={`Download ${result.title} from YouTube`} onClick={() => requestYoutubeDownload(result, search)}>
-          {result.thumbnail ? <img className="cover global-search-cover" src={result.thumbnail} alt="" loading="lazy"/> : <span className="cover global-search-cover global-youtube-placeholder"><Youtube size={18}/></span>}
-          <span className="search-result-copy"><strong>{result.title}</strong><small>YouTube · {result.isPlaylist ? "Playlist" : `${result.durationSeconds == null ? "Audio" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span>
-        </button>
-        {!globalYoutubeDownloadRequested.includes(result.url) && !youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) && <button className="global-youtube-download" aria-label={`Download ${result.title}`} title="Download audio" onClick={() => requestYoutubeDownload(result, search)}><Download size={16}/></button>}
-      </div>) : !globalYoutubeSearching && !globalYoutubeError ? <p className="global-search-status">No YouTube matches.</p> : null}
+      {globalYoutubeSearching ? Array.from({ length: 3 }, (_, index) => <div className="global-search-youtube-skeleton" key={index}><span/><i/><i/></div>) : globalYoutubeError ? <p className="global-search-status" role="status">{globalYoutubeError}</p> : globalYoutubeResults.length ? <>
+        <div className="global-youtube-results-scroll" role="region" aria-label="YouTube search results">
+          {globalYoutubeResults.slice(0, globalYoutubeVisibleLimit).map((result) => <div className="global-youtube-result-row" key={result.id}>
+            <button className="global-search-result global-youtube-result" role="option" aria-label={`Download ${result.title} from YouTube`} onClick={() => requestYoutubeDownload(result, search)}>
+              {result.thumbnail ? <img className="cover global-search-cover" src={result.thumbnail} alt="" loading="lazy"/> : <span className="cover global-search-cover global-youtube-placeholder"><Youtube size={18}/></span>}
+              <span className="search-result-copy"><strong>{result.title}</strong><small>YouTube · {result.isPlaylist ? "Playlist" : `${result.durationSeconds == null ? "Audio" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span>
+            </button>
+            {!globalYoutubeDownloadRequested.includes(result.url) && !youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) && <button className="global-youtube-download" aria-label={`Download ${result.title}`} title="Download audio" onClick={() => requestYoutubeDownload(result, search)}><Download size={16}/></button>}
+          </div>)}
+        </div>
+        {globalYoutubeHasMore && <button className="youtube-load-more global-youtube-load-more" disabled={globalYoutubeLoadingMore} onClick={() => void loadMoreGlobalYoutubeResults()}>{globalYoutubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}
+      </> : !globalYoutubeSearching && !globalYoutubeError ? <p className="global-search-status">No YouTube matches.</p> : null}
     </section>}
     {searchResults.length ? ["Song", "Artist", "Album", "Folder", "Playlist"].map((type) => {
       const group = searchResults.filter((result) => result.type === type);
@@ -1371,7 +1440,7 @@ export default function App() {
           <button className="mobile-icon-button" aria-label="Settings" onClick={() => { setMobileTab("home"); navigate({ section: "Settings" }); }}><Settings2 size={20}/></button>
         </div>
       </header>}
-      <header className="topbar"><div className="history-nav"><div className="app-menu-anchor"><button className="icon-button menu-trigger" aria-label="Application menu" aria-expanded={appMenu} onClick={() => { setAppMenu(!appMenu); setMenu(null); }}><MoreHorizontal size={22}/></button>{appMenu && <div className="action-menu app-menu"><button onClick={() => { chooseLibrarySource(); setAppMenu(false); }}><Plus size={15}/>Add music folder</button><button onClick={() => { void refresh(); setAppMenu(false); }}><RefreshCw size={15}/>Refresh library</button><button onClick={() => newPlaylist()}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><button onClick={() => navigate({ section: "Settings" })}><Settings2 size={15}/>Settings</button><button onClick={() => { setAboutOpen(true); setAppMenu(false); }}><AudioLines size={15}/>About MichoPlay</button></div>}</div><button className="icon-button" aria-label="Go back" disabled={history.index === 0} onClick={() => travel(-1)}><ChevronLeft size={24}/></button><button className="icon-button" aria-label="Go forward" disabled={history.index === history.entries.length - 1} onClick={() => travel(1)}><ChevronRight size={24}/></button></div><div className={`search-box global-search ${searchOpen ? "expanded" : ""}`} role="search"><Search size={17}/><input aria-label="Search all music" aria-expanded={searchOpen} aria-controls="global-search-results" placeholder="What do you want to play?" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { setSearch(event.target.value); setSearchOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") setSearchOpen(false); else if (event.key === "ArrowDown") { event.preventDefault(); document.querySelector<HTMLButtonElement>(".global-search-result")?.focus(); } else if (event.key === "Enter") { event.preventDefault(); const firstSearchResult = deferredSearch === search ? searchResults[0] : buildSearchResults(search)[0]; if (firstSearchResult) chooseSearchResult(firstSearchResult); else if (globalYoutubeResults[0]) requestYoutubeDownload(globalYoutubeResults[0], search); } }}/>{search && <button className="icon-button" aria-label="Clear search" onClick={() => { setSearch(""); setSearchOpen(true); }}><X size={15}/></button>}{searchOpen && <div className="global-search-popover" id="global-search-results" role="listbox" aria-label="Search results">{globalSearchContent}</div>}</div><button className={`topbar-downloads ${showPanel && panelView === "downloads" ? "active" : ""}`} aria-label="Downloads" title="Downloads" onClick={() => { setPanelView("downloads"); setShowPanel(true); }}><Download size={18}/></button><button className={`topbar-settings ${page.section === "Settings" ? "active" : ""}`} aria-label="Settings" title="Settings" onClick={() => navigate({ section: "Settings" })}><Settings2 size={18}/></button></header>
+      <header className="topbar"><div className="history-nav"><div className="app-menu-anchor"><button className="icon-button menu-trigger" aria-label="Application menu" aria-expanded={appMenu} onClick={() => { setAppMenu(!appMenu); setMenu(null); }}><MoreHorizontal size={22}/></button>{appMenu && <div className="action-menu app-menu"><button onClick={() => { chooseLibrarySource(); setAppMenu(false); }}><Plus size={15}/>Add music folder</button><button onClick={() => { void refresh(); setAppMenu(false); }}><RefreshCw size={15}/>Refresh library</button><button onClick={() => newPlaylist()}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><button onClick={() => navigate({ section: "Settings" })}><Settings2 size={15}/>Settings</button><button onClick={() => { setAboutOpen(true); setAppMenu(false); }}><AudioLines size={15}/>About MichoPlay</button></div>}</div><button className="icon-button" aria-label="Go back" disabled={history.index === 0} onClick={() => travel(-1)}><ChevronLeft size={24}/></button><button className="icon-button" aria-label="Go forward" disabled={history.index === history.entries.length - 1} onClick={() => travel(1)}><ChevronRight size={24}/></button></div><div className={`search-box global-search ${searchOpen ? "expanded" : ""}`} role="search"><Search size={17}/><input aria-label="Search all music" aria-expanded={searchOpen} aria-controls="global-search-results" placeholder="What do you want to play?" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { setSearch(event.target.value); setSearchOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") setSearchOpen(false); else if (event.key === "ArrowDown") { event.preventDefault(); document.querySelector<HTMLButtonElement>(".global-search-result")?.focus(); } else if (event.key === "Enter") event.preventDefault(); }}/>{search && <button className="icon-button" aria-label="Clear search" onClick={() => { setSearch(""); setSearchOpen(true); }}><X size={15}/></button>}{searchOpen && <div className="global-search-popover" id="global-search-results" role="listbox" aria-label="Search results">{globalSearchContent}</div>}</div><button className={`topbar-downloads ${showPanel && panelView === "downloads" ? "active" : ""}`} aria-label="Downloads" title="Downloads" onClick={() => { setPanelView("downloads"); setShowPanel(true); }}><Download size={18}/></button><button className={`topbar-settings ${page.section === "Settings" ? "active" : ""}`} aria-label="Settings" title="Settings" onClick={() => navigate({ section: "Settings" })}><Settings2 size={18}/></button></header>
       <div className={`work-area ${showPanel ? "with-panel" : "without-panel"}`}>
         <section className="content-scroll" aria-label={heading}>
           {availableUpdate && <div className="update-notice" role="status">
@@ -1417,8 +1486,8 @@ export default function App() {
               <div className="mobile-download-actions">{item.status === "downloading" || item.status === "queued" ? <><button aria-label={`Pause ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "pause")}><Pause size={17}/></button><button aria-label={`Cancel ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "cancel")}><X size={17}/></button></> : item.status === "paused" || item.status === "failed" ? <><button aria-label={`${item.status === "failed" ? "Retry" : "Resume"} ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "resume")}><Play size={17}/></button><button aria-label={`Remove ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "remove")}><X size={17}/></button></> : <button className="download-menu-trigger" aria-label={`More actions for ${item.title}`} onClick={(event) => openDownloadedTrackMenu(item, event)}><MoreVertical size={19}/></button>}</div>
             </article>)}</div> : <div className="mobile-download-empty"><Download size={30}/><strong>No downloads yet</strong><span>Find a song on YouTube and tap Download. It will appear here.</span><button className="primary-button" onClick={openYoutubePage}><Youtube size={16}/>Find music</button></div>}
           </div> : isAndroid && mobileTab === "search" ? <div className="mobile-search-view">
-            <label className="mobile-search-input"><Search size={22}/><input aria-label="Search your library" placeholder="What do you want to listen to?" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && searchResults[0]) chooseSearchResult(searchResults[0]); }}/>{search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={19}/></button>}</label>
-            {globalYoutubeSearchEnabled && search.trim().length >= 2 && <section className="mobile-youtube-search-results"><h2>YouTube</h2>{globalYoutubeSearching ? <div className="mobile-youtube-search-loading"><span/><span/><span/></div> : globalYoutubeResults.length ? globalYoutubeResults.map((result) => <article className="mobile-youtube-search-result" key={result.id}><button className="mobile-youtube-search-open" onClick={() => requestYoutubeDownload(result, search)}><span>{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy"/> : <Youtube size={18}/>}</span><span className="mobile-youtube-search-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · Size varies" : `${result.durationSeconds == null ? "YouTube" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span></button></article>) : globalYoutubeError ? <p>{globalYoutubeError}</p> : <p>No YouTube matches.</p>}</section>}
+            <label className="mobile-search-input"><Search size={22}/><input aria-label="Search your library" placeholder="What do you want to listen to?" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}/>{search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={19}/></button>}</label>
+            {globalYoutubeSearchEnabled && search.trim().length >= 2 && <section className="mobile-youtube-search-results"><h2>YouTube</h2>{globalYoutubeSearching ? <div className="mobile-youtube-search-loading"><span/><span/><span/></div> : globalYoutubeResults.length ? <><div className="mobile-youtube-results-scroll" role="region" aria-label="YouTube search results">{globalYoutubeResults.slice(0, globalYoutubeVisibleLimit).map((result) => <article className="mobile-youtube-search-result" key={result.id}><button className="mobile-youtube-search-open" onClick={() => requestYoutubeDownload(result, search)}><span>{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy"/> : <Youtube size={18}/>}</span><span className="mobile-youtube-search-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · Size varies" : `${result.durationSeconds == null ? "YouTube" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span></button></article>)}</div>{globalYoutubeHasMore && <button className="youtube-load-more mobile-youtube-load-more" disabled={globalYoutubeLoadingMore} onClick={() => void loadMoreGlobalYoutubeResults()}>{globalYoutubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}</> : globalYoutubeError ? <p>{globalYoutubeError}</p> : <p>No YouTube matches.</p>}</section>}
             {search.trim() ? searchResults.length ? <div className="mobile-search-results">{["Song", "Artist", "Album", "Folder", "Playlist"].map((type) => { const group = searchResults.filter((result) => result.type === type); return group.length ? <section className="mobile-result-group" key={type}><h2>{type === "Song" ? "Songs" : `${type}s`}</h2>{group.map((result) => <GlobalSearchResultButton key={`${result.type}-${result.title}-${result.subtitle}`} result={result} onClick={() => chooseSearchResult(result)} isPlaying={result.trackId === player.currentTrackId && player.isPlaying}/>)}</section> : null; })}</div> : <div className="mobile-search-empty"><strong>No matches for “{search}”</strong><span>Try a song, artist, album, folder, or playlist name.</span></div> : recentSearchResults.length ? <section className="mobile-result-group"><h2>Recent searches</h2>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); }} showPlayHover={false}/> : null)}</section> : <div className="mobile-search-empty"><strong>Search your music</strong><span>Find songs, artists, albums, folders, and playlists saved on this device.</span></div>}
           </div> : isAndroid && mobileTab === "library" ? <div className="mobile-library-view">
             <div className="mobile-library-list">
@@ -1463,21 +1532,21 @@ export default function App() {
             <div className={`collection-heading ${listPage ? "detail-heading" : ""}`}>
               {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/> }{isAndroid && listPage && <button className="mobile-detail-back" aria-label="Back" onClick={() => { if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}><ChevronLeft size={24}/></button>}<div className="heading-foreground">{listPage && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={page.detail?.kind === "folder" ? <FolderOpen size={40}/> : page.section === "Favorites" ? <Heart size={36} fill="currentColor"/> : <Music2 size={36}/>}/>}<div className="heading-copy"><h1>{heading}</h1><p>{isYoutubePlaylist ? "Download audio from YouTube by searching or pasting a link." : listPage ? `${collectionTracks.length} songs · ${time(collectionDurationMs)}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : `${playlists.length} playlists`}</p></div></div>
             </div>
-          {listPage ? <>{isYoutubePlaylist && <section className="youtube-downloader" aria-label="Search YouTube audio">
+          {listPage ? <>{isYoutubePlaylist && <section className="youtube-downloader youtube-downloader-featured" aria-label="Search YouTube audio">
             <div className="youtube-search-header">
             <form className="youtube-search-form" onSubmit={(event) => event.preventDefault()}>
-              <label className="youtube-search-input"><Search size={16}/><input type="text" aria-label="Search YouTube" placeholder="Search songs or paste a YouTube link" value={youtubeQuery} onChange={(event) => setYoutubeQuery(event.target.value)}/>{youtubeQuery && <button type="button" aria-label="Clear YouTube search" onClick={() => setYoutubeQuery("")}><X size={15}/></button>}</label>
+              <label className="youtube-search-input youtube-search-input-featured"><Youtube size={18}/><span className="youtube-search-input-copy"><strong>Search YouTube</strong><input type="text" aria-label="Search YouTube" placeholder="Song, artist, or paste a YouTube link" value={youtubeQuery} onChange={(event) => setYoutubeQuery(event.target.value)}/></span>{youtubeQuery && <button type="button" aria-label="Clear YouTube search" onClick={() => setYoutubeQuery("")}><X size={15}/></button>}</label>
             </form>
             </div>
             {youtubeSearching ? <div className="youtube-search-grid" aria-label="Loading YouTube results">{Array.from({ length: 6 }, (_, index) => <div className="youtube-result-skeleton" key={index}><span/><div><i/><i/></div></div>)}</div>
               : youtubeSearchError ? <p className="youtube-search-empty" role="alert">{youtubeSearchError}</p>
-              : youtubeQuery.trim() && youtubeResults.length ? <div className="youtube-search-grid" aria-label="YouTube search results">{youtubeResults.map((result) => <article className="youtube-result-card" key={result.id}>
+              : youtubeQuery.trim() && youtubeResults.length ? <><div className="youtube-results-scroll" role="region" aria-label="YouTube search results"><div className="youtube-search-grid">{youtubeResults.slice(0, youtubeVisibleLimit).map((result) => <article className="youtube-result-card" key={result.id}>
                 <div className="youtube-result-preview">
                   <span className="youtube-result-art">{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/> : <Youtube size={24}/>}<span className="youtube-result-duration">{result.durationSeconds === null ? (result.isPlaylist ? "Playlist" : "YouTube") : durationLabel(result.durationSeconds)}</span></span>
                   <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · M4A audio" : `Video · M4A · ${youtubeResultSize(result)}`}</small></span>
                 </div>
                 <button className="youtube-result-download" aria-label={`Download ${result.title}`} onClick={() => requestYoutubeDownload(result)} disabled={globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status))}><Download size={14}/><span>{globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) ? "Queued" : "Download"}</span></button>
-              </article>)}</div>
+              </article>)}</div></div>{youtubeHasMore && <button className="youtube-load-more" disabled={youtubeLoadingMore} onClick={() => void loadMoreYoutubeFolderResults()}>{youtubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}</>
               : youtubeQuery.trim() ? <p className="youtube-search-empty">No videos found. Try a different title or link.</p> : null}
           </section>}
             <div className="collection-tools"><div className="play-actions"><button className={`primary-play ${collectionHasCurrent ? "is-playing" : ""}`} aria-label={collectionHasCurrent && player.isPlaying ? `Pause ${heading}` : `Play ${heading}`} disabled={!visibleTracks.length} onClick={() => { if (collectionHasCurrent) void run(api.toggle); else if (sortedVisibleTracks[0]) playCollection(sortedVisibleTracks[0]); }}>{collectionHasCurrent && player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button><button className={`round-button shuffle-control ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" disabled={!visibleTracks.length} onClick={() => void run(api.shuffle)}><Shuffle size={18}/></button>{selectedPlaylist && <><button className="text-action" onClick={() => newPlaylist(undefined, selectedPlaylist)}><Pencil size={14}/>Rename</button><button className="icon-button" aria-label="Delete playlist" onClick={() => confirmDeletePlaylist(selectedPlaylist)}><Trash2 size={16}/></button></>}</div><div className="collection-tools-right"><label className="collection-search"><Search size={15}/><input aria-label={`Search in ${heading}`} placeholder={`Search in ${heading}`} value={inlineSearch} onChange={(event) => setInlineSearch(event.target.value)}/>{inlineSearch && <button className="icon-button" aria-label="Clear collection search" onClick={() => setInlineSearch("")}><X size={14}/></button>}</label><div className="sort-control"><button className={`sort-trigger ${sortMenuOpen ? "open" : ""}`} aria-label={`Sort by ${trackSortOptions.find((option) => option.key === sortBy)?.label}`} aria-expanded={sortMenuOpen} onClick={() => setSortMenuOpen((open) => !open)}><span>{trackSortOptions.find((option) => option.key === sortBy)?.label}</span><ListFilter size={15}/></button>{sortMenuOpen && <div className="sort-menu" role="menu"><strong className="sort-menu-heading">Sort by</strong>{trackSortOptions.map((option) => <button key={option.key} role="menuitemradio" aria-checked={sortBy === option.key} className={`sort-menu-option ${sortBy === option.key ? "selected" : ""}`} onClick={() => { setSortBy(option.key); localStorage.setItem("michoplay-collection-sort", JSON.stringify(option.key)); setSortMenuOpen(false); }}><span>{option.label}</span>{sortBy === option.key && <Check size={15}/>}</button>)}<span className="sort-menu-divider"/><strong className="sort-menu-heading">View as</strong><button role="menuitemradio" aria-checked={!compact} className={`sort-menu-option view-option ${!compact ? "selected" : ""}`} onClick={() => { setCompact(false); setSortMenuOpen(false); }}><List size={15}/><span>List</span>{!compact && <Check size={15}/>}</button><button role="menuitemradio" aria-checked={compact} className={`sort-menu-option view-option ${compact ? "selected" : ""}`} onClick={() => { setCompact(true); setSortMenuOpen(false); }}><AlignJustify size={15}/><span>Compact</span>{compact && <Check size={15}/>}</button></div>}</div></div></div>{rows(sortedVisibleTracks, page.section === "Favorites" ? "No favorites yet" : page.section === "Recently Played" ? "No listening history yet" : "No songs here")}</> : page.section === "Home" ? <div className="home-section android-home">
