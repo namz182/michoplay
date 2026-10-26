@@ -2123,50 +2123,68 @@ fn emit_youtube_downloads(app: &AppHandle) {
 }
 
 #[cfg(not(target_os = "android"))]
-fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) {
-    let Some(progress) = line.strip_prefix("__MICHOPLAY_PROGRESS__") else {
-        return;
+fn youtube_progress_size(raw: &str) -> Option<u64> {
+    let mut parts = raw
+        .trim_start()
+        .trim_start_matches('~')
+        .trim_start()
+        .split_whitespace();
+    let first = parts.next()?;
+    let unit_start = first
+        .find(|character: char| character.is_ascii_alphabetic())
+        .unwrap_or(first.len());
+    let amount = first[..unit_start].parse::<f64>().ok()?;
+    let unit = if unit_start == first.len() {
+        parts.next()?
+    } else {
+        &first[unit_start..]
     };
-    let mut fields = progress.splitn(6, '|');
-    let raw_percent = fields.next().unwrap_or_default();
-    let downloaded_bytes = fields
-        .next()
-        .and_then(|value| value.trim().parse::<u64>().ok());
-    let total_bytes = fields
-        .next()
-        .filter(|value| !value.trim().is_empty() && *value != "NA")
-        .and_then(|value| value.trim().parse::<u64>().ok());
-    let total_bytes_estimate = fields
-        .next()
-        .filter(|value| !value.trim().is_empty() && *value != "NA")
-        .and_then(|value| value.trim().parse::<u64>().ok());
-    let total_bytes = total_bytes.or(total_bytes_estimate);
-    let title = fields.next().unwrap_or_default();
-    let speed = fields.next().unwrap_or_default().trim();
-    let percent = raw_percent
-        .trim()
-        .trim_end_matches('%')
+    let scale = match unit.to_ascii_lowercase().as_str() {
+        "b" => 1.0,
+        "kb" => 1000.0,
+        "mb" => 1000.0_f64.powi(2),
+        "gb" => 1000.0_f64.powi(3),
+        "kib" => 1024.0,
+        "mib" => 1024.0_f64.powi(2),
+        "gib" => 1024.0_f64.powi(3),
+        _ => return None,
+    };
+    Some((amount * scale) as u64)
+}
+
+#[cfg(not(target_os = "android"))]
+fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) -> bool {
+    let Some(progress) = line.trim().strip_prefix("[download]").map(str::trim) else {
+        return false;
+    };
+    let Some((raw_percent, remainder)) = progress.split_once('%') else {
+        return false;
+    };
+    let Some(percent) = raw_percent
         .trim()
         .parse::<f32>()
         .ok()
         .filter(|value| value.is_finite())
-        .map(|value| value.clamp(0.0, 100.0));
+    else {
+        return false;
+    };
+    let percent = percent.clamp(0.0, 100.0);
+    let total_bytes = remainder
+        .trim_start()
+        .strip_prefix("of")
+        .and_then(youtube_progress_size);
+    let downloaded_bytes =
+        total_bytes.map(|total| (total as f64 * f64::from(percent) / 100.0) as u64);
     if let Ok(mut manager) = app.state::<YoutubeDownloadState>().0.lock() {
         if let Some(task) = manager.tasks.iter_mut().find(|task| task.item.id == id) {
-            if !title.trim().is_empty() && !task.item.is_playlist {
-                task.item.title = title.trim().to_owned();
-            }
-            task.item.percent = percent.or(task.item.percent);
+            task.item.percent = Some(percent);
             task.item.downloaded_bytes = downloaded_bytes.or(task.item.downloaded_bytes);
             task.item.total_bytes = total_bytes.or(task.item.total_bytes);
-            task.item.message = if !speed.is_empty() && speed != "NA" {
-                speed.to_owned()
-            } else {
-                String::new()
-            };
+            task.item.message = progress.to_owned();
         }
     }
     emit_youtube_downloads(app);
+    true
 }
 
 #[cfg(not(target_os = "android"))]
@@ -2805,9 +2823,13 @@ fn youtube_download_worker(app: AppHandle) {
                     task.process_id = None;
                     if task.item.status == "downloading" {
                         match result {
-                            Ok(()) => {
+                            Ok(final_bytes) => {
                                 task.item.status = "completed".to_owned();
                                 task.item.percent = Some(100.0);
+                                if let Some(bytes) = final_bytes {
+                                    task.item.downloaded_bytes = Some(bytes);
+                                    task.item.total_bytes = Some(bytes);
+                                }
                                 task.item.message = "Saved to Music/YouTube".to_owned();
                             }
                             Err(error) => {
@@ -2829,7 +2851,7 @@ fn run_youtube_download(
     id: &str,
     url: &str,
     is_playlist: bool,
-) -> Result<(), String> {
+) -> Result<Option<u64>, String> {
     let directory = app
         .path()
         .audio_dir()
@@ -2840,11 +2862,12 @@ fn run_youtube_download(
     let yt_dlp = bundled_desktop_tool("yt-dlp")?;
     let ffmpeg = desktop_mp3_ffmpeg()?;
     let deno = bundled_desktop_tool("deno")?;
-    let output_template = directory.join("%(title)s [%(id)s].%(ext)s");
+    let output_template = directory.join("%(title).180B.%(ext)s");
     let mut child = hidden_command(yt_dlp)
         .arg("--ignore-config")
         .arg("--no-warnings")
         .arg("--newline")
+        .arg("--progress")
         .arg("--continue")
         .arg(if is_playlist {
             "--yes-playlist"
@@ -2866,8 +2889,8 @@ fn run_youtube_download(
         .arg("--embed-thumbnail")
         .arg("--convert-thumbnails")
         .arg("jpg")
-        .arg("--progress-template")
-        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(info.title)s|%(progress._speed_str)s")
+        .arg("--print")
+        .arg("after_move:__MICHOPLAY_FILE__%(filepath)s")
         .arg("--output")
         .arg(output_template)
         .arg("--")
@@ -2908,19 +2931,22 @@ fn run_youtube_download(
     let task_id = id.to_owned();
     let stderr_reader = std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().flatten() {
-            if line.starts_with("__MICHOPLAY_PROGRESS__") {
-                report_youtube_progress(&app_for_stderr, &task_id, &line);
-            } else if let Ok(mut lines) = tail.lock() {
-                lines.push(line);
-                if lines.len() > 24 {
-                    lines.remove(0);
+            if !report_youtube_progress(&app_for_stderr, &task_id, &line) {
+                if let Ok(mut lines) = tail.lock() {
+                    lines.push(line);
+                    if lines.len() > 24 {
+                        lines.remove(0);
+                    }
                 }
             }
         }
     });
+    let mut output_paths = Vec::<PathBuf>::new();
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines().flatten() {
-            if line.starts_with("__MICHOPLAY_PROGRESS__") {
+            if let Some(path) = line.strip_prefix("__MICHOPLAY_FILE__") {
+                output_paths.push(PathBuf::from(path));
+            } else {
                 report_youtube_progress(app, id, &line);
             }
         }
@@ -2930,7 +2956,15 @@ fn run_youtube_download(
         .map_err(|_| "yt-dlp stopped before the download finished.".to_owned())?;
     let _ = stderr_reader.join();
     if status.success() {
-        return Ok(());
+        let sizes = output_paths
+            .iter()
+            .map(std::fs::metadata)
+            .collect::<Result<Vec<_>, _>>();
+        let final_bytes = sizes
+            .ok()
+            .filter(|_| !output_paths.is_empty())
+            .map(|files| files.iter().map(std::fs::Metadata::len).sum());
+        return Ok(final_bytes);
     }
     let current_status = app
         .state::<YoutubeDownloadState>()
@@ -2946,7 +2980,7 @@ fn run_youtube_download(
         })
         .unwrap_or_default();
     if current_status == "paused" || current_status == "cancelled" {
-        return Ok(());
+        return Ok(None);
     }
     let details = stderr_tail
         .lock()
