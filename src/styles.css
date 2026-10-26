@@ -915,6 +915,35 @@ body.resizing { cursor: col-resize; user-select: none; }
 .about-caption { margin: -8px 0 0; color: #b4afb8; font-size: 12px; }
 .about-version { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 13px 14px; border-radius: 7px; background: rgba(255,255,255,.07); color: #bdb8c1; font-size: 12px; }
 .about-version strong { color: #f4f1f6; font-weight: 650; }
+.about-dialog { width: min(500px, calc(100vw - 32px)); max-height: calc(100dvh - 24px); overflow: auto; gap: 20px; padding: 18px; }
+.about-dialog-head { min-height: 30px; }
+.about-dialog-kicker { color: #f6f4f8; font-size: 18px; font-weight: 800; letter-spacing: -.3px; }
+.about-dialog-hero { display: grid; justify-items: center; gap: 10px; padding: 28px 22px 24px; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: #151416; text-align: center; }
+.about-dialog-hero .about-mark { width: 92px; height: 92px; border-radius: 25px; box-shadow: 0 10px 26px rgba(0,0,0,.24); }
+.about-dialog-hero h2 { margin: 3px 0 0; color: #f7f4f7; font-size: 28px; font-weight: 850; letter-spacing: -.8px; }
+.about-version-pill { padding: 6px 11px; border: 1px solid rgba(255,255,255,.34); border-radius: 999px; color: #eee7ed; font-size: 12px; font-weight: 800; }
+.about-dialog-hero p { margin: 0 0 8px; color: #aaa4ae; font-size: 12px; }
+.about-dialog-actions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.about-dialog-actions button { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; background: transparent; color: #f3edf3; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
+.about-dialog-actions button:hover, .about-dialog-links button:hover { background: rgba(255,255,255,.07); }
+.about-dialog-section { margin-top: 2px; }
+.about-dialog-section h3 { margin: 0 7px 10px; color: var(--blush); font-size: 12px; font-weight: 850; letter-spacing: 1px; text-transform: uppercase; }
+.about-dialog-links { overflow: hidden; border-radius: 16px; background: #1d1b1e; }
+.about-dialog-links button { display: grid; width: 100%; grid-template-columns: 26px minmax(0, 1fr) 18px; align-items: center; gap: 11px; min-height: 58px; padding: 9px 15px; border: 0; border-bottom: 1px solid rgba(255,255,255,.075); background: transparent; color: #f5f2f6; font: inherit; text-align: left; cursor: pointer; }
+.about-dialog-links button:last-child { border-bottom: 0; }
+.about-dialog-links button > svg { color: #e6dbe4; }
+.about-dialog-links button > svg:last-child { color: #aaa4ae; }
+.about-dialog-links span { min-width: 0; overflow: hidden; font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-height: 720px) {
+  .about-dialog { gap: 12px; padding: 14px; }
+  .about-dialog-hero { gap: 7px; padding: 16px 16px 14px; }
+  .about-dialog-hero .about-mark { width: 66px; height: 66px; border-radius: 19px; }
+  .about-dialog-hero .about-mark svg { width: 34px; height: 34px; }
+  .about-dialog-hero h2 { font-size: 23px; }
+  .about-dialog-hero p { margin-bottom: 3px; font-size: 11px; }
+  .about-dialog-actions button { min-height: 36px; }
+  .about-dialog-links button { min-height: 47px; padding-block: 6px; }
+}
 
 /* Keep the desktop library list roomy enough to scan while fitting more rows. */
 @media (min-width: 821px) {
