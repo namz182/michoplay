@@ -3418,7 +3418,7 @@ pub fn run() {
             repeat_mode: "off".to_owned(),
             autoplay: true,
             watch_library: true,
-            equalizer_enabled: Arc::new(AtomicBool::new(true)),
+            equalizer_enabled: Arc::new(AtomicBool::new(false)),
             ..PlayerCore::default()
         })))
         .manage(YoutubeDownloadState::default())
