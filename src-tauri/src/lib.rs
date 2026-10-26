@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use souvlaki::{MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
+    fs::{self, File},
     hash::{Hash, Hasher},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -24,12 +24,14 @@ use std::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex,
     },
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
+static LIBRARY_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[cfg(windows)]
@@ -188,7 +190,7 @@ impl<S: Source> Source for EqualizerSource<S> {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Track {
     id: u64,
@@ -205,7 +207,7 @@ struct Track {
     artwork_key: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Folder {
     path: String,
     name: String,
@@ -223,6 +225,7 @@ struct ImportedAudioFile {
     data_base64: String,
 }
 
+#[derive(Clone)]
 struct LibraryTrack {
     track: Track,
     path: PathBuf,
@@ -252,6 +255,9 @@ struct PlayerSnapshot {
 struct PlayerCore {
     roots: Vec<PathBuf>,
     tracks: Vec<LibraryTrack>,
+    track_indices: HashMap<u64, usize>,
+    artwork_by_key: HashMap<String, Arc<Artwork>>,
+    storage_dir: PathBuf,
     queue: Vec<u64>,
     current_queue_index: Option<usize>,
     output: Option<OutputStream>,
@@ -267,6 +273,13 @@ struct PlayerCore {
     sleep_timer_at_track_end: bool,
     equalizer_bands: Arc<[AtomicU32; 6]>,
     equalizer_enabled: Arc<AtomicBool>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryConfig {
+    version: u32,
+    roots: Vec<String>,
 }
 
 struct AppState(Mutex<PlayerCore>);
@@ -509,12 +522,13 @@ async fn library_open_audio_files(
     if selected.is_empty() {
         return Err("No supported audio files were found.".to_owned());
     }
-    let mut roots = state
-        .0
-        .lock()
-        .map_err(|_| "The library is unavailable.".to_owned())?
-        .roots
-        .clone();
+    let (mut roots, storage_dir) = {
+        let core = state
+            .0
+            .lock()
+            .map_err(|_| "The library is unavailable.".to_owned())?;
+        (core.roots.clone(), core.storage_dir.clone())
+    };
     for path in &selected {
         if let Some(parent) = path.parent() {
             let root = parent.to_path_buf();
@@ -524,9 +538,10 @@ async fn library_open_audio_files(
         }
     }
     let roots_copy = roots.clone();
-    let tracks = tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_copy))
-        .await
-        .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks =
+        tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_copy, &storage_dir))
+            .await
+            .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let selected_ids = tracks
         .iter()
         .filter(|track| selected.contains(&track.path))
@@ -903,20 +918,48 @@ fn read_folder_art(folder: &Path) -> Option<Arc<Artwork>> {
     None
 }
 
-fn scan_roots(roots: &[PathBuf]) -> Result<Vec<LibraryTrack>, String> {
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedTrack {
+    path: String,
+    root_path: String,
+    file_size: u64,
+    modified_at: u64,
+    track: Track,
+    artwork_mime: Option<String>,
+}
+
+fn artwork_cache_path(storage_dir: &Path, key: &str, mime: &str) -> PathBuf {
+    let extension = match mime {
+        "image/png" => "png",
+        "image/webp" => "webp",
+        _ => "jpg",
+    };
+    storage_dir
+        .join("artwork")
+        .join(format!("{key}.{extension}"))
+}
+
+fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>, String> {
+    let cache_available = fs::create_dir_all(storage_dir.join("artwork")).is_ok();
+    let index_path = storage_dir.join("library-index.json");
+    let cached = cache_available
+        .then(|| fs::read(&index_path).ok())
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<Vec<CachedTrack>>(&bytes).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect::<HashMap<_, _>>();
+
+    let canonical_roots = roots
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .filter(|root| root.is_dir())
+        .collect::<Vec<_>>();
     let mut paths = Vec::new();
-    for root in roots {
-        let Ok(canonical) = root.canonicalize() else {
-            continue;
-        };
-        if !canonical.is_dir() {
-            continue;
-        }
-        for entry in WalkDir::new(canonical)
-            .follow_links(false)
-            .into_iter()
-            .flatten()
-        {
+    for root in &canonical_roots {
+        for entry in WalkDir::new(root).follow_links(false).into_iter().flatten() {
             if entry.file_type().is_file() && supported_audio(entry.path()) {
                 if let Ok(path) = entry.path().canonicalize() {
                     paths.push(path);
@@ -926,28 +969,201 @@ fn scan_roots(roots: &[PathBuf]) -> Result<Vec<LibraryTrack>, String> {
     }
     paths.sort();
     paths.dedup();
+
     let mut folder_art = HashMap::new();
-    let mut result = Vec::new();
-    for path in paths {
-        let Some(root) = roots
+    let mut cached_artwork = HashMap::<String, Arc<Artwork>>::new();
+    let mut result = (0..paths.len())
+        .map(|_| None)
+        .collect::<Vec<Option<LibraryTrack>>>();
+    let mut jobs = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        let Some(root) = canonical_roots
             .iter()
             .filter(|root| path.starts_with(root))
             .max_by_key(|root| root.components().count())
         else {
             continue;
         };
+        let Ok(metadata) = path.metadata() else {
+            continue;
+        };
+        let file_size = metadata.len();
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_millis().min(u64::MAX as u128) as u64)
+            .unwrap_or_default();
+        let path_key = path.to_string_lossy().into_owned();
+
+        if let Some(entry) = cached.get(&path_key).filter(|entry| {
+            entry.file_size == file_size
+                && entry.modified_at == modified_at
+                && entry.root_path == root.to_string_lossy()
+        }) {
+            let artwork = match (&entry.track.artwork_key, &entry.artwork_mime) {
+                (Some(key), Some(mime)) => cached_artwork.get(key).cloned().or_else(|| {
+                    let data = fs::read(artwork_cache_path(storage_dir, key, mime)).ok()?;
+                    let artwork = Arc::new(Artwork {
+                        mime: mime.clone(),
+                        data,
+                    });
+                    cached_artwork.insert(key.clone(), artwork.clone());
+                    Some(artwork)
+                }),
+                _ => None,
+            };
+            if entry.track.artwork_key.is_none() || artwork.is_some() {
+                result[index] = Some(LibraryTrack {
+                    track: entry.track.clone(),
+                    path: path.clone(),
+                    artwork,
+                });
+                continue;
+            }
+        }
+
         let parent = path.parent().unwrap_or(root).to_owned();
-        let art = folder_art
+        let sidecar = folder_art
             .entry(parent.clone())
             .or_insert_with(|| read_folder_art(&parent))
             .clone();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        path.hash(&mut hasher);
-        // IPC numbers must survive JavaScript's 53-bit integer representation exactly.
-        let id = hasher.finish() & ((1u64 << 53) - 1);
-        result.push(read_track(&path, id, root, art));
+        jobs.push((index, path.clone(), root.clone(), sidecar));
+    }
+
+    // Keep metadata work off the UI thread and bound CPU and disk contention.
+    let worker_count = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(2)
+        .clamp(1, 4)
+        .min(jobs.len().max(1));
+    let chunk_size = jobs.len().div_ceil(worker_count);
+    thread::scope(|scope| {
+        let mut workers = Vec::new();
+        for chunk in jobs.chunks(chunk_size.max(1)) {
+            workers.push(scope.spawn(move || {
+                chunk
+                    .iter()
+                    .map(|(index, path, root, art)| {
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        path.hash(&mut hasher);
+                        // IPC numbers must survive JavaScript's 53-bit integer representation exactly.
+                        let id = hasher.finish() & ((1u64 << 53) - 1);
+                        (*index, read_track(path, id, root, art.clone()))
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+        for worker in workers {
+            if let Ok(items) = worker.join() {
+                for (index, track) in items {
+                    result[index] = Some(track);
+                }
+            }
+        }
+    });
+
+    let mut result = result.into_iter().flatten().collect::<Vec<_>>();
+    let mut shared_artwork = HashMap::<String, Arc<Artwork>>::new();
+    for item in &mut result {
+        if let (Some(key), Some(artwork)) = (&item.track.artwork_key, &item.artwork) {
+            let shared = shared_artwork
+                .entry(key.clone())
+                .or_insert_with(|| artwork.clone())
+                .clone();
+            item.artwork = Some(shared);
+        }
+    }
+    let mut index_entries = Vec::with_capacity(result.len());
+    let mut live_artwork = HashSet::new();
+    for item in &result {
+        let metadata = item.path.metadata().ok();
+        let file_size = metadata
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or_default();
+        let modified_at = metadata
+            .and_then(|value| value.modified().ok())
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_millis().min(u64::MAX as u128) as u64)
+            .unwrap_or_default();
+        let artwork_mime = item.artwork.as_ref().map(|art| art.mime.clone());
+        if let (Some(key), Some(art)) = (&item.track.artwork_key, &item.artwork) {
+            live_artwork.insert(key.clone());
+            if cache_available {
+                let art_path = artwork_cache_path(storage_dir, key, &art.mime);
+                if !art_path.exists() {
+                    let _ = fs::write(&art_path, &art.data);
+                }
+            }
+        }
+        index_entries.push(CachedTrack {
+            path: item.path.to_string_lossy().into_owned(),
+            root_path: item.track.root_path.clone(),
+            file_size,
+            modified_at,
+            track: item.track.clone(),
+            artwork_mime,
+        });
+    }
+    if cache_available {
+        let Ok(_cache_write) = LIBRARY_CACHE_WRITE_LOCK.lock() else {
+            return Ok(result);
+        };
+        if let Ok(index_bytes) = serde_json::to_vec(&index_entries) {
+            let temporary_index = storage_dir.join("library-index.json.tmp");
+            if fs::write(&temporary_index, index_bytes).is_ok() {
+                if index_path.exists() {
+                    let backup_index = storage_dir.join("library-index.json.previous");
+                    let _ = fs::remove_file(&backup_index);
+                    if fs::rename(&index_path, &backup_index).is_ok() {
+                        if fs::rename(&temporary_index, &index_path).is_ok() {
+                            let _ = fs::remove_file(backup_index);
+                        } else {
+                            let _ = fs::rename(&backup_index, &index_path);
+                        }
+                    }
+                } else {
+                    let _ = fs::rename(&temporary_index, &index_path);
+                }
+            }
+        }
+        prune_artwork_cache(&storage_dir.join("artwork"), &live_artwork);
     }
     Ok(result)
+}
+
+fn prune_artwork_cache(directory: &Path, live_keys: &HashSet<String>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    let mut files = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_stem()?.to_str()?.to_owned();
+            let metadata = path.metadata().ok()?;
+            Some((path, name, metadata.len(), metadata.modified().ok()))
+        })
+        .collect::<Vec<_>>();
+    for (path, key, _, _) in &files {
+        if !live_keys.contains(key) {
+            let _ = fs::remove_file(path);
+        }
+    }
+    files.retain(|(_, key, _, _)| live_keys.contains(key));
+    let mut total = files.iter().map(|(_, _, size, _)| *size).sum::<u64>();
+    if total <= 256 * 1024 * 1024 {
+        return;
+    }
+    files.sort_by_key(|(_, _, _, modified)| *modified);
+    for (path, _, size, _) in files {
+        if total <= 256 * 1024 * 1024 {
+            break;
+        }
+        let _ = fs::remove_file(path);
+        total = total.saturating_sub(size);
+    }
 }
 
 impl PlayerCore {
@@ -1016,6 +1232,20 @@ impl PlayerCore {
             .copied();
         self.roots = roots;
         self.tracks = tracks;
+        self.track_indices = self
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(index, track)| (track.track.id, index))
+            .collect();
+        self.artwork_by_key.clear();
+        for track in &self.tracks {
+            if let (Some(key), Some(artwork)) = (&track.track.artwork_key, &track.artwork) {
+                self.artwork_by_key
+                    .entry(key.clone())
+                    .or_insert_with(|| artwork.clone());
+            }
+        }
         let valid = self
             .tracks
             .iter()
@@ -1023,15 +1253,31 @@ impl PlayerCore {
             .collect::<HashSet<_>>();
         self.queue.retain(|id| valid.contains(id));
         self.priority_queue.retain(|id| valid.contains(id));
-        let added = self
-            .tracks
-            .iter()
-            .map(|track| track.track.id)
-            .filter(|id| !self.queue.contains(id))
-            .collect::<Vec<_>>();
-        self.queue.extend(added);
         self.current_queue_index =
             current_id.and_then(|id| self.queue.iter().position(|queued| *queued == id));
+        if !self.storage_dir.as_os_str().is_empty() {
+            let config = LibraryConfig {
+                version: 1,
+                roots: self
+                    .roots
+                    .iter()
+                    .map(|root| root.to_string_lossy().into_owned())
+                    .collect(),
+            };
+            if let (Ok(bytes), Ok(())) = (
+                serde_json::to_vec(&config),
+                fs::create_dir_all(&self.storage_dir),
+            ) {
+                let temporary = self.storage_dir.join("config.json.tmp");
+                let destination = self.storage_dir.join("config.json");
+                if fs::write(&temporary, bytes).is_ok() {
+                    let _ = fs::rename(&temporary, &destination).or_else(|_| {
+                        let _ = fs::remove_file(&destination);
+                        fs::rename(&temporary, &destination)
+                    });
+                }
+            }
+        }
         if self.current_queue_index.is_none() {
             self.is_playing = false;
             if let Some(sink) = &self.sink {
@@ -1089,13 +1335,9 @@ impl PlayerCore {
     }
 
     fn find_track_index(&self, id: u64) -> Result<usize, String> {
-        self.tracks
-            .iter()
-            .position(|track| track.track.id == id)
-            .ok_or_else(|| {
-                "That song is no longer in the library. Refresh the folder and try again."
-                    .to_owned()
-            })
+        self.track_indices.get(&id).copied().ok_or_else(|| {
+            "That song is no longer in the library. Refresh the folder and try again.".to_owned()
+        })
     }
 
     fn play_queue_index(&mut self, queue_index: usize) -> Result<(), String> {
@@ -1252,20 +1494,21 @@ async fn library_scan_folder(
         return Err("The selected path is not a folder.".to_owned());
     }
 
-    let mut roots = {
+    let (mut roots, storage_dir) = {
         let core = state
             .0
             .lock()
             .map_err(|_| "The library is unavailable.".to_owned())?;
-        core.roots.clone()
+        (core.roots.clone(), core.storage_dir.clone())
     };
     if !roots.contains(&canonical) {
         roots.push(canonical.clone());
     }
     let scan_roots_copy = roots.clone();
-    let tracks = tauri::async_runtime::spawn_blocking(move || scan_roots(&scan_roots_copy))
-        .await
-        .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks =
+        tauri::async_runtime::spawn_blocking(move || scan_roots(&scan_roots_copy, &storage_dir))
+            .await
+            .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let mut core = state
         .0
         .lock()
@@ -1356,19 +1599,21 @@ async fn library_import_and_play_audio_files(
     let folder = PathBuf::from(directory)
         .canonicalize()
         .map_err(|_| "Imported music could not be located.".to_owned())?;
-    let mut roots = state
-        .0
-        .lock()
-        .map_err(|_| "The library is unavailable.".to_owned())?
-        .roots
-        .clone();
+    let (mut roots, storage_dir) = {
+        let core = state
+            .0
+            .lock()
+            .map_err(|_| "The library is unavailable.".to_owned())?;
+        (core.roots.clone(), core.storage_dir.clone())
+    };
     if !roots.contains(&folder) {
         roots.push(folder.clone());
     }
     let roots_to_scan = roots.clone();
-    let tracks = tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan))
-        .await
-        .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks =
+        tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan, &storage_dir))
+            .await
+            .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let selected_ids = tracks
         .iter()
         .filter(|track| {
@@ -1391,7 +1636,9 @@ async fn library_import_and_play_audio_files(
 }
 
 #[derive(Deserialize)]
-struct YoutubeMusicDirectory { path: String }
+struct YoutubeMusicDirectory {
+    path: String,
+}
 
 #[tauri::command]
 async fn youtube_music_directory(
@@ -1401,7 +1648,8 @@ async fn youtube_music_directory(
     #[cfg(target_os = "android")]
     {
         let plugin = android_media_plugin(&bridge)?;
-        let directory: YoutubeMusicDirectory = call_android_media(plugin, "youtubeMusicDirectory", serde_json::json!({})).await?;
+        let directory: YoutubeMusicDirectory =
+            call_android_media(plugin, "youtubeMusicDirectory", serde_json::json!({})).await?;
         return Ok(directory.path);
     }
 
@@ -1583,7 +1831,12 @@ async fn youtube_search(
     #[cfg(target_os = "android")]
     {
         let plugin = android_media_plugin(&bridge)?;
-        call_android_media(plugin, "youtubeSearch", serde_json::json!({ "query": query })).await
+        call_android_media(
+            plugin,
+            "youtubeSearch",
+            serde_json::json!({ "query": query }),
+        )
+        .await
     }
 
     #[cfg(not(target_os = "android"))]
@@ -2004,7 +2257,11 @@ fn start_youtube_download_workers(app: AppHandle) {
         .0
         .lock()
         .map(|mut manager| {
-            let queued = manager.tasks.iter().filter(|task| task.item.status == "queued").count();
+            let queued = manager
+                .tasks
+                .iter()
+                .filter(|task| task.item.status == "queued")
+                .count();
             let available = MAX_CONCURRENT_YOUTUBE_DOWNLOADS.saturating_sub(manager.active_workers);
             let count = queued.min(available);
             manager.active_workers += count;
@@ -2270,17 +2527,19 @@ async fn library_remove_folder(
 ) -> Result<Vec<Track>, String> {
     let path = PathBuf::from(folder);
     let target = path.canonicalize().unwrap_or(path);
-    let mut roots = state
-        .0
-        .lock()
-        .map_err(|_| "The library is unavailable.".to_owned())?
-        .roots
-        .clone();
+    let (mut roots, storage_dir) = {
+        let core = state
+            .0
+            .lock()
+            .map_err(|_| "The library is unavailable.".to_owned())?;
+        (core.roots.clone(), core.storage_dir.clone())
+    };
     roots.retain(|root| root != &target);
     let roots_to_scan = roots.clone();
-    let tracks = tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan))
-        .await
-        .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks =
+        tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan, &storage_dir))
+            .await
+            .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let mut core = state
         .0
         .lock()
@@ -2305,14 +2564,50 @@ async fn library_refresh(
         }
     }
     let roots_to_scan = roots.clone();
-    let tracks = tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan))
-        .await
-        .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let storage_dir = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?
+        .storage_dir
+        .clone();
+    let tracks =
+        tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan, &storage_dir))
+            .await
+            .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let mut core = state
         .0
         .lock()
         .map_err(|_| "The library is unavailable.".to_owned())?;
     Ok(core.replace_library(roots, tracks))
+}
+
+#[tauri::command]
+fn library_saved_roots(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let core = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?;
+    Ok(core
+        .roots
+        .iter()
+        .map(|root| root.to_string_lossy().into_owned())
+        .collect())
+}
+
+#[tauri::command]
+fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
+    let index_path = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?
+        .storage_dir
+        .join("library-index.json");
+    let Ok(bytes) = fs::read(index_path) else {
+        return Ok(Vec::new());
+    };
+    let entries = serde_json::from_slice::<Vec<CachedTrack>>(&bytes)
+        .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
+    Ok(entries.into_iter().map(|entry| entry.track).collect())
 }
 
 #[tauri::command]
@@ -2342,10 +2637,9 @@ fn library_artwork(
         .0
         .lock()
         .map_err(|_| "The library is unavailable.".to_owned())?
-        .tracks
-        .iter()
-        .find(|track| track.track.artwork_key.as_deref() == Some(&artwork_key))
-        .and_then(|track| track.artwork.clone());
+        .artwork_by_key
+        .get(&artwork_key)
+        .cloned();
     Ok(art.map(|art| format!("data:{};base64,{}", art.mime, STANDARD.encode(&art.data))))
 }
 
@@ -2744,6 +3038,18 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            let storage_dir = app.path().app_local_data_dir()?.join(".michoplay");
+            fs::create_dir_all(&storage_dir)?;
+            if let Ok(mut core) = app.state::<AppState>().0.lock() {
+                core.storage_dir = storage_dir.clone();
+                if let Ok(bytes) = fs::read(storage_dir.join("config.json")) {
+                    if let Ok(config) = serde_json::from_slice::<LibraryConfig>(&bytes) {
+                        if config.version == 1 {
+                            core.roots = config.roots.into_iter().map(PathBuf::from).collect();
+                        }
+                    }
+                }
+            }
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 #[cfg(target_os = "windows")]
@@ -2932,6 +3238,8 @@ pub fn run() {
             youtube_download_remove,
             library_scan_folder,
             library_refresh,
+            library_saved_roots,
+            library_cached_tracks,
             library_remove_folder,
             library_artwork,
             take_pending_audio_opens,
@@ -2990,6 +3298,7 @@ mod tests {
             .collect();
         PlayerCore {
             tracks,
+            track_indices: (1..=4).enumerate().map(|(index, id)| (id, index)).collect(),
             queue: vec![1, 2, 3, 4],
             current_queue_index: Some(0),
             ..PlayerCore::default()
@@ -3055,6 +3364,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
+        let cache = root.with_extension("michoplay-cache");
         let leaf = root.join("Artist").join("Album");
         std::fs::create_dir_all(&leaf).unwrap();
         // A valid mono PCM WAV with one silent sample.
@@ -3075,8 +3385,8 @@ mod tests {
         std::fs::write(leaf.join("Silent.wav"), wav).unwrap();
         let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=").unwrap();
         std::fs::write(leaf.join("cover.png"), &png).unwrap();
-        let first = scan_roots(&[root.clone(), root.join("unavailable")]).unwrap();
-        let second = scan_roots(&[root.clone(), leaf.clone()]).unwrap();
+        let first = scan_roots(&[root.clone(), root.join("unavailable")], &cache).unwrap();
+        let second = scan_roots(&[root.clone(), leaf.clone()], &cache).unwrap();
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].track.title, "Silent");
         assert_eq!(first[0].track.folders.len(), 3);
@@ -3086,5 +3396,6 @@ mod tests {
         assert_eq!(first[0].artwork.as_ref().unwrap().data, png);
         assert!(first[0].track.artwork_key.is_some());
         std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(cache).unwrap();
     }
 }
