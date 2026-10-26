@@ -1263,16 +1263,27 @@ export default function App() {
     else setMessage("Sharing isn't available on this device.");
   }
   async function shareMichoPlay() {
-    const details = { title: "MichoPlay", text: "MichoPlay — offline music player", url: michoplayWebsiteUrl };
+    const title = "MichoPlay";
+    const text = "Check out MichoPlay, a free music player for Android, Windows, macOS, and Linux.";
+    if (isAndroid && isTauri()) {
+      try {
+        await api.shareText(title, text, michoplayWebsiteUrl);
+        return;
+      } catch {
+        // Continue with the browser share API or clipboard fallback when the
+        // native Android share activity is unavailable.
+      }
+    }
+    const details = { title, text, url: michoplayWebsiteUrl };
     if (navigator.share) {
       try { await navigator.share(details); return; } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
       }
     }
     try {
-      await navigator.clipboard.writeText(michoplayWebsiteUrl);
+      await navigator.clipboard.writeText(text + "\n\n" + michoplayWebsiteUrl);
       setMessage("MichoPlay website copied to the clipboard.");
-    } catch { setMessage("Copy this website to share MichoPlay: " + michoplayWebsiteUrl); }
+    } catch { setMessage("Copy this message to share MichoPlay: " + text + " " + michoplayWebsiteUrl); }
   }
   function newPlaylist(target?: Track, playlist?: Playlist) { setDialog({ target, playlist }); setPlaylistName(playlist?.name ?? ""); setMenu(null); }
   function savePlaylist() {

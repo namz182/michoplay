@@ -53,6 +53,13 @@ class YoutubeDownloadArgs {
   var id: String = ""
 }
 
+@InvokeArg
+class ShareTextArgs {
+  var title: String = ""
+  var text: String = ""
+  var url: String = ""
+}
+
 @TauriPlugin
 class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private val io = Executors.newCachedThreadPool()
@@ -87,6 +94,37 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       pendingActions.clear()
     }
     invoke.resolve(JSObject().apply { put("actions", actions) })
+  }
+
+  @Command
+  fun shareText(invoke: Invoke) {
+    val args = invoke.parseArgs(ShareTextArgs::class.java)
+    val title = args.title.trim().ifBlank { "MichoPlay" }
+    val text = buildString {
+      if (args.text.isNotBlank()) append(args.text.trim())
+      if (args.url.isNotBlank()) {
+        if (isNotEmpty()) append("\n\n")
+        append(args.url.trim())
+      }
+    }
+    if (text.isBlank()) {
+      invoke.reject("Nothing to share.")
+      return
+    }
+    activity.runOnUiThread {
+      try {
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+          type = "text/plain"
+          putExtra(Intent.EXTRA_TITLE, title)
+          putExtra(Intent.EXTRA_SUBJECT, title)
+          putExtra(Intent.EXTRA_TEXT, text)
+        }
+        activity.startActivity(Intent.createChooser(shareIntent, "Share MichoPlay"))
+        invoke.resolve()
+      } catch (error: Exception) {
+        invoke.reject(error.message ?: "Could not open the Android share menu.")
+      }
+    }
   }
 
   @Command

@@ -3,6 +3,7 @@ identifier = "default"
 description = "Allows MichoPlay's Android media bridge and event listener."
 commands.allow = [
   "chooseMusicFolder",
+  "shareText",
   "youtubeSearch",
   "youtubeDownloadsState",
   "youtubeDownloadEnqueue",

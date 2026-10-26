@@ -2224,6 +2224,31 @@ async fn library_discover_music_folders(
 }
 
 #[tauri::command]
+async fn media_share_text(
+    title: String,
+    text: String,
+    url: String,
+    bridge: State<'_, MediaBridge>,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        let _: serde_json::Value = call_android_media(
+            plugin,
+            "shareText",
+            serde_json::json!({ "title": title, "text": text, "url": url }),
+        )
+        .await?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (title, text, url, bridge);
+        Err("Native Android sharing is unavailable on this platform.".to_owned())
+    }
+}
+
+#[tauri::command]
 async fn library_pick_audio_files(
     bridge: State<'_, MediaBridge>,
 ) -> Result<Vec<String>, String> {
@@ -3710,6 +3735,7 @@ pub fn run() {
             library_pick_music_folder,
             library_discover_music_folders,
             library_pick_audio_files,
+            media_share_text,
             youtube_music_directory,
             youtube_search,
             youtube_downloads_state,
