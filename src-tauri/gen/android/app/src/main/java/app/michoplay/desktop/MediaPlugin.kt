@@ -49,7 +49,6 @@ class YoutubeDownloadArgs {
   var title: String = ""
   var thumbnail: String? = null
   var isPlaylist: Boolean = false
-  var estimatedBytes: Long? = null
   var id: String = ""
 }
 
@@ -346,7 +345,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.reject("Allow storage access, then tap Download again.")
       return
     }
-    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "estimatedBytes" to args.estimatedBytes, "status" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "message" to "Waiting to download")
+    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "message" to "Waiting to download")
     downloads.add(item); emitDownloads(); invoke.resolveObject(item); startQueuedDownloads()
   }
 
@@ -366,24 +365,33 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--newline")
           if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
           request.addOption("--playlist-end", "100")
-          request.addOption("-f", "bestaudio[ext=m4a]/bestaudio")
-          request.addOption("-x"); request.addOption("--audio-format", "m4a"); request.addOption("--embed-metadata")
+          request.addOption("-f", "bestaudio/best")
+          request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
           request.addOption("--embed-thumbnail")
+          request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(info.title)s|%(progress._speed_str)s")
           request.addOption("-o", File(staging, "%(title).180B [%(id)s].%(ext)s").absolutePath)
           YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
             val percent = progress.toDouble().coerceIn(0.0, 100.0)
             item["percent"] = percent
-            val totalMatch = Regex("of\\s+([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)").find(line)
-            if (totalMatch != null) item["totalBytes"] = toByteCount(totalMatch.groupValues[1], totalMatch.groupValues[2])
-            val downloadedMatch = Regex("([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)\\s*/").find(line)
+            val progressFields = line.removePrefix("__MICHOPLAY_PROGRESS__").takeIf { it != line }?.split("|", limit = 6) ?: emptyList()
+            val templateDownloaded = progressFields.getOrNull(1)?.trim()?.toLongOrNull()
+            val templateTotal = progressFields.getOrNull(2)?.trim()?.toLongOrNull()
+            val templateEstimate = progressFields.getOrNull(3)?.trim()?.toLongOrNull()
+            val totalMatch = Regex("of\\s+~?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)", RegexOption.IGNORE_CASE).find(line)
+            val rawTotal = totalMatch?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
+            val totalFromYoutube = templateTotal ?: templateEstimate ?: rawTotal
+            if (totalFromYoutube != null) item["totalBytes"] = totalFromYoutube
+            val downloadedMatch = Regex("(?:^|\\s)([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)\\s*(?:/|of\\b)", RegexOption.IGNORE_CASE).find(line)
+            val rawDownloaded = downloadedMatch?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
             val totalBytes = item["totalBytes"] as? Long
-            val downloadedBytes = if (downloadedMatch != null) {
-              toByteCount(downloadedMatch.groupValues[1], downloadedMatch.groupValues[2])
-            } else if (totalBytes != null) {
+            val downloadedBytes = templateDownloaded ?: rawDownloaded ?: if (totalBytes != null) {
               (totalBytes * percent / 100.0).toLong()
             } else null
             if (downloadedBytes != null) item["downloadedBytes"] = downloadedBytes
-            val speed = Regex("at\\s+([0-9]+(?:\\.[0-9]+)?\\s*[KMG]?i?B/s)").find(line)?.groupValues?.get(1)
+            val templateTitle = progressFields.getOrNull(4)?.trim().orEmpty()
+            if (templateTitle.isNotBlank() && item["isPlaylist"] != true) item["title"] = templateTitle
+            val templateSpeed = progressFields.getOrNull(5)?.trim().takeUnless { it.isNullOrBlank() || it == "NA" }
+            val speed = templateSpeed ?: Regex("at\\s+([0-9]+(?:\\.[0-9]+)?\\s*[KMG]?i?B/s)", RegexOption.IGNORE_CASE).find(line)?.groupValues?.get(1)
             if (speed != null) item["message"] = speed else if (item["message"] !is String || !(item["message"] as String).endsWith("/s")) item["message"] = ""
             emitDownloads()
             kotlin.Unit
@@ -447,7 +455,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     val values = ContentValues().apply {
       put(MediaStore.Audio.Media.DISPLAY_NAME, file.name)
       put(MediaStore.Audio.Media.TITLE, file.nameWithoutExtension)
-      put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
+      put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
       put(MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/MichoPlay/YouTube")
       put(MediaStore.Audio.Media.IS_PENDING, 1)
     }

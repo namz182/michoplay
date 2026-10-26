@@ -2085,7 +2085,6 @@ struct YoutubeDownloadItem {
     percent: Option<f32>,
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
-    estimated_bytes: Option<u64>,
     message: String,
 }
 
@@ -2189,6 +2188,46 @@ fn bundled_desktop_tool(name: &str) -> Result<std::path::PathBuf, String> {
         ));
     }
     Ok(path)
+}
+
+#[cfg(not(target_os = "android"))]
+fn ffmpeg_supports_mp3(path: &Path) -> bool {
+    let output = hidden_command(path)
+        .args(["-hide_banner", "-encoders"])
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    let report = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    report.lines().any(|line| {
+        line.split_whitespace()
+            .any(|field| matches!(field, "mp3" | "libmp3lame" | "libshine"))
+    })
+}
+
+#[cfg(not(target_os = "android"))]
+fn desktop_mp3_ffmpeg() -> Result<PathBuf, String> {
+    // The current redistributable bundle is LGPL-only and may not include an MP3 encoder.
+    // Prefer it when capable, then use a system encoder so MP3 downloads still work.
+    if let Ok(bundled) = bundled_desktop_tool("ffmpeg") {
+        if ffmpeg_supports_mp3(&bundled) {
+            return Ok(bundled);
+        }
+    }
+    let executable = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    if let Some(system) = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join(executable))
+        .find(|path| path.is_file() && ffmpeg_supports_mp3(path))
+    {
+        return Ok(system);
+    }
+    Err("MichoPlay needs FFmpeg with MP3 encoding support to download audio. Install FFmpeg with libmp3lame enabled, then try again.".to_owned())
 }
 
 #[tauri::command]
@@ -2471,7 +2510,6 @@ async fn youtube_download_enqueue(
     title: String,
     thumbnail: Option<String>,
     is_playlist: bool,
-    estimated_bytes: Option<u64>,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
     bridge: State<'_, MediaBridge>,
@@ -2482,7 +2520,7 @@ async fn youtube_download_enqueue(
         call_android_media(
             plugin,
             "youtubeDownloadEnqueue",
-            serde_json::json!({ "url": url, "title": title, "thumbnail": thumbnail, "isPlaylist": is_playlist, "estimatedBytes": estimated_bytes }),
+            serde_json::json!({ "url": url, "title": title, "thumbnail": thumbnail, "isPlaylist": is_playlist }),
         )
         .await
     }
@@ -2516,7 +2554,6 @@ async fn youtube_download_enqueue(
                 percent: None,
                 downloaded_bytes: None,
                 total_bytes: None,
-                estimated_bytes,
                 message: "Waiting to download".to_owned(),
             };
             manager.tasks.push(YoutubeDownloadTask {
@@ -2801,7 +2838,7 @@ fn run_youtube_download(
     std::fs::create_dir_all(&directory)
         .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
     let yt_dlp = bundled_desktop_tool("yt-dlp")?;
-    let ffmpeg = bundled_desktop_tool("ffmpeg")?;
+    let ffmpeg = desktop_mp3_ffmpeg()?;
     let deno = bundled_desktop_tool("deno")?;
     let output_template = directory.join("%(title)s [%(id)s].%(ext)s");
     let mut child = hidden_command(yt_dlp)
@@ -2814,9 +2851,11 @@ fn run_youtube_download(
         } else {
             "--no-playlist"
         })
+        .arg("--format")
+        .arg("bestaudio/best")
         .arg("--extract-audio")
         .arg("--audio-format")
-        .arg("m4a")
+        .arg("mp3")
         .arg("--audio-quality")
         .arg("0")
         .arg("--ffmpeg-location")

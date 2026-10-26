@@ -13,7 +13,7 @@ export type PlayerSnapshot = {
   equalizerBands: number[]; equalizerEnabled: boolean;
 };
 export type YoutubeSearchResult = { id: string; title: string; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean };
-export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; estimatedBytes?: number | null; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string };
+export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string };
 export const api = {
   scanFolder: (folder: string) => invoke<Track[]>("library_scan_folder", { folder }),
   cancelScan: () => invoke<void>("library_cancel_scan"),
@@ -32,7 +32,7 @@ export const api = {
   pickMusicFolder: () => invoke<{ path: string; count: number; name: string }>("library_pick_music_folder"),
   youtubeSearch: (query: string, limit = 15, offset = 0) => invoke<YoutubeSearchResult[]>("youtube_search", { query, limit, offset }),
   youtubeDownloadsState: () => invoke<YoutubeDownload[]>("youtube_downloads_state"),
-  youtubeDownloadEnqueue: (url: string, title: string, thumbnail: string | null, isPlaylist: boolean, estimatedBytes: number | null) => invoke<YoutubeDownload>("youtube_download_enqueue", { url, title, thumbnail, isPlaylist, estimatedBytes }),
+  youtubeDownloadEnqueue: (url: string, title: string, thumbnail: string | null, isPlaylist: boolean) => invoke<YoutubeDownload>("youtube_download_enqueue", { url, title, thumbnail, isPlaylist }),
   youtubeDownloadPause: (id: string) => invoke<void>("youtube_download_pause", { id }),
   youtubeDownloadResume: (id: string) => invoke<void>("youtube_download_resume", { id }),
   youtubeDownloadCancel: (id: string) => invoke<void>("youtube_download_cancel", { id }),
