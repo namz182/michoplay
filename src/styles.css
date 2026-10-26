@@ -856,6 +856,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .side-panel-tabs button:focus-visible, .download-manager-trigger:focus-visible { outline: 2px solid var(--brand-highlight); outline-offset: 2px; }
 .download-tab-count { display: inline-grid; min-width: 16px; height: 16px; place-items: center; border-radius: 8px; background: rgba(245,238,232,.16); color: var(--brand-highlight); font-size: 9px; }
 .download-manager { display: grid; align-content: start; gap: 9px; }
+.download-manager-heading { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 1px 1px 2px; }
+.download-manager-heading strong { min-width: 0; overflow: hidden; color: #eeeaf1; font-size: 12px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.download-manager-heading > span { color: #8f8995; font-size: 9px; white-space: nowrap; }
+.download-manager-heading .download-clear-button { margin-left: auto; }
+.download-manager-heading .download-clear-button { min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: #aaa6af; }
+.download-manager-heading .download-clear-button:hover { border-color: transparent; background: transparent; color: #f4f1f5; }
 .download-clear-button { display:inline-flex; min-height:28px; align-items:center; justify-content:center; gap:5px; padding:0 8px; border:1px solid rgba(255,255,255,.09); border-radius:6px; background:rgba(255,255,255,.035); color:#aaa6af; font:inherit; font-size:10px; cursor:pointer; }
 .download-clear-button:hover { border-color:rgba(255,255,255,.18); color:#f4f1f5; }
 .download-item { display: grid; gap: 8px; padding: 9px; border: 1px solid rgba(255,255,255,.07); border-radius: 6px; background: rgba(255,255,255,.025); }
