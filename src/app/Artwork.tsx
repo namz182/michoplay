@@ -3,6 +3,7 @@ import { Disc3 } from "lucide-react";
 import { api } from "../lib/api";
 
 const requests = new Map<string, Promise<string | null>>();
+const MAX_ARTWORK_REQUESTS = 256;
 export function useArtwork(key: string | null | undefined, enabled = true) {
   const [image, setImage] = useState<{ key: string; url: string } | null>(null);
   useEffect(() => {
@@ -11,6 +12,14 @@ export function useArtwork(key: string | null | undefined, enabled = true) {
     let request = requests.get(key);
     if (!request) {
       request = api.artwork(key).catch(() => null);
+      requests.set(key, request);
+      while (requests.size > MAX_ARTWORK_REQUESTS) {
+        const oldest = requests.keys().next().value;
+        if (!oldest) break;
+        requests.delete(oldest);
+      }
+    } else {
+      requests.delete(key);
       requests.set(key, request);
     }
     void request.then((url) => {

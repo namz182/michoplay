@@ -22,6 +22,7 @@ src-tauri/gen/android/**/build/
 !.env.example
 *.pem
 *.key
+*.jks
 
 # Logs, caches, and local app databases
 *.log

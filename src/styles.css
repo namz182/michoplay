@@ -266,6 +266,7 @@ button:disabled { cursor: default; }
 .full-mode-tabs button.active { color: white; }
 .full-mode-tabs button.active::after { position: absolute; right: 0; bottom: 0; left: 0; height: 2px; background: var(--brand-gradient); content: ""; }
 .full-mode-list { min-height: 0; overflow: auto; padding-top: 3px; scrollbar-width: thin; scrollbar-color: #514c54 transparent; }
+.full-mode-list > .full-mode-track { content-visibility: auto; contain-intrinsic-size: 49px; }
 .full-mode-list h2 { margin: 16px 0 8px; font-size: 12px; font-weight: 750; }
 .full-mode-list h2:first-child { margin-top: 6px; }
 .full-mode-track { display: flex; width: 100%; min-height: 54px; align-items: center; gap: 10px; padding: 5px 0; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer; }
@@ -464,6 +465,8 @@ button:disabled { cursor: default; }
 .now-track strong { color: #f4f0f6; font-size: 15px; }
 .now-track span, .now-track small { color: #aaa4ae; font-size: 10px; }
 .queue-list { display: grid; }
+.queue-expand-button { display: block; width: 100%; margin: 8px 0 14px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.11); border-radius: 5px; background: rgba(255,255,255,.035); color: #c9c2ce; font: inherit; font-size: 11px; text-align: center; cursor: pointer; }
+.queue-expand-button:hover { background: rgba(255,255,255,.08); color: #fff; }
 .queue-list button { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border: 0; background: transparent; color: #88828e; text-align: left; cursor: pointer; }
 .queue-list button.current { color: var(--accent-strong); }
 .queue-list button > span:first-child { width: 15px; font-size: 9px; text-align: center; }
