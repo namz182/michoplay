@@ -1396,9 +1396,9 @@ export default function App() {
             onEqualizer={onEqualizer => {
               setEqualizerBands(onEqualizer);
               localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(onEqualizer));
-              void api.equalizer(onEqualizer, equalizerEnabled).catch((error) => setMessage(String(error)));
+              return api.equalizer(onEqualizer, equalizerEnabled).catch((error) => setMessage(String(error)));
             }}
-            onEqualizerPreview={(bands) => { void api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error))); }}
+            onEqualizerPreview={(bands) => api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)))}
             onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
             onCompact={setCompact}
             onAdd={chooseLibrarySource}
@@ -1446,9 +1446,9 @@ export default function App() {
             onEqualizer={(bands) => {
               setEqualizerBands(bands);
               localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(bands));
-              void api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)));
+              return api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)));
             }}
-            onEqualizerPreview={(bands) => { void api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error))); }}
+            onEqualizerPreview={(bands) => api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)))}
             onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
             onCompact={setCompact}
             onPanel={setShowPanel}
@@ -1582,7 +1582,7 @@ export default function App() {
   </main>;
 }
 
-function EqualizerSettings({ bands, enabled, mobile = false, onChange, onPreview, onToggle }: { bands: number[]; enabled: boolean; mobile?: boolean; onChange: (bands: number[]) => void; onPreview: (bands: number[]) => void; onToggle: (enabled: boolean) => void }) {
+function EqualizerSettings({ bands, enabled, mobile = false, onChange, onPreview, onToggle }: { bands: number[]; enabled: boolean; mobile?: boolean; onChange: (bands: number[]) => void | Promise<unknown>; onPreview: (bands: number[]) => void | Promise<unknown>; onToggle: (enabled: boolean) => void }) {
   const presets = [
     { name: "Flat", bands: [0, 0, 0, 0, 0, 0] },
     { name: "Bass boost", bands: [6, 5, 3, 0, -1, 0] },
@@ -1593,19 +1593,24 @@ function EqualizerSettings({ bands, enabled, mobile = false, onChange, onPreview
   const [savedPresets, setSavedPresets] = useState<{ name: string; bands: number[] }[]>(() => stored("equalizer-presets", []));
   const [saving, setSaving] = useState(false);
   const [presetName, setPresetName] = useState("");
-  const [previewBands, setPreviewBands] = useState<number[] | null>(null);
   const dragIndex = useRef<number | null>(null);
   const dragSvg = useRef<SVGSVGElement | null>(null);
-  const dragTransform = useRef<DOMMatrix | null>(null);
+  const dragPointerId = useRef<number | null>(null);
+  const dragBounds = useRef<{ top: number; height: number } | null>(null);
   const latestBands = useRef<number[] | null>(null);
   const dragChanged = useRef(false);
-  const renderFrame = useRef<number | null>(null);
   const previewTimer = useRef<number | null>(null);
   const pendingPreview = useRef<number[] | null>(null);
+  const previewInFlight = useRef(false);
+  const previewRequest = useRef<Promise<unknown> | null>(null);
   const lastPreviewAt = useRef(0);
+  const chartLine = useRef<SVGPathElement | null>(null);
+  const chartFill = useRef<SVGPathElement | null>(null);
+  const chartHitTargets = useRef<(SVGCircleElement | null)[]>([]);
+  const chartPoints = useRef<(SVGCircleElement | null)[]>([]);
   const onPreviewRef = useRef(onPreview);
   useEffect(() => { onPreviewRef.current = onPreview; }, [onPreview]);
-  const visibleBands = previewBands ?? bands;
+  const visibleBands = latestBands.current ?? bands;
   const allPresets = [...presets, ...savedPresets];
   const activePreset = allPresets.find((preset) => preset.bands.every((gain, index) => gain === visibleBands[index]))?.name;
   const builtInName = (name: string) => presets.some((preset) => preset.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase());
@@ -1621,72 +1626,98 @@ function EqualizerSettings({ bands, enabled, mobile = false, onChange, onPreview
   };
   const chartX = (index: number) => mobile ? 65 + index * 127 : 120 + index * 116;
   const chartY = (gain: number) => 25 + (12 - gain) * (175 / 24);
-  const curve = visibleBands.map((gain, index) => [chartX(index), chartY(gain)] as const);
-  const smoothPath = curve.slice(1).reduce((path, [x, y], index) => {
-    const [previousX, previousY] = curve[index]; const dx = (x - previousX) / 3;
-    return `${path} C ${previousX + dx} ${previousY}, ${x - dx} ${y}, ${x} ${y}`;
-  }, `M ${curve[0][0]} ${curve[0][1]}`);
-  const fillPath = `M ${curve[0][0]} 112 L ${curve[0][0]} ${curve[0][1]}${smoothPath.slice(smoothPath.indexOf(" C"))} L ${curve[curve.length - 1][0]} 112 Z`;
-  const queuePreviewRender = () => {
-    if (renderFrame.current !== null) return;
-    renderFrame.current = window.requestAnimationFrame(() => {
-      renderFrame.current = null;
-      setPreviewBands(latestBands.current);
+  const curveFor = (values: number[]) => values.map((gain, index) => [chartX(index), chartY(gain)] as [number, number]);
+  const smoothPathFor = (points: [number, number][]) => points.slice(1).reduce((path, [x, y], index) => {
+    const [previousX, previousY] = points[index]; const dx = (x - previousX) / 3;
+    return path + " C " + (previousX + dx) + " " + previousY + " " + (x - dx) + " " + y + " " + x + " " + y;
+  }, "M " + points[0][0] + " " + points[0][1]);
+  const fillPathFor = (points: [number, number][], path: string) => "M " + points[0][0] + " 112 L " + points[0][0] + " " + points[0][1] + path.slice(path.indexOf(" C")) + " L " + points[points.length - 1][0] + " 112 Z";
+  const curve = curveFor(visibleBands);
+  const smoothPath = smoothPathFor(curve);
+  const fillPath = fillPathFor(curve, smoothPath);
+  const updateChartPreview = (values: number[]) => {
+    const points = curveFor(values);
+    const path = smoothPathFor(points);
+    chartLine.current?.setAttribute("d", path);
+    chartFill.current?.setAttribute("d", fillPathFor(points, path));
+    points.forEach(([, y], index) => {
+      chartHitTargets.current[index]?.setAttribute("cy", String(y));
+      chartPoints.current[index]?.setAttribute("cy", String(y));
+      chartPoints.current[index]?.setAttribute("aria-valuenow", String(values[index]));
     });
   };
   const queueAudioPreview = (next: number[]) => {
     pendingPreview.current = next;
-    if (previewTimer.current !== null) return;
-    const delay = Math.max(0, 50 - (performance.now() - lastPreviewAt.current));
-    previewTimer.current = window.setTimeout(() => {
+    if (previewTimer.current !== null || previewInFlight.current) return;
+    const flush = () => {
       previewTimer.current = null;
+      if (previewInFlight.current) return;
       const pending = pendingPreview.current;
       pendingPreview.current = null;
       if (!pending) return;
+      const delay = Math.max(0, 60 - (performance.now() - lastPreviewAt.current));
+      if (delay > 0) {
+        pendingPreview.current = pending;
+        previewTimer.current = window.setTimeout(flush, delay);
+        return;
+      }
       lastPreviewAt.current = performance.now();
-      onPreviewRef.current(pending);
-    }, delay);
+      previewInFlight.current = true;
+      const request = (async () => {
+        try { await onPreviewRef.current(pending); }
+        catch { /* The final value is still applied when the drag ends. */ }
+        finally {
+          previewInFlight.current = false;
+          previewRequest.current = null;
+          if (dragIndex.current !== null && pendingPreview.current) queueAudioPreview(pendingPreview.current);
+        }
+      })();
+      previewRequest.current = request;
+      void request;
+    };
+    flush();
   };
-  const updateFromPointer = (clientX: number, clientY: number, index: number) => {
-    const svg = dragSvg.current;
-    const transform = dragTransform.current;
-    if (!svg || !transform) return;
-    const point = svg.createSVGPoint();
-    point.x = clientX;
-    point.y = clientY;
-    const svgY = point.matrixTransform(transform).y;
+  const updateFromPointer = (clientY: number, index: number) => {
+    const bounds = dragBounds.current;
+    if (!bounds || bounds.height <= 0) return;
+    const svgY = (clientY - bounds.top) * 250 / bounds.height;
     const value = Math.max(-12, Math.min(12, Math.round(12 - (svgY - 25) * 24 / 175)));
     const next = [...(latestBands.current ?? visibleBands)];
     if (next[index] === value) return;
     next[index] = value;
     latestBands.current = next;
     dragChanged.current = true;
-    queuePreviewRender();
+    updateChartPreview(next);
     queueAudioPreview(next);
   };
-  const finishDrag = () => {
+  const finishDrag = (event?: ReactPointerEvent<SVGSVGElement>) => {
     if (dragIndex.current === null) return;
+    if (event && dragPointerId.current !== event.pointerId) return;
+    const svg = dragSvg.current;
+    const pointerId = dragPointerId.current;
     dragIndex.current = null;
     dragSvg.current = null;
-    dragTransform.current = null;
-    if (renderFrame.current !== null) {
-      window.cancelAnimationFrame(renderFrame.current);
-      renderFrame.current = null;
-    }
+    dragPointerId.current = null;
+    dragBounds.current = null;
+    if (svg && pointerId !== null && svg.hasPointerCapture(pointerId)) svg.releasePointerCapture(pointerId);
     if (previewTimer.current !== null) {
       window.clearTimeout(previewTimer.current);
       previewTimer.current = null;
     }
     pendingPreview.current = null;
     const finalBands = latestBands.current;
-    if (dragChanged.current && finalBands) onChange(finalBands);
-    setPreviewBands(null);
+    if (dragChanged.current && finalBands) {
+      const committedBands = [...finalBands];
+      const commit = () => { void onChange(committedBands); };
+      if (previewRequest.current) void previewRequest.current.finally(commit);
+      else commit();
+    }
     latestBands.current = null;
     dragChanged.current = false;
   };
   useEffect(() => () => {
-    if (renderFrame.current !== null) window.cancelAnimationFrame(renderFrame.current);
     if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
+    pendingPreview.current = null;
   }, []);
   return <section className={`eq-section ${mobile ? "mobile-equalizer-editor" : ""}`}>
     <header className="eq-header"><h2>Equalizer</h2><button className={`switch ${enabled ? "on" : ""}`} role="switch" aria-label="Equalizer" aria-checked={enabled} onClick={() => onToggle(!enabled)}><span/></button></header>
@@ -1694,22 +1725,22 @@ function EqualizerSettings({ bands, enabled, mobile = false, onChange, onPreview
       <div className="eq-toolbar"><label className="eq-select-wrap"><span className="sr-only">Equalizer preset</span><select aria-label="Equalizer preset" value={activePreset ?? "manual"} onChange={(event) => { const preset = allPresets.find((item) => item.name === event.target.value); if (preset) onChange([...preset.bands]); }}><option value="manual">Manual</option>{presets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}{savedPresets.length > 0 && <optgroup label="My presets">{savedPresets.map((preset) => <option key={`saved-${preset.name}`} value={preset.name}>{preset.name}</option>)}</optgroup>}</select></label>
         {saving ? <form className="eq-save-form" onSubmit={(event) => { event.preventDefault(); savePreset(); }}><input autoFocus maxLength={40} value={presetName} aria-label="Preset name" placeholder="Preset name" onChange={(event) => setPresetName(event.target.value)}/><button type="submit" disabled={!presetName.trim() || builtInName(presetName)}>Save</button><button type="button" onClick={() => { setSaving(false); setPresetName(""); }}>Cancel</button></form> : <button className="eq-save-button" onClick={() => setSaving(true)}>Save preset</button>}
       </div>
-      <div className="eq-chart-wrap"><svg className="eq-chart" viewBox="0 0 760 250" preserveAspectRatio="none" role="group" aria-label="Equalizer controls">
+      <div className="eq-chart-wrap"><svg className="eq-chart" viewBox="0 0 760 250" preserveAspectRatio="none" role="group" aria-label="Equalizer controls" onPointerMove={(event) => { if (dragPointerId.current === event.pointerId && dragIndex.current !== null) updateFromPointer(event.clientY, dragIndex.current); }} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}>
         <defs>
           <linearGradient id="eq-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--blush)" stopOpacity=".42"/><stop offset="64%" stopColor="var(--brand-highlight)" stopOpacity=".24"/><stop offset="100%" stopColor="var(--accent)" stopOpacity=".05"/></linearGradient>
           <linearGradient id="eq-line" x1="0" x2="1" y1="0" y2="0"><stop offset="0%" stopColor="var(--blush)"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="var(--accent)"/></linearGradient>
         </defs>
         <text className="eq-db-label" x="0" y="30">+12dB</text><text className="eq-db-label" x="0" y="117">0dB</text><text className="eq-db-label" x="0" y="205">−12dB</text>
         {curve.map(([x], index) => <line className="eq-gridline" key={`grid-${index}`} x1={x} x2={x} y1="25" y2="200"/>)}<line className="eq-zero-line" x1="65" x2="700" y1="112" y2="112"/>
-        <path className="eq-fill" d={fillPath}/><path className="eq-line" d={smoothPath}/>
-        {curve.map(([x, y], index) => <g key={equalizerFrequencies[index]}><circle className="eq-hit-target" cx={x} cy={y} r="17" onPointerDown={(event) => { event.preventDefault(); const svg = event.currentTarget.ownerSVGElement; const transform = svg?.getScreenCTM(); if (!svg || !transform) return; event.currentTarget.setPointerCapture(event.pointerId); dragIndex.current = index; dragSvg.current = svg; dragTransform.current = transform.inverse(); latestBands.current = [...visibleBands]; dragChanged.current = false; updateFromPointer(event.clientX, event.clientY, index); }} onPointerMove={(event) => { if (dragIndex.current === index) updateFromPointer(event.clientX, event.clientY, index); }} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}/><circle className="eq-point" cx={x} cy={y} r="4" role="slider" tabIndex={0} aria-label={equalizerFrequencies[index]} aria-valuemin={-12} aria-valuemax={12} aria-valuenow={visibleBands[index]} aria-valuetext={`${visibleBands[index]} dB`} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault(); updateBand(index, visibleBands[index] + 1); } else if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault(); updateBand(index, visibleBands[index] - 1); } }}/><text className="eq-frequency-label" x={x} y="232" textAnchor="middle">{equalizerFrequencies[index]}</text></g>)}
+        <path ref={chartFill} className="eq-fill" d={fillPath}/><path ref={chartLine} className="eq-line" d={smoothPath}/>
+        {curve.map(([x, y], index) => <g key={equalizerFrequencies[index]}><circle ref={(node) => { chartHitTargets.current[index] = node; }} className="eq-hit-target" cx={x} cy={y} r="17" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); const svg = event.currentTarget.ownerSVGElement; const bounds = svg?.getBoundingClientRect(); if (!svg || !bounds || bounds.height <= 0) return; try { svg.setPointerCapture(event.pointerId); } catch { return; } dragIndex.current = index; dragSvg.current = svg; dragPointerId.current = event.pointerId; dragBounds.current = { top: bounds.top, height: bounds.height }; latestBands.current = [...visibleBands]; dragChanged.current = false; updateFromPointer(event.clientY, index); }}/><circle ref={(node) => { chartPoints.current[index] = node; }} className="eq-point" cx={x} cy={y} r="4" role="slider" tabIndex={0} aria-label={equalizerFrequencies[index]} aria-valuemin={-12} aria-valuemax={12} aria-valuenow={visibleBands[index]} aria-valuetext={`${visibleBands[index]} dB`} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault(); updateBand(index, visibleBands[index] + 1); } else if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault(); updateBand(index, visibleBands[index] - 1); } }}/><text className="eq-frequency-label" x={x} y="232" textAnchor="middle">{equalizerFrequencies[index]}</text></g>)}
       </svg></div>
       <div className="eq-card-footer"><span>{enabled ? "Changes apply immediately to playback." : "Equalizer is off."}</span><button className="outline-button eq-reset" onClick={() => onChange([0, 0, 0, 0, 0, 0])}>Reset</button></div>
     </div>
   </section>;
 }
 
-function MobileSettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, keepScreenAwake, scanning, zoomLevel, onBack, onKeepScreenAwake, onEqualizer, onEqualizerPreview, onEqualizerToggle, onCompact, onAdd, onRemove, onRefresh, onVolume, onSleepTimer, onZoom, onAbout }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; keepScreenAwake: boolean; scanning: boolean; zoomLevel: number; onBack: () => void; onKeepScreenAwake: (value: boolean) => void; onEqualizer: (bands: number[]) => void; onEqualizerPreview: (bands: number[]) => void; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onZoom: (value: number) => void; onAbout: () => void }) {
+function MobileSettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, keepScreenAwake, scanning, zoomLevel, onBack, onKeepScreenAwake, onEqualizer, onEqualizerPreview, onEqualizerToggle, onCompact, onAdd, onRemove, onRefresh, onVolume, onSleepTimer, onZoom, onAbout }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; keepScreenAwake: boolean; scanning: boolean; zoomLevel: number; onBack: () => void; onKeepScreenAwake: (value: boolean) => void; onEqualizer: (bands: number[]) => void; onEqualizerPreview: (bands: number[]) => void | Promise<unknown>; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onZoom: (value: number) => void; onAbout: () => void }) {
   const [query, setQuery] = useState("");
   const [equalizerOpen, setEqualizerOpen] = useState(false);
   const [foldersOpen, setFoldersOpen] = useState(false);
@@ -1829,7 +1860,7 @@ const TrackRows = memo(function TrackRows({ items, player, favorites, compact, p
   const visibleItems = items.slice(range.start, range.end);
   return <div className="track-table" role="table" aria-label="Songs"><div className="table-head" role="row"><span role="columnheader">#</span><span role="columnheader">Title</span><span role="columnheader">Album</span><span role="columnheader">Artist</span><span role="columnheader"><Clock3 size={13}/></span></div>{items.length ? <div ref={listRef} className="track-list virtual-track-list" role="rowgroup" style={{ height: items.length * rowHeight, position: "relative" }}>{visibleItems.map((track, offset) => { const index = range.start + offset; const active = player.currentTrackId === track.id && player.isPlaying; const playCount = playCounts?.get(track.id) ?? 0; const playControlDismissed = dismissedPlayControl === track.id; const playTrack = () => { setDismissedPlayControl(track.id); onPlay(track); }; const favorite = favorites.has(track.id); return <div role="row" key={track.id} className={`track-row ${player.currentTrackId === track.id ? "playing" : ""} ${playControlDismissed ? "suppress-row-play" : ""}`} style={{ position: "absolute", top: index * rowHeight, left: 0, right: 0, height: rowHeight }} onMouseLeave={() => { if (playControlDismissed) setDismissedPlayControl(null); }} onContextMenu={(event) => onMenu(track, event)}><button className="track-number" aria-label={`${active ? "Pause" : "Play"} ${track.title}`} onClick={playTrack}>{active ? <span className="playing-animation" aria-label="Playing"><i/><i/><i/></span> : <span className="row-index">{index + 1}</span>}{active ? <Pause className="row-play" size={15} fill="currentColor"/> : <Play className="row-play" size={15} fill="currentColor"/>}</button><div className="track-title-cell" role="cell"><Cover className="row-cover" keys={[track.artworkKey]}/><button className="track-name" onClick={playTrack}><strong>{track.title}</strong><small>{track.artist}{showPlayCount && playCount > 0 && <span className="track-play-count"> · {playCount} {playCount === 1 ? "play" : "plays"}</span>}</small></button></div><span className="track-album" role="cell">{track.album}</span><span className="track-artist-cell" role="cell">{track.artist}</span><span className="track-actions" role="cell"><button className={`row-action favorite-action ${favorite ? "selected" : ""}`} aria-label={favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => onFavorite(track.id)}><Heart size={15} fill={favorite ? "currentColor" : "none"}/></button><span className="track-duration">{time(track.durationMs)}</span><button className="row-action menu-trigger" aria-label={`Actions for ${track.title}`} onClick={(event) => onMenu(track, event)}><MoreHorizontal size={17}/></button></span></div>;})}</div> : <Empty title={emptyTitle} description={emptyMessage} action={emptyAction}/>}</div>;
 });
-function SettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, showPanel, keepScreenAwake, onKeepScreenAwake, globalYoutubeSearchEnabled, onGlobalYoutubeSearch, scanning, mobile, zoomLevel, onZoom, onEqualizer, onEqualizerPreview, onEqualizerToggle, onCompact, onPanel, onAdd, onRemove, onRefresh, onVolume, onAutoplay, onSleepTimer, onDefaultPlayer }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; showPanel: boolean; keepScreenAwake: boolean; onKeepScreenAwake: (value: boolean) => void; globalYoutubeSearchEnabled: boolean; onGlobalYoutubeSearch: (value: boolean) => void; scanning: boolean; mobile: boolean; zoomLevel: number; onZoom: (value: number) => void; onEqualizer: (bands: number[]) => void; onEqualizerPreview: (bands: number[]) => void; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onPanel: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onAutoplay: (value: boolean) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onDefaultPlayer: () => void }) {
+function SettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, showPanel, keepScreenAwake, onKeepScreenAwake, globalYoutubeSearchEnabled, onGlobalYoutubeSearch, scanning, mobile, zoomLevel, onZoom, onEqualizer, onEqualizerPreview, onEqualizerToggle, onCompact, onPanel, onAdd, onRemove, onRefresh, onVolume, onAutoplay, onSleepTimer, onDefaultPlayer }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; showPanel: boolean; keepScreenAwake: boolean; onKeepScreenAwake: (value: boolean) => void; globalYoutubeSearchEnabled: boolean; onGlobalYoutubeSearch: (value: boolean) => void; scanning: boolean; mobile: boolean; zoomLevel: number; onZoom: (value: number) => void; onEqualizer: (bands: number[]) => void; onEqualizerPreview: (bands: number[]) => void | Promise<unknown>; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onPanel: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onAutoplay: (value: boolean) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onDefaultPlayer: () => void }) {
   const timerValue = player.sleepTimerAtTrackEnd ? "track" : player.sleepTimerRemainingMs ? String(Math.max(1, Math.ceil(player.sleepTimerRemainingMs / 60_000 / 15) * 15)) : "off";
   const remaining = player.sleepTimerRemainingMs == null ? "" : `${Math.floor(player.sleepTimerRemainingMs / 60_000)}:${String(Math.floor((player.sleepTimerRemainingMs % 60_000) / 1000)).padStart(2, "0")}`;
   const toggle = (title: string, description: string, value: boolean, change: (value: boolean) => void) => <div className="setting-row"><div><strong>{title}</strong><small>{description}</small></div><button className={`switch ${value ? "on" : ""}`} role="switch" aria-label={title} aria-checked={value} onClick={() => change(!value)}><span/></button></div>;
