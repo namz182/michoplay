@@ -4,10 +4,12 @@ use lofty::{
     probe::Probe,
     tag::ItemKey,
 };
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rodio::{
     source::SeekError, ChannelCount, Decoder, OutputStream, OutputStreamBuilder, SampleRate, Sink,
     Source,
 };
+use rusqlite::{params, Connection, OptionalExtension};
 #[cfg(target_os = "android")]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -22,7 +24,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -32,6 +34,9 @@ use walkdir::WalkDir;
 
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
 static LIBRARY_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static LIBRARY_SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
+static LIBRARY_WATCHERS: OnceLock<Mutex<HashMap<PathBuf, RecommendedWatcher>>> = OnceLock::new();
+static LIBRARY_DIRTY_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 
 fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[cfg(windows)]
@@ -258,6 +263,8 @@ struct PlayerCore {
     track_indices: HashMap<u64, usize>,
     artwork_by_key: HashMap<String, Arc<Artwork>>,
     storage_dir: PathBuf,
+    scan_workers: Option<usize>,
+    watch_library: bool,
     queue: Vec<u64>,
     current_queue_index: Option<usize>,
     output: Option<OutputStream>,
@@ -280,6 +287,14 @@ struct PlayerCore {
 struct LibraryConfig {
     version: u32,
     roots: Vec<String>,
+    #[serde(default)]
+    scan_workers: Option<usize>,
+    #[serde(default = "default_watch_library")]
+    watch_library: bool,
+}
+
+fn default_watch_library() -> bool {
+    true
 }
 
 struct AppState(Mutex<PlayerCore>);
@@ -503,6 +518,7 @@ fn media_take_pending_actions(state: State<'_, MediaBridge>) -> Result<Vec<Strin
 async fn library_open_audio_files(
     paths: Vec<String>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<Vec<Track>, String> {
     if paths.is_empty() || paths.len() > 100 {
         return Err("Choose between 1 and 100 audio files.".to_owned());
@@ -538,10 +554,11 @@ async fn library_open_audio_files(
         }
     }
     let roots_copy = roots.clone();
-    let tracks =
-        tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_copy, &storage_dir))
-            .await
-            .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks = tauri::async_runtime::spawn_blocking(move || {
+        scan_roots_for_app(&app, &roots_copy, &storage_dir)
+    })
+    .await
+    .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let selected_ids = tracks
         .iter()
         .filter(|track| selected.contains(&track.path))
@@ -940,17 +957,369 @@ fn artwork_cache_path(storage_dir: &Path, key: &str, mime: &str) -> PathBuf {
         .join(format!("{key}.{extension}"))
 }
 
-fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>, String> {
-    let cache_available = fs::create_dir_all(storage_dir.join("artwork")).is_ok();
-    let index_path = storage_dir.join("library-index.json");
-    let cached = cache_available
-        .then(|| fs::read(&index_path).ok())
-        .flatten()
-        .and_then(|bytes| serde_json::from_slice::<Vec<CachedTrack>>(&bytes).ok())
-        .unwrap_or_default()
+fn copy_directory_missing(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_directory_missing(&source_path, &destination_path)?;
+        } else if file_type.is_file() && !destination_path.exists() {
+            let _ = fs::copy(source_path, destination_path);
+        }
+    }
+    Ok(())
+}
+
+fn open_library_cache(storage_dir: &Path) -> rusqlite::Result<Connection> {
+    let connection = Connection::open(storage_dir.join("library.sqlite"))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tracks (
+            path TEXT PRIMARY KEY NOT NULL,
+            root_path TEXT NOT NULL,
+            title TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            album TEXT NOT NULL,
+            folder_path TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            modified_at INTEGER NOT NULL,
+            track_json TEXT NOT NULL,
+            artwork_mime TEXT
+        );
+        CREATE INDEX IF NOT EXISTS tracks_by_root ON tracks(root_path);
+        CREATE INDEX IF NOT EXISTS tracks_by_title ON tracks(title COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS tracks_by_artist ON tracks(artist COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS tracks_by_album ON tracks(album COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS tracks_by_folder ON tracks(folder_path);",
+    )?;
+    Ok(connection)
+}
+
+fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
+    let Ok(connection) = open_library_cache(storage_dir) else {
+        return HashMap::new();
+    };
+    let row_count = connection
+        .query_row("SELECT COUNT(*) FROM tracks", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or_default();
+    if row_count == 0 {
+        // Import the previous whole-file index once; keep it as a recovery copy.
+        if let Ok(_cache_write) = LIBRARY_CACHE_WRITE_LOCK.lock() {
+            let legacy_path = storage_dir.join("library-index.json");
+            if let Ok(bytes) = fs::read(legacy_path) {
+                if let Ok(entries) = serde_json::from_slice::<Vec<CachedTrack>>(&bytes) {
+                    let _ = write_library_cache(storage_dir, &entries);
+                }
+            }
+        }
+    }
+    let Ok(mut statement) = connection.prepare(
+        "SELECT path, root_path, file_size, modified_at, track_json, artwork_mime FROM tracks",
+    ) else {
+        return HashMap::new();
+    };
+    let Ok(rows) = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+        ))
+    }) else {
+        return HashMap::new();
+    };
+    rows.flatten()
+        .filter_map(
+            |(path, root_path, file_size, modified_at, track_json, artwork_mime)| {
+                let track = serde_json::from_str(&track_json).ok()?;
+                Some((
+                    path.clone(),
+                    CachedTrack {
+                        path,
+                        root_path,
+                        file_size: file_size.max(0) as u64,
+                        modified_at: modified_at.max(0) as u64,
+                        track,
+                        artwork_mime,
+                    },
+                ))
+            },
+        )
+        .collect()
+}
+
+fn write_library_cache(storage_dir: &Path, entries: &[CachedTrack]) -> rusqlite::Result<()> {
+    let mut connection = open_library_cache(storage_dir)?;
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS scan_paths (path TEXT PRIMARY KEY NOT NULL);
+        DELETE FROM scan_paths;",
+    )?;
+    {
+        let mut scanned =
+            transaction.prepare("INSERT OR IGNORE INTO scan_paths(path) VALUES (?1)")?;
+        let mut existing = transaction
+            .prepare("SELECT root_path, file_size, modified_at FROM tracks WHERE path = ?1")?;
+        let mut upsert = transaction.prepare(
+            "INSERT INTO tracks(path, root_path, title, artist, album, folder_path, file_size, modified_at, track_json, artwork_mime)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(path) DO UPDATE SET
+                 root_path = excluded.root_path,
+                 title = excluded.title,
+                 artist = excluded.artist,
+                 album = excluded.album,
+                 folder_path = excluded.folder_path,
+                 file_size = excluded.file_size,
+                 modified_at = excluded.modified_at,
+                 track_json = excluded.track_json,
+                 artwork_mime = excluded.artwork_mime
+             WHERE tracks.root_path != excluded.root_path
+                OR tracks.title != excluded.title
+                OR tracks.artist != excluded.artist
+                OR tracks.album != excluded.album
+                OR tracks.folder_path != excluded.folder_path
+                OR tracks.file_size != excluded.file_size
+                OR tracks.modified_at != excluded.modified_at
+                OR tracks.track_json != excluded.track_json
+                OR tracks.artwork_mime IS NOT excluded.artwork_mime",
+        )?;
+        for entry in entries {
+            scanned.execute([&entry.path])?;
+            let cached_metadata = existing
+                .query_row([&entry.path], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .optional()?;
+            if cached_metadata.is_some_and(|(root, size, modified)| {
+                root == entry.root_path
+                    && size == entry.file_size.min(i64::MAX as u64) as i64
+                    && modified == entry.modified_at.min(i64::MAX as u64) as i64
+            }) {
+                continue;
+            }
+            let track_json = serde_json::to_string(&entry.track)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            upsert.execute(params![
+                entry.path,
+                entry.root_path,
+                entry.track.title,
+                entry.track.artist,
+                entry.track.album,
+                entry.track.folder_path,
+                entry.file_size.min(i64::MAX as u64) as i64,
+                entry.modified_at.min(i64::MAX as u64) as i64,
+                track_json,
+                entry.artwork_mime,
+            ])?;
+        }
+    }
+    transaction.execute(
+        "DELETE FROM tracks WHERE NOT EXISTS (SELECT 1 FROM scan_paths WHERE scan_paths.path = tracks.path)",
+        [],
+    )?;
+    transaction.commit()
+}
+
+fn scan_roots_for_app(
+    app: &AppHandle,
+    roots: &[PathBuf],
+    storage_dir: &Path,
+) -> Result<Vec<LibraryTrack>, String> {
+    LIBRARY_SCAN_CANCELLED.store(false, Ordering::Relaxed);
+    let emit_progress = |phase: &str, processed: usize, total: usize| {
+        let _ = app.emit(
+            "library-scan-progress",
+            serde_json::json!({ "phase": phase, "processed": processed, "total": total }),
+        );
+    };
+    emit_progress("Finding audio files", 0, 0);
+    let canonical_roots = roots
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .filter(|root| root.is_dir())
+        .collect::<Vec<_>>();
+    let watch_enabled = fs::read(storage_dir.join("config.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LibraryConfig>(&bytes).ok())
+        .map(|config| config.watch_library)
+        .unwrap_or(true);
+    let watcher_was_ready = watch_enabled && ensure_library_watchers(&canonical_roots, storage_dir);
+    if watcher_was_ready && !has_dirty_roots(&canonical_roots) {
+        if let Some(cached_tracks) = cached_tracks_for_roots(storage_dir, &canonical_roots) {
+            if !has_dirty_roots(&canonical_roots) {
+                emit_progress(
+                    "Library is up to date",
+                    cached_tracks.len(),
+                    cached_tracks.len(),
+                );
+                let _ = app.emit(
+                    "library-scan-progress",
+                    serde_json::json!({ "phase": "Complete", "processed": cached_tracks.len(), "total": cached_tracks.len() }),
+                );
+                return Ok(cached_tracks);
+            }
+        }
+    }
+    clear_dirty_roots(&canonical_roots);
+    let result = scan_roots_with_progress(roots, storage_dir, emit_progress);
+    let phase = if LIBRARY_SCAN_CANCELLED.load(Ordering::Relaxed) {
+        "Cancelled"
+    } else if result.is_ok() {
+        "Complete"
+    } else {
+        "Failed"
+    };
+    let _ = app.emit(
+        "library-scan-progress",
+        serde_json::json!({ "phase": phase, "processed": 0, "total": 0 }),
+    );
+    result
+}
+
+fn ensure_library_watchers(roots: &[PathBuf], storage_dir: &Path) -> bool {
+    let watchers = LIBRARY_WATCHERS.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut watchers) = watchers.lock() else {
+        return false;
+    };
+    watchers.retain(|root, _| roots.contains(root));
+    let ready_before_scan =
+        !roots.is_empty() && roots.iter().all(|root| watchers.contains_key(root));
+    for root in roots {
+        if watchers.contains_key(root) {
+            continue;
+        }
+        let dirty_root = root.clone();
+        let ignored_storage = storage_dir.to_path_buf();
+        let Ok(mut watcher) =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else {
+                    return;
+                };
+                if matches!(event.kind, EventKind::Access(_))
+                    || !event
+                        .paths
+                        .iter()
+                        .any(|path| !path.starts_with(&ignored_storage))
+                {
+                    return;
+                }
+                if let Ok(mut dirty_roots) = LIBRARY_DIRTY_ROOTS
+                    .get_or_init(|| Mutex::new(HashSet::new()))
+                    .lock()
+                {
+                    dirty_roots.insert(dirty_root.clone());
+                }
+            })
+        else {
+            continue;
+        };
+        if watcher.watch(root, RecursiveMode::Recursive).is_ok() {
+            watchers.insert(root.clone(), watcher);
+        }
+    }
+    ready_before_scan && roots.iter().all(|root| watchers.contains_key(root))
+}
+
+fn has_dirty_roots(roots: &[PathBuf]) -> bool {
+    LIBRARY_DIRTY_ROOTS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .map(|dirty| roots.iter().any(|root| dirty.contains(root)))
+        .unwrap_or(true)
+}
+
+fn clear_dirty_roots(roots: &[PathBuf]) {
+    if let Ok(mut dirty) = LIBRARY_DIRTY_ROOTS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+    {
+        for root in roots {
+            dirty.remove(root);
+        }
+    }
+}
+
+fn cached_tracks_for_roots(storage_dir: &Path, roots: &[PathBuf]) -> Option<Vec<LibraryTrack>> {
+    let cached = load_library_cache(storage_dir);
+    if cached.is_empty() {
+        return None;
+    }
+    let expected_roots = roots
+        .iter()
+        .map(|root| root.to_string_lossy().into_owned())
+        .collect::<HashSet<_>>();
+    let cached_roots = cached
+        .values()
+        .map(|entry| entry.root_path.clone())
+        .collect::<HashSet<_>>();
+    if expected_roots != cached_roots {
+        return None;
+    }
+    let mut entries = cached.into_values().collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut artworks = HashMap::<String, Arc<Artwork>>::new();
+    entries
         .into_iter()
-        .map(|entry| (entry.path.clone(), entry))
-        .collect::<HashMap<_, _>>();
+        .map(|entry| {
+            let artwork = match (&entry.track.artwork_key, &entry.artwork_mime) {
+                (Some(key), Some(mime)) => {
+                    if let Some(artwork) = artworks.get(key) {
+                        Some(artwork.clone())
+                    } else {
+                        let data = fs::read(artwork_cache_path(storage_dir, key, mime)).ok()?;
+                        let artwork = Arc::new(Artwork {
+                            mime: mime.clone(),
+                            data,
+                        });
+                        artworks.insert(key.clone(), artwork.clone());
+                        Some(artwork)
+                    }
+                }
+                (None, _) => None,
+                _ => return None,
+            };
+            Some(LibraryTrack {
+                track: entry.track,
+                path: PathBuf::from(entry.path),
+                artwork,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn library_cancel_scan() {
+    LIBRARY_SCAN_CANCELLED.store(true, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>, String> {
+    scan_roots_with_progress(roots, storage_dir, |_, _, _| {})
+}
+
+fn scan_roots_with_progress<F>(
+    roots: &[PathBuf],
+    storage_dir: &Path,
+    mut progress: F,
+) -> Result<Vec<LibraryTrack>, String>
+where
+    F: FnMut(&str, usize, usize),
+{
+    let cache_available = fs::create_dir_all(storage_dir.join("artwork")).is_ok();
+    let cached = cache_available
+        .then(|| load_library_cache(storage_dir))
+        .unwrap_or_default();
 
     let canonical_roots = roots
         .iter()
@@ -958,25 +1327,41 @@ fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>
         .filter(|root| root.is_dir())
         .collect::<Vec<_>>();
     let mut paths = Vec::new();
+    let mut visited = 0usize;
     for root in &canonical_roots {
         for entry in WalkDir::new(root).follow_links(false).into_iter().flatten() {
+            if LIBRARY_SCAN_CANCELLED.load(Ordering::Relaxed) {
+                return Err("Library scan cancelled.".to_owned());
+            }
+            visited += 1;
             if entry.file_type().is_file() && supported_audio(entry.path()) {
                 if let Ok(path) = entry.path().canonicalize() {
                     paths.push(path);
                 }
             }
+            if visited % 128 == 0 {
+                progress("Finding audio files", paths.len(), 0);
+            }
         }
     }
     paths.sort();
     paths.dedup();
+    progress("Checking file metadata", 0, paths.len());
 
     let mut folder_art = HashMap::new();
     let mut cached_artwork = HashMap::<String, Arc<Artwork>>::new();
+    let mut file_metadata = HashMap::<PathBuf, (u64, u64)>::with_capacity(paths.len());
     let mut result = (0..paths.len())
         .map(|_| None)
         .collect::<Vec<Option<LibraryTrack>>>();
     let mut jobs = Vec::new();
     for (index, path) in paths.iter().enumerate() {
+        if LIBRARY_SCAN_CANCELLED.load(Ordering::Relaxed) {
+            return Err("Library scan cancelled.".to_owned());
+        }
+        if index % 128 == 0 {
+            progress("Checking file metadata", index, paths.len());
+        }
         let Some(root) = canonical_roots
             .iter()
             .filter(|root| path.starts_with(root))
@@ -994,6 +1379,7 @@ fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>
             .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
             .map(|elapsed| elapsed.as_millis().min(u64::MAX as u128) as u64)
             .unwrap_or_default();
+        file_metadata.insert(path.clone(), (file_size, modified_at));
         let path_key = path.to_string_lossy().into_owned();
 
         if let Some(entry) = cached.get(&path_key).filter(|entry| {
@@ -1032,11 +1418,18 @@ fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>
     }
 
     // Keep metadata work off the UI thread and bound CPU and disk contention.
-    let worker_count = thread::available_parallelism()
+    let automatic_workers = thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(2)
-        .clamp(1, 4)
-        .min(jobs.len().max(1));
+        .clamp(1, 4);
+    let configured_workers = fs::read(storage_dir.join("config.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LibraryConfig>(&bytes).ok())
+        .and_then(|config| config.scan_workers)
+        .filter(|workers| (1..=8).contains(workers))
+        .unwrap_or(automatic_workers);
+    let worker_count = configured_workers.min(jobs.len().max(1));
+    progress("Reading audio tags", 0, jobs.len());
     let chunk_size = jobs.len().div_ceil(worker_count);
     thread::scope(|scope| {
         let mut workers = Vec::new();
@@ -1054,14 +1447,22 @@ fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>
                     .collect::<Vec<_>>()
             }));
         }
+        let mut completed = 0usize;
         for worker in workers {
             if let Ok(items) = worker.join() {
+                completed += items.len();
                 for (index, track) in items {
                     result[index] = Some(track);
                 }
+                progress("Reading audio tags", completed, jobs.len());
             }
         }
     });
+
+    if LIBRARY_SCAN_CANCELLED.load(Ordering::Relaxed) {
+        return Err("Library scan cancelled.".to_owned());
+    }
+    progress("Finishing library index", jobs.len(), jobs.len());
 
     let mut result = result.into_iter().flatten().collect::<Vec<_>>();
     let mut shared_artwork = HashMap::<String, Arc<Artwork>>::new();
@@ -1077,16 +1478,7 @@ fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>
     let mut index_entries = Vec::with_capacity(result.len());
     let mut live_artwork = HashSet::new();
     for item in &result {
-        let metadata = item.path.metadata().ok();
-        let file_size = metadata
-            .as_ref()
-            .map(|value| value.len())
-            .unwrap_or_default();
-        let modified_at = metadata
-            .and_then(|value| value.modified().ok())
-            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map(|elapsed| elapsed.as_millis().min(u64::MAX as u128) as u64)
-            .unwrap_or_default();
+        let (file_size, modified_at) = file_metadata.get(&item.path).copied().unwrap_or_default();
         let artwork_mime = item.artwork.as_ref().map(|art| art.mime.clone());
         if let (Some(key), Some(art)) = (&item.track.artwork_key, &item.artwork) {
             live_artwork.insert(key.clone());
@@ -1110,24 +1502,7 @@ fn scan_roots(roots: &[PathBuf], storage_dir: &Path) -> Result<Vec<LibraryTrack>
         let Ok(_cache_write) = LIBRARY_CACHE_WRITE_LOCK.lock() else {
             return Ok(result);
         };
-        if let Ok(index_bytes) = serde_json::to_vec(&index_entries) {
-            let temporary_index = storage_dir.join("library-index.json.tmp");
-            if fs::write(&temporary_index, index_bytes).is_ok() {
-                if index_path.exists() {
-                    let backup_index = storage_dir.join("library-index.json.previous");
-                    let _ = fs::remove_file(&backup_index);
-                    if fs::rename(&index_path, &backup_index).is_ok() {
-                        if fs::rename(&temporary_index, &index_path).is_ok() {
-                            let _ = fs::remove_file(backup_index);
-                        } else {
-                            let _ = fs::rename(&backup_index, &index_path);
-                        }
-                    }
-                } else {
-                    let _ = fs::rename(&temporary_index, &index_path);
-                }
-            }
-        }
+        let _ = write_library_cache(storage_dir, &index_entries);
         prune_artwork_cache(&storage_dir.join("artwork"), &live_artwork);
     }
     Ok(result)
@@ -1263,6 +1638,8 @@ impl PlayerCore {
                     .iter()
                     .map(|root| root.to_string_lossy().into_owned())
                     .collect(),
+                scan_workers: self.scan_workers,
+                watch_library: self.watch_library,
             };
             if let (Ok(bytes), Ok(())) = (
                 serde_json::to_vec(&config),
@@ -1485,6 +1862,7 @@ impl PlayerCore {
 async fn library_scan_folder(
     folder: String,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<Vec<Track>, String> {
     let path = PathBuf::from(folder);
     let canonical = path
@@ -1505,10 +1883,11 @@ async fn library_scan_folder(
         roots.push(canonical.clone());
     }
     let scan_roots_copy = roots.clone();
-    let tracks =
-        tauri::async_runtime::spawn_blocking(move || scan_roots(&scan_roots_copy, &storage_dir))
-            .await
-            .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks = tauri::async_runtime::spawn_blocking(move || {
+        scan_roots_for_app(&app, &scan_roots_copy, &storage_dir)
+    })
+    .await
+    .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let mut core = state
         .0
         .lock()
@@ -1587,6 +1966,7 @@ async fn library_import_and_play_audio_files(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<Track>, String> {
+    let scan_app = app.clone();
     let existing_ids = state
         .0
         .lock()
@@ -1610,10 +1990,11 @@ async fn library_import_and_play_audio_files(
         roots.push(folder.clone());
     }
     let roots_to_scan = roots.clone();
-    let tracks =
-        tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan, &storage_dir))
-            .await
-            .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks = tauri::async_runtime::spawn_blocking(move || {
+        scan_roots_for_app(&scan_app, &roots_to_scan, &storage_dir)
+    })
+    .await
+    .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let selected_ids = tracks
         .iter()
         .filter(|track| {
@@ -2524,6 +2905,7 @@ fn library_import_directory(app: AppHandle) -> Result<String, String> {
 async fn library_remove_folder(
     folder: String,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<Vec<Track>, String> {
     let path = PathBuf::from(folder);
     let target = path.canonicalize().unwrap_or(path);
@@ -2536,10 +2918,11 @@ async fn library_remove_folder(
     };
     roots.retain(|root| root != &target);
     let roots_to_scan = roots.clone();
-    let tracks =
-        tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan, &storage_dir))
-            .await
-            .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks = tauri::async_runtime::spawn_blocking(move || {
+        scan_roots_for_app(&app, &roots_to_scan, &storage_dir)
+    })
+    .await
+    .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let mut core = state
         .0
         .lock()
@@ -2551,6 +2934,7 @@ async fn library_remove_folder(
 async fn library_refresh(
     folders: Vec<String>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<Vec<Track>, String> {
     if folders.len() > 256 {
         return Err("Too many library folders.".to_owned());
@@ -2570,10 +2954,11 @@ async fn library_refresh(
         .map_err(|_| "The library is unavailable.".to_owned())?
         .storage_dir
         .clone();
-    let tracks =
-        tauri::async_runtime::spawn_blocking(move || scan_roots(&roots_to_scan, &storage_dir))
-            .await
-            .map_err(|_| "The library scan could not be completed.".to_owned())??;
+    let tracks = tauri::async_runtime::spawn_blocking(move || {
+        scan_roots_for_app(&app, &roots_to_scan, &storage_dir)
+    })
+    .await
+    .map_err(|_| "The library scan could not be completed.".to_owned())??;
     let mut core = state
         .0
         .lock()
@@ -2596,18 +2981,38 @@ fn library_saved_roots(state: State<'_, AppState>) -> Result<Vec<String>, String
 
 #[tauri::command]
 fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
-    let index_path = state
+    let storage_dir = state
         .0
         .lock()
         .map_err(|_| "The library is unavailable.".to_owned())?
         .storage_dir
-        .join("library-index.json");
-    let Ok(bytes) = fs::read(index_path) else {
+        .clone();
+    if !storage_dir.join("library.sqlite").exists() {
+        if let Ok(bytes) = fs::read(storage_dir.join("library-index.json")) {
+            if let Ok(entries) = serde_json::from_slice::<Vec<CachedTrack>>(&bytes) {
+                let _ = write_library_cache(&storage_dir, &entries);
+                return Ok(entries.into_iter().map(|entry| entry.track).collect());
+            }
+        }
         return Ok(Vec::new());
-    };
-    let entries = serde_json::from_slice::<Vec<CachedTrack>>(&bytes)
+    }
+    let connection = Connection::open(storage_dir.join("library.sqlite"))
+        .map_err(|_| "MichoPlay’s saved library index could not be opened.".to_owned())?;
+    let mut statement = connection
+        .prepare("SELECT track_json FROM tracks ORDER BY path")
         .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
-    Ok(entries.into_iter().map(|entry| entry.track).collect())
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
+    rows.map(|row| {
+        row.map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())
+            .and_then(|json| {
+                serde_json::from_str(&json).map_err(|_| {
+                    "MichoPlay’s saved library index contains invalid data.".to_owned()
+                })
+            })
+    })
+    .collect()
 }
 
 #[tauri::command]
@@ -3012,6 +3417,7 @@ pub fn run() {
             volume: 0.75,
             repeat_mode: "off".to_owned(),
             autoplay: true,
+            watch_library: true,
             equalizer_enabled: Arc::new(AtomicBool::new(true)),
             ..PlayerCore::default()
         })))
@@ -3040,14 +3446,25 @@ pub fn run() {
         .setup(|app| {
             let storage_dir = app.path().home_dir()?.join(".michoplay");
             fs::create_dir_all(&storage_dir)?;
-            // Preserve saved library roots when upgrading from the previous app-data location.
+            // Preserve saved roots and reusable cache data from the previous app-data location.
             let config_path = storage_dir.join("config.json");
-            if !config_path.exists() {
-                if let Ok(previous_dir) = app.path().app_local_data_dir() {
-                    let previous_config = previous_dir.join(".michoplay").join("config.json");
-                    if previous_config.is_file() {
-                        let _ = fs::copy(previous_config, &config_path);
-                    }
+            if let Ok(previous_dir) = app.path().app_local_data_dir() {
+                let previous_storage = previous_dir.join(".michoplay");
+                let previous_config = previous_storage.join("config.json");
+                if !config_path.exists() && previous_config.is_file() {
+                    let _ = fs::copy(previous_config, &config_path);
+                }
+                let previous_index = previous_storage.join("library-index.json");
+                let library_index = storage_dir.join("library-index.json");
+                if !storage_dir.join("library.sqlite").exists()
+                    && !library_index.exists()
+                    && previous_index.is_file()
+                {
+                    let _ = fs::copy(previous_index, library_index);
+                }
+                let previous_artwork = previous_storage.join("artwork");
+                if previous_artwork.is_dir() {
+                    let _ = copy_directory_missing(&previous_artwork, &storage_dir.join("artwork"));
                 }
             }
             if let Ok(mut core) = app.state::<AppState>().0.lock() {
@@ -3056,6 +3473,10 @@ pub fn run() {
                     if let Ok(config) = serde_json::from_slice::<LibraryConfig>(&bytes) {
                         if config.version == 1 {
                             core.roots = config.roots.into_iter().map(PathBuf::from).collect();
+                            core.scan_workers = config
+                                .scan_workers
+                                .filter(|workers| (1..=8).contains(workers));
+                            core.watch_library = config.watch_library;
                         }
                     }
                 }
@@ -3247,6 +3668,7 @@ pub fn run() {
             youtube_download_cancel,
             youtube_download_remove,
             library_scan_folder,
+            library_cancel_scan,
             library_refresh,
             library_saved_roots,
             library_cached_tracks,

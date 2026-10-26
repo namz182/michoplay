@@ -602,6 +602,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .collection-search > svg { flex: 0 0 auto; }
 .scan-banner { display: flex; align-items: center; gap: 9px; padding: 12px 25px; background: #242326; color: #ccc9ce; font-size: 11px; }
 .scan-banner .loading-indicator { width: 13px; height: 13px; }
+.scan-cancel-button { margin-left:auto; padding:4px 9px; border:1px solid rgba(255,255,255,.14); border-radius:6px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
 .status-message { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 25px; background: #292729; color: #d2cfd2; font-size: 11px; line-height: 1.6; }
 .update-notice { display:flex; align-items:center; gap:12px; margin:12px 20px; padding:12px 14px; border:1px solid rgba(245,198,190,.28); border-radius:10px; background:linear-gradient(110deg,rgba(245,198,190,.12),rgba(245,238,232,.055) 60%,rgba(216,238,228,.09)); }
 .update-notice-icon { display:grid; width:34px; height:34px; flex:0 0 34px; place-items:center; border-radius:50%; background:var(--brand-gradient); color:#302b38; }
@@ -717,6 +718,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .folder-card:hover .card-cover, .folder-card:focus-within .card-cover { filter: brightness(.8); }
 .collection-play-button:hover { filter: brightness(1.08); transform: translateY(-1px) scale(1.04); }
 .collection-play-button.active { color: #332d3d; }
+@media (hover: hover) and (min-width: 561px) {
+  .media-card.folder-card:not(.playing):hover { background: rgba(255,255,255,.035); }
+  .media-card.folder-card .card-cover { transition: none; }
+  .media-card.folder-card:hover .card-cover, .media-card.folder-card:focus-within .card-cover { filter: none; }
+  .media-card.folder-card:hover .collection-play-button, .media-card.folder-card:focus-within .collection-play-button { opacity: 1; transform: none; pointer-events: auto; }
+}
 .media-card.playing { background: rgba(245,238,232,.09); }
 .track-row { cursor: default; }
 .track-row .track-number, .track-row .track-name, .track-row .row-action, .queue-song, .queue-actions button, .collection-play-button, .action-menu button, .settings-link, .nav-item, .text-action, .outline-button, .primary-button, .icon-button, .collection-search button, .history-nav button { cursor: pointer; }
@@ -1141,6 +1148,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-player-controls { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-items:center; justify-items:center; margin:17px -7px 10px; }
 .mobile-player-controls button { position:relative; display:grid; width:48px; height:54px; place-items:center; border:0; background:transparent; color:#f3f1f4; font-size:29px; }
 .mobile-player-controls button.active { color:var(--blush); }
+.mobile-player-controls .repeat-one-badge { position:absolute; top:14px; right:7px; padding:0 2px; border-radius:3px; background:#171619; color:inherit; font-size:11px; font-weight:800; line-height:12px; }
 .mobile-player-controls .mobile-big-play { width:68px; height:68px; border-radius:50%; background:var(--brand-gradient); color:#302b38; }
 .mobile-player-actions { display:flex; justify-content:flex-end; margin:5px -8px 0; }
 .mobile-svg-defs { position:absolute; width:0; height:0; overflow:hidden; }
@@ -1176,7 +1184,8 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-queue-tools button.active { color:var(--blush); }
 .mobile-queue-tools button span { font-size:12px; }
 .mobile-queue-tools .full-mode-control span { font-variant-numeric:tabular-nums; }
-.mobile-queue-tools .repeat-symbol { font-size:26px; line-height:22px; }
+.mobile-queue-tools .repeat-symbol { position:relative; font-size:26px; line-height:22px; }
+.mobile-queue-tools .repeat-one-badge { position:absolute; top:-4px; right:-7px; padding:0 2px; border-radius:3px; background:#373539; color:inherit; font-size:10px; font-weight:800; line-height:11px; }
 .mobile-sleep-timer-sheet { display:grid; width:100%; max-height:min(86dvh,780px); overflow:auto; gap:0; padding:9px 16px calc(env(safe-area-inset-bottom) + 18px); border-radius:22px 22px 0 0; background:#242225; box-shadow:0 -12px 40px rgba(0,0,0,.32); }
 .mobile-sleep-timer-sheet h2 { margin:0; padding:2px 0 16px; border-bottom:1px solid rgba(255,255,255,.12); text-align:center; font-size:18px; }
 .mobile-sleep-timer-sheet > button { min-height:67px; padding:0 5px; border:0; border-bottom:1px solid rgba(255,255,255,.045); background:transparent; color:#f1eff2; text-align:left; font-size:16px; font-weight:600; }

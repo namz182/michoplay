@@ -16,6 +16,7 @@ export type YoutubeSearchResult = { id: string; title: string; url: string; thum
 export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; estimatedBytes?: number | null; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string };
 export const api = {
   scanFolder: (folder: string) => invoke<Track[]>("library_scan_folder", { folder }),
+  cancelScan: () => invoke<void>("library_cancel_scan"),
   openAudioFiles: (paths: string[]) => invoke<Track[]>("library_open_audio_files", { paths }),
   takePendingAudioOpens: () => invoke<string[]>("take_pending_audio_opens"),
   takeOpenedAudio: () => invoke<{ name: string; dataBase64: string }[]>("media_take_opened_audio"),
