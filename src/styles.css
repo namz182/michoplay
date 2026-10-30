@@ -627,14 +627,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .scan-banner .loading-indicator { width: 13px; height: 13px; }
 .scan-cancel-button { margin-left:auto; padding:4px 9px; border:1px solid rgba(255,255,255,.14); border-radius:6px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
 .status-message { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 25px; background: #292729; color: #d2cfd2; font-size: 11px; line-height: 1.6; }
-.update-notice { display:flex; align-items:center; gap:12px; margin:12px 20px; padding:12px 14px; border:1px solid rgba(245,198,190,.28); border-radius:10px; background:linear-gradient(110deg,rgba(245,198,190,.12),rgba(245,238,232,.055) 60%,rgba(216,238,228,.09)); }
-.update-notice-icon { display:grid; width:34px; height:34px; flex:0 0 34px; place-items:center; border-radius:50%; background:var(--brand-gradient); color:#302b38; }
-.update-notice-copy { display:grid; min-width:0; flex:1; gap:3px; }
-.update-notice-copy strong { overflow:hidden; color:var(--text); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
-.update-notice-copy small { color:var(--muted); font-size:10px; }
-.update-download-button { display:flex; min-height:34px; flex:0 0 auto; align-items:center; justify-content:center; gap:7px; padding:0 12px; border:0; border-radius:999px; background:var(--brand-gradient); color:#302b38; font-size:11px; font-weight:800; cursor:pointer; }
-.update-download-button:hover { filter:brightness(1.06); }
-.update-dismiss { width:28px; height:30px; flex:0 0 28px; }
 .inline-link { padding: 0; border: 0; background: transparent; color: var(--brand-highlight); font-size: inherit; text-decoration: underline; cursor: pointer; }
 .track-row, .table-head { grid-template-columns: 27px minmax(0,1.65fr) minmax(0,1fr) minmax(65px,.7fr) 110px; gap: 9px; }
 .track-title-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -934,6 +926,32 @@ body.resizing { cursor: col-resize; user-select: none; }
 .about-dialog-links button > svg { color: #e6dbe4; }
 .about-dialog-links button > svg:last-child { color: #aaa4ae; }
 .about-dialog-links span { min-width: 0; overflow: hidden; font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.update-dialog-overlay { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(0,0,0,.72); backdrop-filter: blur(7px); }
+.update-dialog { display: grid; width: min(464px,100%); gap: 24px; padding: 28px; border: 1px solid rgba(255,255,255,.06); border-radius: 30px; background: #403637; box-shadow: 0 26px 90px rgba(0,0,0,.52); color: #f4edef; }
+.update-dialog-heading { display: flex; align-items: center; gap: 16px; }
+.update-dialog-icon { display: grid; width: 64px; height: 64px; flex: 0 0 64px; place-items: center; border-radius: 22px; background: rgba(255,255,255,.075); color: #f4e7e9; }
+.update-dialog-title-copy { display: grid; gap: 5px; }
+.update-dialog-title-copy h2 { margin: 0; font-size: 23px; font-weight: 800; letter-spacing: -.4px; }
+.update-dialog-title-copy p { margin: 0; color: #d0c3c5; font-size: 14px; font-weight: 650; }
+.update-version-comparison { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 2px 0; }
+.update-version-comparison > svg { margin-top: 17px; color: #ded0d2; }
+.update-version-item { display: grid; justify-items: center; gap: 7px; }
+.update-version-item > span { color: #d4c8ca; font-size: 12px; font-weight: 650; }
+.update-version-item > strong { padding: 9px 16px; border-radius: 999px; background: rgba(30,24,25,.24); color: #f5edef; font-size: 14px; font-weight: 750; }
+.update-install-button { display: flex; min-height: 56px; align-items: center; justify-content: center; gap: 12px; margin-top: 2px; border: 0; border-radius: 999px; background: #e7d2d5; color: #362d2e; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; transition: background .16s ease, transform .16s ease; }
+.update-install-button:hover { background: #f1e1e3; transform: translateY(-1px); }
+.update-install-button:focus-visible, .update-later-button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.update-later-button { justify-self: end; min-width: 150px; min-height: 48px; padding: 0 24px; border: 1px solid rgba(255,255,255,.15); border-radius: 999px; background: transparent; color: #eee4e5; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; transition: background .16s ease; }
+.update-later-button:hover { background: rgba(255,255,255,.07); }
+@media (max-width: 520px) {
+  .update-dialog-overlay { padding: 16px; }
+  .update-dialog { gap: 22px; padding: 24px 22px 20px; border-radius: 28px; }
+  .update-dialog-icon { width: 58px; height: 58px; flex-basis: 58px; border-radius: 20px; }
+  .update-dialog-title-copy h2 { font-size: 21px; }
+  .update-version-comparison { gap: 14px; }
+  .update-install-button { min-height: 54px; }
+  .update-later-button { min-width: 142px; }
+}
 @media (max-height: 720px) {
   .about-dialog { gap: 12px; padding: 14px; }
   .about-dialog-hero { gap: 7px; padding: 16px 16px 14px; }
@@ -1465,11 +1483,6 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .mobile-bottom-nav button svg { width:21px; height:21px; }
 .android-app .mobile-bottom-nav button span { font-size:10px; font-weight:650; }
 .android-app .status-message { margin:8px 12px; }
-.android-app .update-notice { gap:9px; margin:10px 12px; padding:10px; }
-.android-app .update-notice-icon { width:30px; height:30px; flex-basis:30px; }
-.android-app .update-notice-copy strong { font-size:11px; }
-.android-app .update-download-button { min-height:32px; gap:5px; padding:0 9px; font-size:10px; }
-.android-app .update-dismiss { width:24px; flex-basis:24px; }
 .android-app .settings-page { padding:12px 17px 24px; }
 .android-app .settings-page h1 { font-size:27px; }
 @media (max-width:380px) {

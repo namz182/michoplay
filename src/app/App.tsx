@@ -7,7 +7,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion, onBackButtonPress } from "@tauri-apps/api/app";
 import {
-  AudioLines, Disc3, Heart, Home, ListMusic, Music2, Play, Plus, Search, Shuffle,
+  AudioLines, ArrowRight, Disc3, Heart, Home, ListMusic, Music2, Play, Plus, Search, Shuffle,
   SkipBack, SkipForward, Volume2, VolumeX, Settings2, MoreHorizontal, FolderOpen, Pause,
   Trash2, X, PanelRightClose, PanelRightOpen, ChevronLeft, ChevronRight,
   ChevronUp, ChevronDown, GripVertical, RefreshCw, Pencil, Clock3, Youtube,
@@ -45,7 +45,6 @@ const trackSortOptions: { key: TrackSort; label: string }[] = [
   { key: "releaseDate", label: "Release date" }, { key: "duration", label: "Duration" },
 ];
 const latestReleaseApiUrl = "https://api.github.com/repos/namz182/michoplay/releases/latest";
-const releasesPageUrl = "https://github.com/namz182/michoplay/releases";
 const michoplayGithubUrl = "https://github.com/namz182/michoplay";
 const michoplayIssueUrl = "https://github.com/namz182/michoplay/issues/new";
 const michoplayDeveloperUrl = "https://mainza.dev";
@@ -165,6 +164,7 @@ export default function App() {
   const [mobileAboutOpen, setMobileAboutOpen] = useState(false);
   const [appVersion, setAppVersion] = useState(packageInfo.version);
   const [availableUpdate, setAvailableUpdate] = useState<string | null>(null);
+  const [deferredUpdatePrompt, setDeferredUpdatePrompt] = useState<string | null>(null);
   const [fullPanelTab, setFullPanelTab] = useState<"queue" | "browse">("queue");
   const [fullBrowseTab, setFullBrowseTab] = useState<"playlists" | "library">("playlists");
   const [fullBrowsePlaylistId, setFullBrowsePlaylistId] = useState<string | null>(null);
@@ -400,6 +400,14 @@ export default function App() {
     void getVersion().then(setAppVersion).catch(() => {});
   }, []);
   useEffect(() => {
+    if (!availableUpdate || deferredUpdatePrompt === availableUpdate) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDeferredUpdatePrompt(availableUpdate);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [availableUpdate, deferredUpdatePrompt]);
+  useEffect(() => {
     if (!isTauri() || !appVersion) return;
     let active = true;
     let controller: AbortController | undefined;
@@ -427,8 +435,7 @@ export default function App() {
           setAvailableUpdate(null);
           return;
         }
-        if (stored("dismissed-update-version", "") === latestVersion) setAvailableUpdate(null);
-        else setAvailableUpdate(latestVersion);
+        setAvailableUpdate(latestVersion);
       } catch {
         // Update checks are optional; stay quiet when offline or GitHub is unavailable.
       } finally {
@@ -1421,6 +1428,16 @@ export default function App() {
   </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); localStorage.removeItem("michoplay-recent-searches"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
 
   const submenuPlacement = menu && !isAndroid ? playlistSubmenuPlacement(menu.x) : "";
+  const updatePromptOpen = Boolean(availableUpdate && deferredUpdatePrompt !== availableUpdate);
+  const deferUpdatePrompt = () => { if (availableUpdate) setDeferredUpdatePrompt(availableUpdate); };
+  const openUpdateDownload = () => {
+    void openUrl(michoplayWebsiteUrl)
+      .then(deferUpdatePrompt)
+      .catch((error) => {
+        setMessage(`Could not open the MichoPlay website: ${String(error)}`);
+        deferUpdatePrompt();
+      });
+  };
   return <main ref={appFrameRef} className={`app-frame ${compact ? "compact" : ""} ${isAndroid ? "android-app" : "desktop-app"}`} style={{ "--sidebar-width": `${sidebarWidth}px`, "--panel-width": `${panelWidth}px` } as CSSProperties}>
     <svg className="mobile-svg-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="michoplay-brand-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#f5c6be"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="#d8eee4"/></linearGradient></defs></svg>
     {startupLoading && <div className="startup-loading" role="status" aria-live="polite" aria-label="Loading MichoPlay">
@@ -1459,12 +1476,6 @@ export default function App() {
       <header className="topbar"><div className="history-nav"><div className="app-menu-anchor"><button className="icon-button menu-trigger" aria-label="Application menu" aria-expanded={appMenu} onClick={() => { setAppMenu(!appMenu); setMenu(null); }}><MoreHorizontal size={22}/></button>{appMenu && <div className="action-menu app-menu"><button onClick={() => { chooseLibrarySource(); setAppMenu(false); }}><Plus size={15}/>Add music folder</button><button onClick={() => { void refresh(); setAppMenu(false); }}><RefreshCw size={15}/>Refresh library</button><button onClick={() => newPlaylist()}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><button onClick={() => navigate({ section: "Settings" })}><Settings2 size={15}/>Settings</button><button onClick={() => { setAboutOpen(true); setAppMenu(false); }}><AudioLines size={15}/>About MichoPlay</button></div>}</div><button className="icon-button" aria-label="Go back" disabled={history.index === 0} onClick={() => travel(-1)}><ChevronLeft size={24}/></button><button className="icon-button" aria-label="Go forward" disabled={history.index === history.entries.length - 1} onClick={() => travel(1)}><ChevronRight size={24}/></button></div><div className={`search-box global-search ${searchOpen ? "expanded" : ""}`} role="search"><Search size={17}/><input aria-label="Search all music" aria-expanded={searchOpen} aria-controls="global-search-results" placeholder="What do you want to play?" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { setSearch(event.target.value); setSearchOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") setSearchOpen(false); else if (event.key === "ArrowDown") { event.preventDefault(); document.querySelector<HTMLButtonElement>(".global-search-result")?.focus(); } else if (event.key === "Enter") event.preventDefault(); }}/>{search && <button className="icon-button" aria-label="Clear search" onClick={() => { setSearch(""); setSearchOpen(true); }}><X size={15}/></button>}{searchOpen && <div className="global-search-popover" id="global-search-results" role="listbox" aria-label="Search results">{globalSearchContent}</div>}</div><button className={`topbar-downloads ${showPanel && panelView === "downloads" ? "active" : ""}`} aria-label="Downloads" title="Downloads" onClick={() => { setPanelView("downloads"); setShowPanel(true); }}><Download size={18}/></button><button className={`topbar-settings ${page.section === "Settings" ? "active" : ""}`} aria-label="Settings" title="Settings" onClick={() => navigate({ section: "Settings" })}><Settings2 size={18}/></button></header>
       <div className={`work-area ${showPanel ? "with-panel" : "without-panel"}`}>
         <section className="content-scroll" aria-label={heading}>
-          {availableUpdate && <div className="update-notice" role="status">
-            <span className="update-notice-icon"><Download size={17}/></span>
-            <span className="update-notice-copy"><strong>MichoPlay {availableUpdate} is available</strong><small>Installed version {appVersion}</small></span>
-            <button className="update-download-button" onClick={() => { void openUrl(releasesPageUrl).catch((error) => setMessage(`Could not open the releases page: ${String(error)}`)); }}><Download size={14}/>Download</button>
-            <button className="icon-button update-dismiss" aria-label="Dismiss update notice" title="Remind me later" onClick={() => { localStorage.setItem("michoplay-dismissed-update-version", availableUpdate); setAvailableUpdate(null); }}><X size={15}/></button>
-          </div>}
           {scanning && <div className="scan-banner" role="status"><span className="loading-indicator"/><span>{scanProgress?.phase ?? "Scanning music and artwork…"}{scanProgress?.phase === "Finding audio files" && scanProgress.processed ? ` · ${scanProgress.processed.toLocaleString()} found` : scanProgress?.total ? ` · ${scanProgress.processed.toLocaleString()} of ${scanProgress.total.toLocaleString()}` : ""}</span><button className="scan-cancel-button" onClick={() => void api.cancelScan().catch(() => {})}>Cancel</button></div>}
           {message && <div className="status-message" role="status"><span>{message.includes("Refresh the folder") ? <>{message.split("Refresh the folder")[0]}<button className="inline-link" onClick={() => void refresh()}>Refresh the folder</button>{message.split("Refresh the folder")[1]}</> : message}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage("")}><X size={13}/></button></div>}
           {isAndroid && page.section === "Settings" ? mobileAboutOpen ? <MobileAboutPage version={appVersion} onBack={() => setMobileAboutOpen(false)} onOpenUrl={(url) => { void openUrl(url).catch((error) => setMessage(`Could not open the link: ${String(error)}`)); }} onShare={() => { void shareMichoPlay(); }} /> : <MobileSettingsPage
@@ -1641,6 +1652,12 @@ export default function App() {
       {isAndroid && <div className="mobile-action-heading"><div className="mobile-sheet-handle" role="presentation" onPointerDown={beginMobileSheetDrag} onPointerUp={(event) => finishMobileSheetDrag(event, () => setMenu(null))} onPointerCancel={() => { mobileSheetDragStartY.current = null; }}/><div className="mobile-action-track"><Cover className="mobile-queue-cover" keys={[menu.track.artworkKey]}/><span><strong>{menu.track.title}</strong><small>{menu.track.artist}</small></span></div></div>}
       <div className="playlist-menu-wrap" onMouseEnter={() => setPlaylistSubmenu(true)}><button role="menuitem" aria-expanded={playlistSubmenu} onClick={() => setPlaylistSubmenu(!playlistSubmenu)}><Plus size={15}/>Add to playlist<ChevronRight size={14} className="menu-arrow"/></button>{playlistSubmenu && <div ref={playlistSubmenuRef} className={`playlist-submenu ${submenuPlacement}`}><label className="playlist-find"><Search size={15}/><input autoFocus placeholder="Find a playlist" aria-label="Find a playlist" value={playlistSearch} onChange={(event) => setPlaylistSearch(event.target.value)}/></label><button onClick={() => newPlaylist(menu.track)}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><div className="playlist-options">{playlists.filter((item) => item.name.toLocaleLowerCase().includes(playlistSearch.toLocaleLowerCase())).map((item) => <button key={item.id} onClick={() => addToPlaylist(item, menu.track)}><ListMusic size={15}/>{item.name}</button>)}</div>{!playlists.length && <p>Create your first playlist above.</p>}</div>}</div>{!isAndroid && <button role="menuitem" onClick={() => { shareTrack(menu.track); setMenu(null); }}><Share2 size={15}/>Share</button>}{selectedPlaylist && <button role="menuitem" onClick={() => confirmRemovePlaylistTrack(selectedPlaylist, menu.track)}><Trash2 size={15}/>Remove from playlist</button>}<button role="menuitem" onClick={() => { toggleFavorite(menu.track.id); setMenu(null); }}><Heart size={15}/>{favorites.includes(menu.track.id) ? "Remove from favorites" : "Save to favorites"}</button><button role="menuitem" onClick={() => { void run(() => api.queueAdd(menu.track.id)); setMenu(null); }}><ListMusic size={15}/>Add to queue</button><button role="menuitem" onClick={() => { playCollection(menu.track); setMenu(null); }}><Play size={15}/>Play now</button><div className="menu-separator"/><button role="menuitem" onClick={() => navigate({ section: "Artists", detail: { kind: "artist", key: menu.track.artist, title: menu.track.artist } })}><AudioLines size={15}/>Go to artist</button><button role="menuitem" onClick={() => navigate({ section: "Albums", detail: { kind: "album", key: albumKey(menu.track), title: menu.track.album } })}><Disc3 size={15}/>Go to album</button>
     </div></>, isAndroid ? appFrameRef.current ?? document.body : document.body)}
+    {updatePromptOpen && availableUpdate && <div className="update-dialog-overlay"><section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" aria-describedby="update-dialog-description">
+      <header className="update-dialog-heading"><span className="update-dialog-icon"><Download size={27}/></span><span className="update-dialog-title-copy"><h2 id="update-dialog-title">Update Available</h2><p id="update-dialog-description">A new version is ready</p></span></header>
+      <div className="update-version-comparison" aria-label={`Current version ${appVersion}; new version ${availableUpdate}`}><div className="update-version-item"><span>Current</span><strong>v{appVersion}</strong></div><ArrowRight size={20} aria-hidden="true"/><div className="update-version-item"><span>New</span><strong>v{availableUpdate}</strong></div></div>
+      <button className="update-install-button" onClick={openUpdateDownload}><Download size={17}/>Download</button>
+      <button className="update-later-button" onClick={deferUpdatePrompt}>Later</button>
+    </section></div>}
     {aboutOpen && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><div className="about-dialog-head"><span className="about-dialog-kicker">About</span><button className="icon-button" aria-label="Close About" title="Close" onClick={() => setAboutOpen(false)}><X size={19}/></button></div><div className="about-dialog-hero"><span className="about-mark"><AudioLines size={46}/></span><h2 id="about-title">MichoPlay</h2><span className="about-version-pill">Version {appVersion}</span><div className="about-dialog-actions"><button onClick={() => openAboutUrl(michoplayGithubUrl)}><Github size={16}/>GitHub</button><button onClick={() => openAboutUrl(michoplayIssueUrl)}><Bug size={16}/>Report issue</button></div></div><section className="about-dialog-section"><h3>Links</h3><div className="about-dialog-links"><button onClick={() => openAboutUrl(michoplayDeveloperUrl)}><Globe2 size={18}/><span>Developer</span><ChevronRight size={17}/></button><button onClick={() => openAboutUrl(michoplayWebsiteUrl)}><AudioLines size={18}/><span>Website</span><ChevronRight size={17}/></button></div></section></section></div>}
     {dialog && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setDialog(null); }}><form className="playlist-dialog" role="dialog" aria-modal="true" aria-labelledby="playlist-dialog-title" onSubmit={(event) => { event.preventDefault(); savePlaylist(); }}><div className="dialog-title"><h2 id="playlist-dialog-title">{dialog.playlist ? "Rename playlist" : "Create playlist"}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={() => setDialog(null)}><X size={18}/></button></div><label>Playlist name<input autoFocus required maxLength={120} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)}/></label>{dialog.target && <p>“{dialog.target.title}” will be added.</p>}<button className="primary-button" type="submit" disabled={!playlistName.trim()}>{dialog.playlist ? "Save" : "Create playlist"}</button></form></div>}
     {addSongsPlaylistId && <div className="dialog-overlay add-songs-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAddSongsPlaylistId(null); }}>
