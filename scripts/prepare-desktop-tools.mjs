@@ -20,7 +20,7 @@ const cacheDirectory = join(fileURLToPath(new URL("../.cache/desktop-tools/", im
 mkdirSync(cacheDirectory, { recursive: true });
 const suffix = target.endsWith("-pc-windows-msvc") ? ".exe" : "";
 const outputs = ["yt-dlp", "ffmpeg", "deno"].map((name) => join(outputDirectory, `michoplay-${name}-${target}${suffix}`));
-const needsTool = [!existsSync(outputs[0]), !ffmpegSupportsMp3(outputs[1]), !existsSync(outputs[2])];
+const needsTool = [!existsSync(outputs[0]), !ffmpegSupportsMp3(outputs[1], target), !existsSync(outputs[2])];
 
 if (!needsTool.some(Boolean)) {
   console.log(`Desktop downloader tools are already staged for ${target}.`);
@@ -55,7 +55,7 @@ try {
     const ffmpegSumsAsset = requireAsset(ffmpegRelease, "checksums.sha256");
     const ffmpegArchive = await downloadVerified(ffmpegAsset, ffmpegSumsAsset, basename(ffmpegAsset.name), cacheDirectory);
     const ffmpegPath = extractBinary(ffmpegArchive, targetInfo.ffmpegBinary, temporaryDirectory);
-    if (!ffmpegSupportsMp3(ffmpegPath)) throw new Error(`The bundled FFmpeg for ${target} does not include an MP3 encoder.`);
+    if (!ffmpegSupportsMp3(ffmpegPath, target)) throw new Error(`The bundled FFmpeg for ${target} does not include an MP3 encoder.`);
     stagedTools.push([ffmpegPath, outputs[1]]);
   }
 
@@ -106,8 +106,14 @@ function targetDetails(triple) {
   return supported[triple];
 }
 
-function ffmpegSupportsMp3(path) {
+function ffmpegSupportsMp3(path, target) {
   if (!existsSync(path)) return false;
+  if (target !== hostTarget()) {
+    // Cross-compiled targets cannot be executed on the build host. Check the
+    // linked encoder names instead; the app rechecks FFmpeg at runtime.
+    const binary = readFileSync(path);
+    return ["libmp3lame", "libshine"].some((encoder) => binary.includes(Buffer.from(encoder)));
+  }
   const result = spawnSync(path, ["-hide_banner", "-encoders"], { encoding: "utf8", windowsHide: true });
   if (result.error || result.status !== 0) return false;
   return `${result.stdout}\n${result.stderr}`.split(/\r?\n/).some((line) =>

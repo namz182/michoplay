@@ -2188,24 +2188,51 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) -> bool {
 }
 
 #[cfg(not(target_os = "android"))]
-fn bundled_desktop_tool(name: &str) -> Result<std::path::PathBuf, String> {
-    let executable = std::env::current_exe()
-        .map_err(|_| "MichoPlay couldn’t locate its bundled audio tools.".to_owned())?;
-    let directory = executable
-        .parent()
-        .ok_or_else(|| "MichoPlay couldn’t locate its bundled audio tools.".to_owned())?;
+fn bundled_desktop_tool(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
     let filename = if cfg!(target_os = "windows") {
         format!("michoplay-{name}.exe")
     } else {
         format!("michoplay-{name}")
     };
-    let path = directory.join(filename);
-    if !path.is_file() {
-        return Err(format!(
-            "MichoPlay’s bundled {name} tool is missing. Reinstall the desktop app."
-        ));
+    let mut directories = Vec::new();
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            directories.push(directory.to_path_buf());
+            directories.push(directory.join("binaries"));
+        }
     }
-    Ok(path)
+    if let Ok(resources) = app.path().resource_dir() {
+        directories.push(resources.clone());
+        directories.push(resources.join("binaries"));
+    }
+
+    for directory in directories {
+        let direct_path = directory.join(&filename);
+        if direct_path.is_file() {
+            return Ok(direct_path);
+        }
+
+        // Tauri keeps the target triple on externalBin filenames in the bundle.
+        // Look for that packaged name as well as the unsuffixed development name.
+        if let Ok(entries) = std::fs::read_dir(&directory) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(candidate) = path.file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if candidate.starts_with(&format!("michoplay-{name}-"))
+                    && (candidate.ends_with(".exe") == cfg!(target_os = "windows"))
+                    && path.is_file()
+                {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "MichoPlay’s bundled {name} tool is missing. Reinstall the desktop app."
+    ))
 }
 
 #[cfg(not(target_os = "android"))]
@@ -2228,15 +2255,19 @@ fn ffmpeg_supports_mp3(path: &Path) -> bool {
 }
 
 #[cfg(not(target_os = "android"))]
-fn desktop_mp3_ffmpeg() -> Result<PathBuf, String> {
+fn desktop_mp3_ffmpeg(app: &AppHandle) -> Result<PathBuf, String> {
     // The current redistributable bundle is LGPL-only and may not include an MP3 encoder.
     // Prefer it when capable, then use a system encoder so MP3 downloads still work.
-    if let Ok(bundled) = bundled_desktop_tool("ffmpeg") {
+    if let Ok(bundled) = bundled_desktop_tool(app, "ffmpeg") {
         if ffmpeg_supports_mp3(&bundled) {
             return Ok(bundled);
         }
     }
-    let executable = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let executable = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
     if let Some(system) = std::env::var_os("PATH")
         .into_iter()
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
@@ -2327,12 +2358,14 @@ async fn youtube_search(
     limit: Option<usize>,
     offset: Option<usize>,
     bridge: State<'_, MediaBridge>,
+    app: AppHandle,
 ) -> Result<Vec<YoutubeSearchResult>, String> {
     let limit = limit.unwrap_or(15).clamp(1, 30);
     let offset = offset.unwrap_or(0).min(50);
     let search_end = offset.saturating_add(limit).min(50);
     #[cfg(target_os = "android")]
     {
+        let _ = app;
         let plugin = android_media_plugin(&bridge)?;
         call_android_media(
             plugin,
@@ -2345,6 +2378,7 @@ async fn youtube_search(
     #[cfg(not(target_os = "android"))]
     {
         let _ = bridge;
+        let yt_dlp = bundled_desktop_tool(&app, "yt-dlp")?;
         let query = query.trim().to_owned();
         if query.is_empty() || query.chars().count() > 200 {
             return Err("Enter a search or YouTube link (up to 200 characters).".to_owned());
@@ -2357,7 +2391,6 @@ async fn youtube_search(
             && url::Url::parse(&query)
                 .ok()
                 .is_some_and(|url| url.query_pairs().any(|(key, _)| key == "list"));
-        let yt_dlp = bundled_desktop_tool("yt-dlp")?;
         tauri::async_runtime::spawn_blocking(move || {
             let search = if is_url {
                 query
@@ -2859,9 +2892,9 @@ fn run_youtube_download(
         .join("YouTube");
     std::fs::create_dir_all(&directory)
         .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
-    let yt_dlp = bundled_desktop_tool("yt-dlp")?;
-    let ffmpeg = desktop_mp3_ffmpeg()?;
-    let deno = bundled_desktop_tool("deno")?;
+    let yt_dlp = bundled_desktop_tool(app, "yt-dlp")?;
+    let ffmpeg = desktop_mp3_ffmpeg(app)?;
+    let deno = bundled_desktop_tool(app, "deno")?;
     let output_template = directory.join("%(title).180B.%(ext)s");
     let mut child = hidden_command(yt_dlp)
         .arg("--ignore-config")

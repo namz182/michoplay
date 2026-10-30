@@ -191,10 +191,13 @@ button:disabled { cursor: default; }
 
 .now-panel { min-width: 0; overflow: auto; padding: 15px; border-radius: 12px 12px 0 0; background: #141316; scrollbar-width: thin; scrollbar-color: #514c54 transparent; }
 .now-panel-head { padding: 2px 1px 12px; color: #eeeaf1; font-size: 12px; font-weight: 750; }
-.now-empty { display: grid; justify-items: start; gap: 8px; padding: 15px 0 19px; border-bottom: 1px solid rgba(255,255,255,.1); }
-.now-empty-icon { display: grid; width: 36px; height: 36px; place-items: center; margin-bottom: 3px; border-radius: 5px; background: var(--brand-gradient); color: #302b38; }
-.now-empty strong { color: #f4f0f6; font-size: 13px; }
-.now-empty > span:last-child { color: #99939e; font-size: 10px; }
+.now-empty { display: grid; justify-items: center; gap: 12px; margin: 8px 0 14px; padding: 22px 15px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.018)); text-align: center; }
+.now-empty-icon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 15px; background: var(--brand-gradient); color: #302b38; }
+.now-empty-copy { display: grid; min-width: 0; gap: 5px; }
+.now-empty strong { color: #f4f0f6; font-size: 14px; }
+.now-empty-copy span { color: #aaa4ae; font-size: 11px; line-height: 1.5; }
+.now-empty-action { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 13px; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; background: rgba(255,255,255,.055); color: #eeeaf1; font-size: 10px; font-weight: 700; cursor: pointer; }
+.now-empty-action:hover { background: rgba(255,255,255,.11); }
 .queue-hint { display: flex; align-items: center; gap: 8px; padding: 15px 1px; color: #d0cad4; font-size: 10px; }
 .queue-empty { margin-left: auto; color: #817b86; font-size: 9px; }
 
@@ -352,14 +355,14 @@ button:disabled { cursor: default; }
 .home-empty > svg { color: var(--brand-highlight); }
 .home-empty .text-action { margin-left: auto; }
 .home-quick-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.home-quick-grid.home-library-links { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 8px 0 16px; }
+.home-quick-grid.home-library-links { grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); margin: 8px 0 16px; }
 .home-quick-card { display: flex; min-width: 0; min-height: 64px; align-items: center; gap: 11px; padding: 0; overflow: hidden; border: 0; border-radius: 5px; background: rgba(255,255,255,.095); color: #f3f1f4; text-align: left; cursor: pointer; transition: background 130ms ease; }
 .home-quick-card:hover { background: rgba(255,255,255,.16); }
 .home-quick-art { display: grid; width: 64px; height: 64px; flex: 0 0 64px; place-items: center; overflow: hidden; border-radius: 4px; background: #2c2930; color: #d8eee4; }
 .home-youtube-link .home-quick-art { background: var(--youtube-red); color: #fff; }
 .home-quick-art.artist { border-radius: 0; }
 .home-quick-card > span:last-child { display: grid; min-width: 0; gap: 4px; padding-right: 8px; }
-.home-quick-card strong, .home-quick-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-quick-card strong, .home-quick-card small { overflow-wrap: anywhere; white-space: normal; }
 .home-quick-card strong { font-size: 12px; font-weight: 700; }
 .home-quick-card small { color: #b7b2ba; font-size: 10px; }
 .track-row { grid-template-columns: 31px minmax(0, 1.65fr) minmax(0, 1.05fr) minmax(80px, .75fr) 100px; }
@@ -1221,8 +1224,8 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .home-quick-art { width:50px; height:50px; flex-basis:50px; border-radius:5px; }
 .android-app .home-youtube-link .home-quick-art { display:grid; place-items:center; background:var(--youtube-red); color:#fff; }
 .android-app .home-quick-card > span:last-child { display:grid; min-width:0; gap:4px; padding-right:5px; text-align:left; }
-.android-app .home-quick-card strong { display:-webkit-box; overflow:hidden; font-size:12px; line-height:1.2; text-overflow:clip; white-space:normal; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
-.android-app .home-quick-card small { overflow:hidden; color:#b8b4bc; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.android-app .home-quick-card strong { font-size:12px; line-height:1.2; overflow-wrap:anywhere; white-space:normal; }
+.android-app .home-quick-card small { color:#b8b4bc; font-size:10px; overflow-wrap:anywhere; white-space:normal; }
 .android-app .mobile-bottom-nav { grid-template-columns:repeat(5,minmax(0,1fr)); }
 .android-app .mobile-bottom-nav button { min-height:51px; }
 .android-app .mobile-bottom-nav button.active { color:var(--brand-highlight); }
