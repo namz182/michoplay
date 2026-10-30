@@ -345,7 +345,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.reject("Allow storage access, then tap Download again.")
       return
     }
-    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "message" to "Waiting to download")
+    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>())
     downloads.add(item); emitDownloads(); invoke.resolveObject(item); startQueuedDownloads()
   }
 
@@ -388,9 +388,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           if (item["status"] != "paused" && item["status"] != "cancelled") {
             val audioFiles = staging.walkTopDown().filter { it.isFile && it.extension.equals("mp3", ignoreCase = true) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
-            audioFiles.forEach(::publishAudioToMusic)
+            val filePaths = audioFiles.map(::publishAudioToMusic)
             val finalBytes = audioFiles.sumOf { it.length() }
             item["downloadedBytes"] = finalBytes; item["totalBytes"] = finalBytes
+            item["filePaths"] = filePaths
             item["status"] = "completed"; item["percent"] = 100.0; item["message"] = "Saved to Music/MichoPlay/YouTube"
           }
         } catch (error: Exception) {
@@ -436,12 +437,13 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun publishAudioToMusic(file: File) {
+  private fun publishAudioToMusic(file: File): String {
+    val destination = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube/${file.name}")
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
       val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
       if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("Android couldn’t create Music/MichoPlay/YouTube.")
-      file.copyTo(File(directory, file.name), overwrite = true)
-      return
+      file.copyTo(destination, overwrite = true)
+      return destination.absolutePath
     }
     val values = ContentValues().apply {
       put(MediaStore.Audio.Media.DISPLAY_NAME, file.name)
@@ -456,6 +458,13 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       activity.contentResolver.openOutputStream(uri, "w")?.use { output -> file.inputStream().use { input -> input.copyTo(output) } }
         ?: throw IllegalStateException("Android couldn’t open the new Music file.")
       ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }.also { activity.contentResolver.update(uri, it, null, null) }
+      val storedPath = runCatching {
+        activity.contentResolver.query(uri, arrayOf(MediaStore.Audio.Media.DATA), null, null, null)?.use { cursor ->
+          val column = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+          if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+        }
+      }.getOrNull()
+      return storedPath ?: destination.absolutePath
     } catch (error: Exception) {
       activity.contentResolver.delete(uri, null, null)
       throw error

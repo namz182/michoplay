@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type Folder = { path: string; name: string };
 export type Track = {
-  id: number; title: string; artist: string; album: string; releaseDate: string; addedAt: number; durationMs: number;
+  id: number; path: string; title: string; artist: string; album: string; releaseDate: string; addedAt: number; durationMs: number;
   folderPath: string; folderName: string; rootPath: string; folders: Folder[]; artworkKey: string | null;
 };
 export type PlayerSnapshot = {
@@ -13,7 +13,7 @@ export type PlayerSnapshot = {
   equalizerBands: number[]; equalizerEnabled: boolean;
 };
 export type YoutubeSearchResult = { id: string; title: string; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean };
-export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string };
+export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string; filePaths?: string[] };
 export const api = {
   scanFolder: (folder: string) => invoke<Track[]>("library_scan_folder", { folder }),
   cancelScan: () => invoke<void>("library_cancel_scan"),

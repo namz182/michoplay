@@ -100,6 +100,28 @@ function youtubeDownloadDescription(item: YoutubeDownload) {
   if (item.status === "failed") return youtubeDownloadErrorText(item.message, item.isPlaylist);
   return item.message;
 }
+function normalizedAudioPath(path: string) {
+  const normalized = path.replaceAll("\\", "/").replace(/^\/\/\?\//, "");
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLocaleLowerCase() : normalized;
+}
+function tracksForDownload(item: YoutubeDownload, tracks: Track[], youtubeDirectory: string) {
+  if (item.filePaths?.length) {
+    const byPath = new Map(tracks.map((track) => [normalizedAudioPath(track.path), track]));
+    const seen = new Set<number>();
+    return item.filePaths.flatMap((path) => {
+      const track = byPath.get(normalizedAudioPath(path));
+      if (!track || seen.has(track.id)) return [];
+      seen.add(track.id);
+      return [track];
+    });
+  }
+  if (item.isPlaylist) return [];
+  const candidates = tracks.filter((track) => normalizedAudioPath(track.rootPath) === normalizedAudioPath(youtubeDirectory));
+  const title = item.title.trim().toLocaleLowerCase();
+  const match = candidates.find((track) => normalizedAudioPath(track.path).split("/").pop()?.replace(/\.mp3$/i, "").trim().toLocaleLowerCase() === title)
+    ?? candidates.find((track) => track.title.trim().toLocaleLowerCase() === title);
+  return match ? [match] : [];
+}
 function isFinishedYoutubeDownload(item: YoutubeDownload) {
   return item.status === "completed" || item.status === "failed" || item.status === "cancelled";
 }
@@ -265,7 +287,6 @@ export default function App() {
   const [globalYoutubeVisibleLimit, setGlobalYoutubeVisibleLimit] = useState(youtubeGlobalInitialResultLimit);
   const [globalYoutubeHasMore, setGlobalYoutubeHasMore] = useState(false);
   const [globalYoutubeLoadingMore, setGlobalYoutubeLoadingMore] = useState(false);
-  const [completedDownloadTrackIds, setCompletedDownloadTrackIds] = useState<Record<string, number[]>>({});
   const [zoomLevel, setZoomLevel] = useState(initialZoomLevel);
   const [draggedQueue, setDraggedQueue] = useState<number | null>(null);
   const [queueDrop, setQueueDrop] = useState<number | null>(null);
@@ -386,7 +407,7 @@ export default function App() {
       setYoutubeFolderScanned(true);
       const newIds = scanned.filter((track) => track.rootPath === youtubeDirectory && !knownIds.has(track.id)).map((track) => track.id);
       if (newIds.length) setMessage(`Saved ${newIds.length} ${newIds.length === 1 ? "song" : "songs"} to Music/YouTube`);
-      return newIds;
+      return scanned;
     } catch (error) { setMessage(String(error)); return []; }
     finally { setScanning(false); }
   }, [youtubeDirectory, roots, tracks]);
@@ -527,10 +548,7 @@ export default function App() {
       setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => !items.some((item) => item.url === url && (item.status === "failed" || item.status === "cancelled"))));
       const newlyCompletedIds = items.filter((item) => item.status === "completed" && !completedYoutubeDownloads.current.has(item.id)).map((item) => item.id);
       items.filter((item) => item.status === "completed").forEach((item) => completedYoutubeDownloads.current.add(item.id));
-      if (newlyCompletedIds.length) void syncYoutubeLibrary().then((trackIds) => {
-        if (!trackIds.length) return;
-        setCompletedDownloadTrackIds((prior) => ({ ...prior, ...Object.fromEntries(newlyCompletedIds.map((id) => [id, trackIds])) }));
-      });
+      if (newlyCompletedIds.length) void syncYoutubeLibrary();
     };
     void api.youtubeDownloadsState().then((items) => {
       if (!active) return;
@@ -997,35 +1015,21 @@ export default function App() {
   }
 
   async function playYoutubeDownload(item: YoutubeDownload) {
-    const matchingIds = tracks.filter((track) => track.rootPath === youtubeDirectory && track.title.trim().toLocaleLowerCase() === item.title.trim().toLocaleLowerCase()).map((track) => track.id);
-    const trackIds = completedDownloadTrackIds[item.id] ?? matchingIds;
-    if (trackIds.length) { await run(() => api.playCollection(trackIds, trackIds[0])); return; }
-    const refreshedIds = await syncYoutubeLibrary();
-    if (refreshedIds.length) {
-      setCompletedDownloadTrackIds((prior) => ({ ...prior, [item.id]: refreshedIds }));
-      await run(() => api.playCollection(refreshedIds, refreshedIds[0]));
+    let matching = tracksForDownload(item, tracks, youtubeDirectory);
+    if (!matching.length) matching = tracksForDownload(item, await syncYoutubeLibrary(), youtubeDirectory);
+    if (matching.length) {
+      const trackIds = matching.map((track) => track.id);
+      await run(() => api.playCollection(trackIds, trackIds[0]));
     } else setMessage("The downloaded audio could not be found in Music/YouTube. Try refreshing the library.");
   }
   function openDownloadedTrackMenu(item: YoutubeDownload, event: MouseEvent) {
     event.preventDefault(); event.stopPropagation();
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const matchingIds = completedDownloadTrackIds[item.id] ?? tracks.filter((track) => track.rootPath === youtubeDirectory && track.title.trim().toLocaleLowerCase() === item.title.trim().toLocaleLowerCase()).map((track) => track.id);
-    const track = matchingIds.map((id) => trackMap.get(id)).find((candidate): candidate is Track => Boolean(candidate));
+    const track = tracksForDownload(item, tracks, youtubeDirectory)[0];
     if (track) { openTrackMenuAt(track, rect); return; }
     if (!youtubeDirectory) { setMessage("This download is still being added to your library. Try again shortly."); return; }
-    void api.refresh([...new Set([...roots, youtubeDirectory])]).then(async (scanned) => {
-      setRoots((prior) => [...new Set([...prior, youtubeDirectory])]);
-      setTracks(scanned); setPlayer(await api.state());
-      const downloaded = scanned.filter((candidate) => candidate.rootPath === youtubeDirectory);
-      const downloadedIds = downloaded.map((candidate) => candidate.id);
-      setCompletedDownloadTrackIds((prior) => ({ ...prior, [item.id]: downloadedIds }));
-      setPlaylists((prior) => {
-        const existing = prior.find((playlist) => playlist.name.trim().toLocaleLowerCase() === "youtube");
-        return existing
-          ? prior.map((playlist) => playlist.id === existing.id ? { ...playlist, trackIds: [...new Set([...playlist.trackIds, ...downloadedIds])] } : playlist)
-          : [{ id: "michoplay-youtube", name: "YouTube", trackIds: downloadedIds }, ...prior];
-      });
-      const target = downloaded.find((candidate) => candidate.title.trim().toLocaleLowerCase() === item.title.trim().toLocaleLowerCase()) ?? downloaded[0];
+    void syncYoutubeLibrary().then((scanned) => {
+      const target = tracksForDownload(item, scanned, youtubeDirectory)[0];
       if (target) openTrackMenuAt(target, rect);
       else setMessage("The downloaded song could not be found in Music/YouTube.");
     }).catch((error) => setMessage(String(error)));

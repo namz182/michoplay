@@ -199,6 +199,8 @@ impl<S: Source> Source for EqualizerSource<S> {
 #[serde(rename_all = "camelCase")]
 struct Track {
     id: u64,
+    #[serde(default)]
+    path: String,
     title: String,
     artist: String,
     album: String,
@@ -864,6 +866,7 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
     LibraryTrack {
         track: Track {
             id,
+            path: path.to_string_lossy().into_owned(),
             title,
             artist,
             album,
@@ -1041,7 +1044,10 @@ fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
     rows.flatten()
         .filter_map(
             |(path, root_path, file_size, modified_at, track_json, artwork_mime)| {
-                let track = serde_json::from_str(&track_json).ok()?;
+                let mut track: Track = serde_json::from_str(&track_json).ok()?;
+                if track.path.is_empty() {
+                    track.path = path.clone();
+                }
                 Some((
                     path.clone(),
                     CachedTrack {
@@ -2086,6 +2092,8 @@ struct YoutubeDownloadItem {
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
     message: String,
+    #[serde(default)]
+    file_paths: Vec<String>,
 }
 
 struct YoutubeDownloadTask {
@@ -2243,21 +2251,22 @@ fn ffmpeg_supports_mp3(path: &Path) -> bool {
     let Ok(output) = output else {
         return false;
     };
+    if !output.status.success() {
+        return false;
+    }
     let report = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    report.lines().any(|line| {
-        line.split_whitespace()
-            .any(|field| matches!(field, "mp3" | "libmp3lame" | "libshine"))
-    })
+    report
+        .lines()
+        .any(|line| line.split_whitespace().any(|field| field == "libmp3lame"))
 }
 
 #[cfg(not(target_os = "android"))]
 fn desktop_mp3_ffmpeg(app: &AppHandle) -> Result<PathBuf, String> {
-    // The current redistributable bundle is LGPL-only and may not include an MP3 encoder.
-    // Prefer it when capable, then use a system encoder so MP3 downloads still work.
+    // yt-dlp uses libmp3lame for MP3 extraction, so the encoder must be available.
     if let Ok(bundled) = bundled_desktop_tool(app, "ffmpeg") {
         if ffmpeg_supports_mp3(&bundled) {
             return Ok(bundled);
@@ -2606,6 +2615,7 @@ async fn youtube_download_enqueue(
                 downloaded_bytes: None,
                 total_bytes: None,
                 message: "Waiting to download".to_owned(),
+                file_paths: Vec::new(),
             };
             manager.tasks.push(YoutubeDownloadTask {
                 item: item.clone(),
@@ -2856,9 +2866,10 @@ fn youtube_download_worker(app: AppHandle) {
                     task.process_id = None;
                     if task.item.status == "downloading" {
                         match result {
-                            Ok(final_bytes) => {
+                            Ok((final_bytes, file_paths)) => {
                                 task.item.status = "completed".to_owned();
                                 task.item.percent = Some(100.0);
+                                task.item.file_paths = file_paths;
                                 if let Some(bytes) = final_bytes {
                                     task.item.downloaded_bytes = Some(bytes);
                                     task.item.total_bytes = Some(bytes);
@@ -2884,7 +2895,7 @@ fn run_youtube_download(
     id: &str,
     url: &str,
     is_playlist: bool,
-) -> Result<Option<u64>, String> {
+) -> Result<(Option<u64>, Vec<String>), String> {
     let directory = app
         .path()
         .audio_dir()
@@ -2898,7 +2909,6 @@ fn run_youtube_download(
     let output_template = directory.join("%(title).180B.%(ext)s");
     let mut child = hidden_command(yt_dlp)
         .arg("--ignore-config")
-        .arg("--no-warnings")
         .arg("--newline")
         .arg("--progress")
         .arg("--continue")
@@ -2919,9 +2929,6 @@ fn run_youtube_download(
         .arg("--js-runtimes")
         .arg(format!("deno:{}", deno.to_string_lossy()))
         .arg("--embed-metadata")
-        .arg("--embed-thumbnail")
-        .arg("--convert-thumbnails")
-        .arg("jpg")
         .arg("--print")
         .arg("after_move:__MICHOPLAY_FILE__%(filepath)s")
         .arg("--output")
@@ -2989,15 +2996,22 @@ fn run_youtube_download(
         .map_err(|_| "yt-dlp stopped before the download finished.".to_owned())?;
     let _ = stderr_reader.join();
     if status.success() {
-        let sizes = output_paths
-            .iter()
-            .map(std::fs::metadata)
-            .collect::<Result<Vec<_>, _>>();
-        let final_bytes = sizes
-            .ok()
-            .filter(|_| !output_paths.is_empty())
-            .map(|files| files.iter().map(std::fs::Metadata::len).sum());
-        return Ok(final_bytes);
+        if output_paths.is_empty() {
+            return Err("The downloader finished without reporting an MP3 file.".to_owned());
+        }
+        let mut final_bytes = 0_u64;
+        for path in &output_paths {
+            if !path.extension().is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("mp3")) {
+                return Err("The downloader did not produce an MP3 file.".to_owned());
+            }
+            let metadata = std::fs::metadata(path)
+                .map_err(|_| "The downloaded MP3 file could not be found.".to_owned())?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err("The downloaded MP3 file is empty or unavailable.".to_owned());
+            }
+            final_bytes = final_bytes.saturating_add(metadata.len());
+        }
+        return Ok((Some(final_bytes), output_paths.iter().map(|path| path.to_string_lossy().into_owned()).collect()));
     }
     let current_status = app
         .state::<YoutubeDownloadState>()
@@ -3013,7 +3027,7 @@ fn run_youtube_download(
         })
         .unwrap_or_default();
     if current_status == "paused" || current_status == "cancelled" {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
     let details = stderr_tail
         .lock()
@@ -3163,7 +3177,11 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
         if let Ok(bytes) = fs::read(storage_dir.join("library-index.json")) {
             if let Ok(entries) = serde_json::from_slice::<Vec<CachedTrack>>(&bytes) {
                 let _ = write_library_cache(&storage_dir, &entries);
-                return Ok(entries.into_iter().map(|entry| entry.track).collect());
+                return Ok(entries.into_iter().map(|entry| {
+                    let mut track = entry.track;
+                    if track.path.is_empty() { track.path = entry.path; }
+                    track
+                }).collect());
             }
         }
         return Ok(Vec::new());
@@ -3171,17 +3189,19 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
     let connection = Connection::open(storage_dir.join("library.sqlite"))
         .map_err(|_| "MichoPlay’s saved library index could not be opened.".to_owned())?;
     let mut statement = connection
-        .prepare("SELECT track_json FROM tracks ORDER BY path")
+        .prepare("SELECT path, track_json FROM tracks ORDER BY path")
         .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
     let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
         .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
     rows.map(|row| {
         row.map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())
-            .and_then(|json| {
-                serde_json::from_str(&json).map_err(|_| {
+            .and_then(|(path, json)| {
+                let mut track: Track = serde_json::from_str(&json).map_err(|_| {
                     "MichoPlay’s saved library index contains invalid data.".to_owned()
-                })
+                })?;
+                if track.path.is_empty() { track.path = path; }
+                Ok(track)
             })
     })
     .collect()
@@ -3901,6 +3921,7 @@ mod tests {
             .map(|id| LibraryTrack {
                 track: Track {
                     id,
+                    path: format!("/music/{id}.wav"),
                     title: format!("Song {id}"),
                     artist: "Artist".into(),
                     album: "Album".into(),

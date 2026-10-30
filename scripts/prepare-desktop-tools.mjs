@@ -19,8 +19,9 @@ mkdirSync(outputDirectory, { recursive: true });
 const cacheDirectory = join(fileURLToPath(new URL("../.cache/desktop-tools/", import.meta.url)), target);
 mkdirSync(cacheDirectory, { recursive: true });
 const suffix = target.endsWith("-pc-windows-msvc") ? ".exe" : "";
-const outputs = ["yt-dlp", "ffmpeg", "deno"].map((name) => join(outputDirectory, `michoplay-${name}-${target}${suffix}`));
-const needsTool = [!existsSync(outputs[0]), !ffmpegSupportsMp3(outputs[1], target), !existsSync(outputs[2])];
+const outputs = ["yt-dlp", "ffmpeg", "ffprobe", "deno"].map((name) => join(outputDirectory, `michoplay-${name}-${target}${suffix}`));
+const needsFfmpegPackage = !ffmpegSupportsMp3(outputs[1], target) || !existsSync(outputs[2]);
+const needsTool = [!existsSync(outputs[0]), needsFfmpegPackage, !existsSync(outputs[3])];
 
 if (!needsTool.some(Boolean)) {
   console.log(`Desktop downloader tools are already staged for ${target}.`);
@@ -46,7 +47,7 @@ try {
     const denoAsset = requireAsset(denoRelease, targetInfo.denoAsset);
     const denoSumsAsset = requireAsset(denoRelease, `${targetInfo.denoAsset}.sha256sum`);
     const denoArchive = await downloadVerified(denoAsset, denoSumsAsset, targetInfo.denoAsset, cacheDirectory);
-    stagedTools.push([extractBinary(denoArchive, targetInfo.denoBinary, temporaryDirectory), outputs[2]]);
+    stagedTools.push([extractBinary(denoArchive, targetInfo.denoBinary, temporaryDirectory), outputs[3]]);
   }
 
   if (needsTool[1]) {
@@ -56,7 +57,9 @@ try {
     const ffmpegArchive = await downloadVerified(ffmpegAsset, ffmpegSumsAsset, basename(ffmpegAsset.name), cacheDirectory);
     const ffmpegPath = extractBinary(ffmpegArchive, targetInfo.ffmpegBinary, temporaryDirectory);
     if (!ffmpegSupportsMp3(ffmpegPath, target)) throw new Error(`The bundled FFmpeg for ${target} does not include an MP3 encoder.`);
+    const ffprobePath = extractBinary(ffmpegArchive, targetInfo.ffprobeBinary, temporaryDirectory);
     stagedTools.push([ffmpegPath, outputs[1]]);
+    stagedTools.push([ffprobePath, outputs[2]]);
   }
 
   for (const [source, output] of stagedTools) {
@@ -83,23 +86,23 @@ function targetDetails(triple) {
   const supported = {
     "x86_64-unknown-linux-gnu": {
       ytDlpAsset: "yt-dlp_linux", denoAsset: "deno-x86_64-unknown-linux-gnu.zip",
-      denoBinary: "deno", ffmpegSuffix: "linux64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "linux64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg", ffprobeBinary: "ffprobe",
     },
     "aarch64-unknown-linux-gnu": {
       ytDlpAsset: "yt-dlp_linux_aarch64", denoAsset: "deno-aarch64-unknown-linux-gnu.zip",
-      denoBinary: "deno", ffmpegSuffix: "linuxarm64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "linuxarm64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg", ffprobeBinary: "ffprobe",
     },
     "x86_64-pc-windows-msvc": {
       ytDlpAsset: "yt-dlp.exe", denoAsset: "deno-x86_64-pc-windows-msvc.zip",
-      denoBinary: "deno.exe", ffmpegSuffix: "win64-lgpl-audio.zip", ffmpegBinary: "ffmpeg.exe",
+      denoBinary: "deno.exe", ffmpegSuffix: "win64-lgpl-audio.zip", ffmpegBinary: "ffmpeg.exe", ffprobeBinary: "ffprobe.exe",
     },
     "x86_64-apple-darwin": {
       ytDlpAsset: "yt-dlp_macos", denoAsset: "deno-x86_64-apple-darwin.zip",
-      denoBinary: "deno", ffmpegSuffix: "macos64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "macos64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg", ffprobeBinary: "ffprobe",
     },
     "aarch64-apple-darwin": {
       ytDlpAsset: "yt-dlp_macos", denoAsset: "deno-aarch64-apple-darwin.zip",
-      denoBinary: "deno", ffmpegSuffix: "macosarm64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "macosarm64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg", ffprobeBinary: "ffprobe",
     },
   };
   if (!supported[triple]) throw new Error(`Bundled YouTube audio tools do not support target ${triple}.`);
@@ -109,15 +112,16 @@ function targetDetails(triple) {
 function ffmpegSupportsMp3(path, target) {
   if (!existsSync(path)) return false;
   if (target !== hostTarget()) {
-    // Cross-compiled targets cannot be executed on the build host. Check the
-    // linked encoder names instead; the app rechecks FFmpeg at runtime.
+    // Cross-compiled targets cannot be executed here. A codec name can be
+    // present in an FFmpeg binary even when that encoder is disabled, so
+    // require the build configuration that enables yt-dlp's MP3 encoder.
     const binary = readFileSync(path);
-    return ["libmp3lame", "libshine"].some((encoder) => binary.includes(Buffer.from(encoder)));
+    return binary.includes(Buffer.from("--enable-libmp3lame"));
   }
   const result = spawnSync(path, ["-hide_banner", "-encoders"], { encoding: "utf8", windowsHide: true });
   if (result.error || result.status !== 0) return false;
   return `${result.stdout}\n${result.stderr}`.split(/\r?\n/).some((line) =>
-    line.split(/\s+/).some((field) => ["mp3", "libmp3lame", "libshine"].includes(field)),
+    line.split(/\s+/).includes("libmp3lame"),
   );
 }
 
@@ -200,7 +204,7 @@ async function downloadVerified(asset, sumsAsset, expectedName, directory) {
 
 function extractBinary(archive, name, directory) {
   const extractedDirectory = join(directory, `${basename(archive)}-contents`);
-  mkdirSync(extractedDirectory);
+  mkdirSync(extractedDirectory, { recursive: true });
   if (archive.toLowerCase().endsWith(".zip")) {
     extractZipEntry(archive, name, extractedDirectory);
   } else {

@@ -52,8 +52,15 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
   if (/permission denied|access denied|read.only file system|couldn.t create.*music|couldn.t open.*music/.test(detail)) {
     return "MichoPlay can't save this song. Check storage access and try again.";
   }
+  if (/bundled .+ tool is missing|needs ffmpeg with mp3 encoding support/.test(detail)) {
+    return "The desktop audio tools are missing or cannot encode MP3. Update or reinstall MichoPlay.";
+  }
+  if (/downloader (?:did not produce|finished without reporting) an mp3|downloaded mp3 file/.test(detail)) {
+    return error.trim();
+  }
   if (/ffmpeg|ffprobe|postprocess|audio conversion|convert.*mp3|codec|playable audio file/.test(detail)) {
-    return "The audio downloaded, but MP3 conversion failed. Try again.";
+    const reason = error.split(/\r?\n/).map((line) => line.trim()).reverse().find((line) => /^error:/i.test(line));
+    return reason ? `Audio processing failed: ${reason.replace(/^error:\s*/i, "").slice(0, 180)}` : "Audio processing failed. Try again.";
   }
   if (/429|too many requests|rate.limit/.test(detail)) {
     return "YouTube is limiting downloads right now. Try again later.";

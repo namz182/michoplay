@@ -857,6 +857,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .download-item-art img { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .download-art-play { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; border: 0; background: rgba(10,10,12,.62); color: #fff; opacity: 0; transition: opacity 140ms ease; cursor: pointer; }
 .download-item.status-completed:hover .download-art-play, .download-item.status-completed:focus-within .download-art-play { opacity: 1; }
+.download-item.status-completed .download-art-play { inset: auto 3px 3px auto; width: 25px; height: 25px; border-radius: 50%; background: rgba(18,18,21,.88); opacity: 1; }
 .download-art-play:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .download-item-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
 .download-item-copy strong { display: -webkit-box; overflow: hidden; color: #f1edf4; font-size: 10px; font-weight: 650; line-height: 1.3; text-overflow: ellipsis; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -1258,6 +1259,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-download-art > img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
 .mobile-download-art > button { position:absolute; inset:0; display:grid; place-items:center; border:0; background:rgba(0,0,0,.45); color:#fff; opacity:0; }
 .mobile-download-art:active > button { opacity:1; }
+.mobile-download-row.status-completed .mobile-download-art > button { inset:auto 3px 3px auto; width:27px; height:27px; border-radius:50%; background:rgba(18,18,21,.88); opacity:1; }
 .mobile-download-copy { display:grid; min-width:0; flex:1; gap:4px; }
 .mobile-download-copy strong, .mobile-download-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-download-copy strong { font-size:13px; }
