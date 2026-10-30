@@ -1555,11 +1555,23 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .hidden-song-row strong, .mobile-hidden-song strong { overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .hidden-song-row small, .mobile-hidden-song small { overflow:hidden; color:#aaa4ae; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .hidden-song-row .outline-button { flex:0 0 auto; }
-.mobile-hidden-songs { padding:12px 14px; border-top:1px solid rgba(255,255,255,.07); }
-.mobile-hidden-songs-heading { display:flex; align-items:center; gap:13px; padding:3px 0 10px; }
-.mobile-hidden-songs-heading > span { display:grid; gap:4px; }
-.mobile-hidden-songs-heading strong { font-size:14px; }
-.mobile-hidden-songs-heading small, .mobile-hidden-empty { color:#aaa4ae; font-size:11px; }
+.hidden-songs-settings { display:grid; gap:0; }
+.hidden-songs-toggle { display:flex; width:100%; align-items:center; justify-content:space-between; gap:12px; padding:0 0 8px; border:0; background:transparent; color:#f0edf2; text-align:left; cursor:pointer; }
+.hidden-songs-toggle > span { display:grid; gap:4px; }
+.hidden-songs-toggle strong { font-size:14px; }
+.hidden-songs-toggle small { color:#aaa4ae; font-size:10px; }
+.hidden-songs-toggle > svg { color:#aaa4ae; }
+.hidden-songs-panel { display:grid; max-width:650px; }
+.settings-hidden-search, .mobile-hidden-search { display:flex; min-width:0; align-items:center; gap:9px; height:38px; margin:3px 0 8px; padding:0 11px; border:1px solid rgba(255,255,255,.09); border-radius:999px; background:#1a191c; color:#aaa5af; }
+.settings-hidden-search:focus-within, .mobile-hidden-search:focus-within { border-color:rgba(255,255,255,.42); box-shadow:0 0 0 1px rgba(255,255,255,.12); }
+.settings-hidden-search input, .mobile-hidden-search input { width:100%; min-width:0; flex:1; padding:0; border:0; outline:0; background:transparent; color:#f4f1f5; font-size:11px; }
+.settings-hidden-search input::placeholder, .mobile-hidden-search input::placeholder { color:#817c86; }
+.settings-hidden-search button, .mobile-hidden-search button { display:grid; width:24px; height:26px; flex:0 0 24px; place-items:center; border:0; background:transparent; color:#aaa5af; }
+.mobile-hidden-songs { border-top:1px solid rgba(255,255,255,.07); }
+.mobile-hidden-songs-toggle { width:100%; margin:0; padding:11px 15px; }
+.mobile-hidden-songs.expanded { padding-bottom:0; }
+.mobile-hidden-songs-panel { display:grid; grid-column:1 / -1; gap:0; padding:12px 17px 14px; border-top:1px solid rgba(255,255,255,.075); background:#171619; }
+.mobile-hidden-empty { margin:5px 0 0; color:#aaa4ae; font-size:11px; }
 .mobile-hidden-song { display:flex; min-height:48px; align-items:center; justify-content:space-between; gap:10px; border-top:1px solid rgba(255,255,255,.07); }
 .mobile-hidden-song button { display:flex; min-height:36px; align-items:center; gap:6px; padding:0 8px; border:0; background:transparent; color:#e7c8c9; font-size:11px; }
 .mobile-hidden-empty { margin:5px 0 0 33px; }
