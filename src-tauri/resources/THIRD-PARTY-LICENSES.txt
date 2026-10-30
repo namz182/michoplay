@@ -12,9 +12,11 @@ yt-dlp
 
 FFmpeg
   Project: https://ffmpeg.org/
-  Build source: https://github.com/AtlasYang/ffmpeg-static-builds
+  Build source: https://github.com/Xiragi/FFmpeg-Audio-Builds
   License: GNU Lesser General Public License version 2.1 or later
   License text: https://github.com/FFmpeg/FFmpeg/blob/master/COPYING.LGPLv2.1
+  The bundled audio build includes the LAME MP3 encoder (LGPL-2.0-or-later).
+  LAME project: https://lame.sourceforge.io/
   This application runs FFmpeg as a separate executable.
 
 Deno
