@@ -20,42 +20,52 @@ const cacheDirectory = join(fileURLToPath(new URL("../.cache/desktop-tools/", im
 mkdirSync(cacheDirectory, { recursive: true });
 const suffix = target.endsWith("-pc-windows-msvc") ? ".exe" : "";
 const outputs = ["yt-dlp", "ffmpeg", "deno"].map((name) => join(outputDirectory, `michoplay-${name}-${target}${suffix}`));
+const needsTool = [!existsSync(outputs[0]), !ffmpegSupportsMp3(outputs[1]), !existsSync(outputs[2])];
 
-if (outputs.every(existsSync)) {
+if (!needsTool.some(Boolean)) {
   console.log(`Desktop downloader tools are already staged for ${target}.`);
   process.exit(0);
 }
 
 const temporaryDirectory = mkdtempSync(join(tmpdir(), "michoplay-tools-"));
 try {
-  const [ytDlpRelease, denoRelease, ffmpegReleases] = await Promise.all([
-    githubRelease("yt-dlp", "yt-dlp"),
-    githubRelease("denoland", "deno"),
-    githubReleases("AtlasYang", "ffmpeg-static-builds"),
+  const [ytDlpRelease, denoRelease, ffmpegRelease] = await Promise.all([
+    needsTool[0] ? githubRelease("yt-dlp", "yt-dlp") : null,
+    needsTool[2] ? githubRelease("denoland", "deno") : null,
+    needsTool[1] ? githubRelease("Xiragi", "FFmpeg-Audio-Builds") : null,
   ]);
-  const ffmpegRelease = ffmpegReleases.find((release) => release.assets.some((asset) => asset.name.startsWith("ffmpeg-") && !asset.name.includes("-shared-") && asset.name.endsWith(targetInfo.ffmpegSuffix)));
-  if (!ffmpegRelease) throw new Error(`FFmpeg has no release asset for ${target}.`);
 
-  const ytDlpAsset = requireAsset(ytDlpRelease, targetInfo.ytDlpAsset);
-  const ytDlpSumsAsset = requireAsset(ytDlpRelease, "SHA2-256SUMS");
-  const ytDlpPath = await downloadVerified(ytDlpAsset, ytDlpSumsAsset, basename(ytDlpAsset.name), cacheDirectory);
+  const stagedTools = [];
+  if (needsTool[0]) {
+    const ytDlpAsset = requireAsset(ytDlpRelease, targetInfo.ytDlpAsset);
+    const ytDlpSumsAsset = requireAsset(ytDlpRelease, "SHA2-256SUMS");
+    stagedTools.push([await downloadVerified(ytDlpAsset, ytDlpSumsAsset, basename(ytDlpAsset.name), cacheDirectory), outputs[0]]);
+  }
 
-  const denoAsset = requireAsset(denoRelease, targetInfo.denoAsset);
-  const denoSumsAsset = requireAsset(denoRelease, `${targetInfo.denoAsset}.sha256sum`);
-  const denoArchive = await downloadVerified(denoAsset, denoSumsAsset, targetInfo.denoAsset, cacheDirectory);
-  const denoPath = extractBinary(denoArchive, targetInfo.denoBinary, temporaryDirectory);
+  if (needsTool[2]) {
+    const denoAsset = requireAsset(denoRelease, targetInfo.denoAsset);
+    const denoSumsAsset = requireAsset(denoRelease, `${targetInfo.denoAsset}.sha256sum`);
+    const denoArchive = await downloadVerified(denoAsset, denoSumsAsset, targetInfo.denoAsset, cacheDirectory);
+    stagedTools.push([extractBinary(denoArchive, targetInfo.denoBinary, temporaryDirectory), outputs[2]]);
+  }
 
-  const ffmpegAsset = ffmpegRelease.assets.find((asset) => asset.name.startsWith("ffmpeg-") && !asset.name.includes("-shared-") && asset.name.endsWith(targetInfo.ffmpegSuffix));
-  const ffmpegSumsAsset = requireAsset(ffmpegRelease, "checksums.sha256");
-  const ffmpegArchive = await downloadVerified(ffmpegAsset, ffmpegSumsAsset, basename(ffmpegAsset.name), cacheDirectory);
-  const ffmpegPath = extractBinary(ffmpegArchive, targetInfo.ffmpegBinary, temporaryDirectory);
+  if (needsTool[1]) {
+    const ffmpegAsset = ffmpegRelease.assets.find((asset) => asset.name.startsWith("ffmpeg-") && !asset.name.includes("-shared-") && asset.name.endsWith(targetInfo.ffmpegSuffix));
+    if (!ffmpegAsset) throw new Error(`FFmpeg has no release asset for ${target}.`);
+    const ffmpegSumsAsset = requireAsset(ffmpegRelease, "checksums.sha256");
+    const ffmpegArchive = await downloadVerified(ffmpegAsset, ffmpegSumsAsset, basename(ffmpegAsset.name), cacheDirectory);
+    const ffmpegPath = extractBinary(ffmpegArchive, targetInfo.ffmpegBinary, temporaryDirectory);
+    if (!ffmpegSupportsMp3(ffmpegPath)) throw new Error(`The bundled FFmpeg for ${target} does not include an MP3 encoder.`);
+    stagedTools.push([ffmpegPath, outputs[1]]);
+  }
 
-  for (const [source, output] of [[ytDlpPath, outputs[0]], [ffmpegPath, outputs[1]], [denoPath, outputs[2]]]) {
+  for (const [source, output] of stagedTools) {
     copyFileSync(source, output);
     if (!suffix) chmodSync(output, 0o755);
   }
-  console.log(`Staged yt-dlp, FFmpeg, and Deno for ${target}.`);
-  console.log(`Versions: yt-dlp ${ytDlpRelease.tag_name}, FFmpeg ${ffmpegRelease.tag_name}, Deno ${denoRelease.tag_name}.`);
+  console.log(`Staged ${stagedTools.map(([, output]) => basename(output)).join(", ")} for ${target}.`);
+  const versions = [ytDlpRelease && `yt-dlp ${ytDlpRelease.tag_name}`, ffmpegRelease && `FFmpeg ${ffmpegRelease.tag_name}`, denoRelease && `Deno ${denoRelease.tag_name}`].filter(Boolean);
+  if (versions.length) console.log(`Versions: ${versions.join(", ")}.`);
 } finally {
   rmSync(temporaryDirectory, { recursive: true, force: true });
 }
@@ -73,39 +83,40 @@ function targetDetails(triple) {
   const supported = {
     "x86_64-unknown-linux-gnu": {
       ytDlpAsset: "yt-dlp_linux", denoAsset: "deno-x86_64-unknown-linux-gnu.zip",
-      denoBinary: "deno", ffmpegSuffix: "linux-x64.tar.gz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "linux64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg",
     },
     "aarch64-unknown-linux-gnu": {
       ytDlpAsset: "yt-dlp_linux_aarch64", denoAsset: "deno-aarch64-unknown-linux-gnu.zip",
-      denoBinary: "deno", ffmpegSuffix: "linux-arm64.tar.gz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "linuxarm64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg",
     },
     "x86_64-pc-windows-msvc": {
       ytDlpAsset: "yt-dlp.exe", denoAsset: "deno-x86_64-pc-windows-msvc.zip",
-      denoBinary: "deno.exe", ffmpegSuffix: "win-x64.zip", ffmpegBinary: "ffmpeg.exe",
+      denoBinary: "deno.exe", ffmpegSuffix: "win64-lgpl-audio.zip", ffmpegBinary: "ffmpeg.exe",
     },
     "x86_64-apple-darwin": {
       ytDlpAsset: "yt-dlp_macos", denoAsset: "deno-x86_64-apple-darwin.zip",
-      denoBinary: "deno", ffmpegSuffix: "macos-x64.tar.gz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "macos64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg",
     },
     "aarch64-apple-darwin": {
       ytDlpAsset: "yt-dlp_macos", denoAsset: "deno-aarch64-apple-darwin.zip",
-      denoBinary: "deno", ffmpegSuffix: "macos-arm64.tar.gz", ffmpegBinary: "ffmpeg",
+      denoBinary: "deno", ffmpegSuffix: "macosarm64-lgpl-audio.tar.xz", ffmpegBinary: "ffmpeg",
     },
   };
   if (!supported[triple]) throw new Error(`Bundled YouTube audio tools do not support target ${triple}.`);
   return supported[triple];
 }
 
-async function githubRelease(owner, repository) {
-  const response = await fetch(`https://api.github.com/repos/${owner}/${repository}/releases/latest`, {
-    headers: { "Accept": "application/vnd.github+json", "User-Agent": "MichoPlay-desktop-build" },
-  });
-  if (!response.ok) throw new Error(`Could not read ${owner}/${repository} release metadata (${response.status}).`);
-  return response.json();
+function ffmpegSupportsMp3(path) {
+  if (!existsSync(path)) return false;
+  const result = spawnSync(path, ["-hide_banner", "-encoders"], { encoding: "utf8", windowsHide: true });
+  if (result.error || result.status !== 0) return false;
+  return `${result.stdout}\n${result.stderr}`.split(/\r?\n/).some((line) =>
+    line.split(/\s+/).some((field) => ["mp3", "libmp3lame", "libshine"].includes(field)),
+  );
 }
 
-async function githubReleases(owner, repository) {
-  const response = await fetch(`https://api.github.com/repos/${owner}/${repository}/releases?per_page=100`, {
+async function githubRelease(owner, repository) {
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repository}/releases/latest`, {
     headers: { "Accept": "application/vnd.github+json", "User-Agent": "MichoPlay-desktop-build" },
   });
   if (!response.ok) throw new Error(`Could not read ${owner}/${repository} release metadata (${response.status}).`);
