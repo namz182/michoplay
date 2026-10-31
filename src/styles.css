@@ -923,30 +923,27 @@ body.resizing { cursor: col-resize; user-select: none; }
 .about-dialog-links button > svg:last-child { color: #aaa4ae; }
 .about-dialog-links span { min-width: 0; overflow: hidden; font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
 .update-dialog-overlay { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(0,0,0,.72); backdrop-filter: blur(7px); }
-.update-dialog { display: grid; width: min(464px,100%); gap: 24px; padding: 28px; border: 1px solid rgba(255,255,255,.06); border-radius: 30px; background: #403637; box-shadow: 0 26px 90px rgba(0,0,0,.52); color: #f4edef; }
-.update-dialog-heading { display: flex; align-items: center; gap: 16px; }
-.update-dialog-icon { display: grid; width: 64px; height: 64px; flex: 0 0 64px; place-items: center; border-radius: 22px; background: rgba(255,255,255,.075); color: #f4e7e9; }
+.update-dialog { display: grid; width: min(420px,100%); gap: 18px; padding: 24px; border: 1px solid rgba(255,255,255,.06); border-radius: 26px; background: #403637; box-shadow: 0 26px 90px rgba(0,0,0,.52); color: #f4edef; }
+.update-dialog-heading { display: flex; align-items: center; }
 .update-dialog-title-copy { display: grid; gap: 5px; }
-.update-dialog-title-copy h2 { margin: 0; font-size: 23px; font-weight: 800; letter-spacing: -.4px; }
+.update-dialog-title-copy h2 { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -.4px; }
 .update-dialog-title-copy p { margin: 0; color: #d0c3c5; font-size: 14px; font-weight: 650; }
 .update-version-comparison { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 2px 0; }
 .update-version-comparison > svg { margin-top: 17px; color: #ded0d2; }
 .update-version-item { display: grid; justify-items: center; gap: 7px; }
 .update-version-item > span { color: #d4c8ca; font-size: 12px; font-weight: 650; }
 .update-version-item > strong { padding: 9px 16px; border-radius: 999px; background: rgba(30,24,25,.24); color: #f5edef; font-size: 14px; font-weight: 750; }
-.update-install-button { display: flex; min-height: 56px; align-items: center; justify-content: center; gap: 12px; margin-top: 2px; border: 0; border-radius: 999px; background: #e7d2d5; color: #362d2e; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; transition: background .16s ease, transform .16s ease; }
-.update-install-button:hover { background: #f1e1e3; transform: translateY(-1px); }
+.update-install-button { display: flex; min-height: 50px; align-items: center; justify-content: center; gap: 10px; margin-top: 0; border: 0; border-radius: 999px; background: #e7d2d5; color: #362d2e; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; transition: background .16s ease; }
+.update-install-button:hover { background: #f1e1e3; }
 .update-install-button:focus-visible, .update-later-button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
-.update-later-button { justify-self: end; min-width: 150px; min-height: 48px; padding: 0 24px; border: 1px solid rgba(255,255,255,.15); border-radius: 999px; background: transparent; color: #eee4e5; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; transition: background .16s ease; }
+.update-later-button { justify-self: center; width: min(220px,100%); min-height: 42px; padding: 0 24px; border: 1px solid rgba(255,255,255,.15); border-radius: 999px; background: transparent; color: #eee4e5; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; transition: background .16s ease; }
 .update-later-button:hover { background: rgba(255,255,255,.07); }
 @media (max-width: 520px) {
   .update-dialog-overlay { padding: 16px; }
-  .update-dialog { gap: 22px; padding: 24px 22px 20px; border-radius: 28px; }
-  .update-dialog-icon { width: 58px; height: 58px; flex-basis: 58px; border-radius: 20px; }
-  .update-dialog-title-copy h2 { font-size: 21px; }
+  .update-dialog { gap: 16px; padding: 20px 18px 18px; border-radius: 24px; }
+  .update-dialog-title-copy h2 { font-size: 20px; }
   .update-version-comparison { gap: 14px; }
-  .update-install-button { min-height: 54px; }
-  .update-later-button { min-width: 142px; }
+  .update-install-button { min-height: 48px; }
 }
 @media (max-height: 720px) {
   .about-dialog { gap: 12px; padding: 14px; }
