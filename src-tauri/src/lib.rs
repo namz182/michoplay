@@ -1,8 +1,10 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use lofty::{
+    config::WriteOptions,
     file::{AudioFile, TaggedFileExt},
+    picture::{MimeType, Picture, PictureType},
     probe::Probe,
-    tag::ItemKey,
+    tag::{ItemKey, Tag, TagExt, TagType},
 };
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rodio::{
@@ -774,7 +776,7 @@ fn supported_audio(path: &Path) -> bool {
 }
 
 fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) -> LibraryTrack {
-    let mut artwork = sidecar;
+    let mut artwork = read_track_art(path).or(sidecar);
     let fallback_title = path
         .file_stem()
         .and_then(|name| name.to_str())
@@ -794,7 +796,10 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
                 if picture.data().len() <= 8 * 1024 * 1024 {
                     if let Some(mime) = picture.mime_type() {
                         let mime = mime.to_string();
-                        if matches!(mime.as_str(), "image/jpeg" | "image/png" | "image/webp") {
+                        if matches!(
+                            mime.as_str(),
+                            "image/jpeg" | "image/png" | "image/webp" | "image/avif"
+                        ) {
                             artwork = Some(Arc::new(Artwork {
                                 mime,
                                 data: picture.data().to_vec(),
@@ -888,6 +893,35 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
     }
 }
 
+fn read_track_art(path: &Path) -> Option<Arc<Artwork>> {
+    let parent = path.parent()?;
+    let stem = path.file_stem()?.to_str()?;
+    for extension in ["jpg", "jpeg", "png", "webp", "avif"] {
+        let artwork_path = parent.join(format!("{stem}.{extension}"));
+        let Ok(metadata) = std::fs::metadata(&artwork_path) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 8 * 1024 * 1024 {
+            continue;
+        }
+        let Ok(data) = std::fs::read(artwork_path) else {
+            continue;
+        };
+        let mime = match extension {
+            "png" => "image/png",
+            "webp" => "image/webp",
+            "avif" => "image/avif",
+            "jpeg" | "jpg" => "image/jpeg",
+            _ => continue,
+        };
+        return Some(Arc::new(Artwork {
+            mime: mime.to_owned(),
+            data,
+        }));
+    }
+    None
+}
+
 fn read_folder_art(folder: &Path) -> Option<Arc<Artwork>> {
     let mut images = std::fs::read_dir(folder)
         .ok()?
@@ -899,7 +933,7 @@ fn read_folder_art(folder: &Path) -> Option<Arc<Artwork>> {
                 .is_some_and(|ext| {
                     matches!(
                         ext.to_ascii_lowercase().as_str(),
-                        "jpg" | "jpeg" | "png" | "webp"
+                        "jpg" | "jpeg" | "png" | "webp" | "avif"
                     )
                 })
         })
@@ -922,23 +956,99 @@ fn read_folder_art(folder: &Path) -> Option<Arc<Artwork>> {
             path.clone(),
         )
     });
-    for path in images {
-        if std::fs::metadata(&path).ok()?.len() > 8 * 1024 * 1024 {
-            continue;
-        }
-        let mime = match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-            "png" => "image/png",
-            "webp" => "image/webp",
-            _ => "image/jpeg",
-        };
-        if let Ok(data) = std::fs::read(path) {
-            return Some(Arc::new(Artwork {
-                mime: mime.to_owned(),
-                data,
-            }));
-        }
+    let preferred = images.iter().position(|path| {
+        path.file_stem()
+            .and_then(|name| name.to_str())
+            .is_some_and(|stem| {
+                matches!(
+                    stem.to_ascii_lowercase().as_str(),
+                    "cover" | "folder" | "front" | "album" | "artwork"
+                )
+            })
+    });
+    let path = preferred
+        .map(|index| images.remove(index))
+        .or_else(|| (images.len() == 1).then(|| images.remove(0)))?;
+    if std::fs::metadata(&path).ok()?.len() > 8 * 1024 * 1024 {
+        return None;
     }
-    None
+    let mime = match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        _ => "image/jpeg",
+    };
+    let data = std::fs::read(path).ok()?;
+    Some(Arc::new(Artwork {
+        mime: mime.to_owned(),
+        data,
+    }))
+}
+
+#[cfg(not(target_os = "android"))]
+fn thumbnail_for_audio(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    let stem = path.file_stem()?.to_str()?;
+    std::fs::read_dir(parent)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|candidate| {
+            candidate.file_stem().and_then(|name| name.to_str()) == Some(stem)
+                && candidate
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        matches!(
+                            ext.to_ascii_lowercase().as_str(),
+                            "jpg" | "jpeg" | "png" | "webp" | "avif"
+                        )
+                    })
+                && candidate.is_file()
+        })
+}
+
+#[cfg(not(target_os = "android"))]
+fn embed_thumbnail_in_mp3(audio_path: &Path, thumbnail_path: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(thumbnail_path)
+        .map_err(|_| "The YouTube thumbnail could not be read.".to_owned())?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 8 * 1024 * 1024 {
+        return Err("The YouTube thumbnail is empty or too large to embed.".to_owned());
+    }
+    let extension = thumbnail_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        _ => return Err("The YouTube thumbnail format is not supported.".to_owned()),
+    };
+    let picture = Picture::unchecked(
+        std::fs::read(thumbnail_path)
+            .map_err(|_| "The YouTube thumbnail could not be read.".to_owned())?,
+    )
+    .pic_type(PictureType::CoverFront)
+    .mime_type(MimeType::from_str(mime))
+    .description("Cover art")
+    .build();
+    let mut tagged = Probe::open(audio_path)
+        .map_err(|error| format!("Could not read downloaded MP3 tags: {error}"))?
+        .read()
+        .map_err(|error| format!("Could not read downloaded MP3 tags: {error}"))?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::Id3v2));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .ok_or_else(|| "Could not prepare MP3 artwork metadata.".to_owned())?;
+    tag.remove_picture_type(PictureType::CoverFront);
+    tag.push_picture(picture);
+    tag.save_to_path(audio_path, WriteOptions::default())
+        .map_err(|error| format!("Could not save MP3 artwork: {error}"))
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -2924,6 +3034,7 @@ fn run_youtube_download(
         .arg("mp3")
         .arg("--audio-quality")
         .arg("0")
+        .arg("--write-thumbnail")
         .arg("--ffmpeg-location")
         .arg(ffmpeg)
         .arg("--js-runtimes")
@@ -3001,8 +3112,16 @@ fn run_youtube_download(
         }
         let mut final_bytes = 0_u64;
         for path in &output_paths {
-            if !path.extension().is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("mp3")) {
+            if !path
+                .extension()
+                .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("mp3"))
+            {
                 return Err("The downloader did not produce an MP3 file.".to_owned());
+            }
+            if let Some(thumbnail) = thumbnail_for_audio(path) {
+                if embed_thumbnail_in_mp3(path, &thumbnail).is_ok() {
+                    let _ = std::fs::remove_file(thumbnail);
+                }
             }
             let metadata = std::fs::metadata(path)
                 .map_err(|_| "The downloaded MP3 file could not be found.".to_owned())?;
@@ -3011,7 +3130,13 @@ fn run_youtube_download(
             }
             final_bytes = final_bytes.saturating_add(metadata.len());
         }
-        return Ok((Some(final_bytes), output_paths.iter().map(|path| path.to_string_lossy().into_owned()).collect()));
+        return Ok((
+            Some(final_bytes),
+            output_paths
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
+        ));
     }
     let current_status = app
         .state::<YoutubeDownloadState>()

@@ -1384,7 +1384,7 @@ export default function App() {
     else if (result.page) { if (isAndroid) setMobileTab("home"); navigate(result.page); }
   }
   const playCounts = useMemo(() => new Map(listeningHistory.map((entry) => [entry.trackId, entry.playCount])), [listeningHistory]);
-  const rows = (items: Track[], emptyTitle = "No songs here") => <TrackRows items={items} player={player} favorites={favoriteSet} compact={compact} playCounts={playCounts} showPlayCount={page.section === "Recently Played"} onPlay={(track) => playCollection(track, items)} onFavorite={toggleFavorite} onMenu={openTrackMenu} emptyTitle={scanning ? "Scanning music…" : search || inlineSearch ? "No results" : emptyTitle} emptyMessage={scanning ? "Reading local audio and artwork." : search || inlineSearch ? "Try another search." : page.section === "Favorites" ? "Save songs with the heart in their action menu." : page.section === "Recently Played" ? "Songs will appear here after you play them." : page.detail?.kind === "playlist" ? "Add songs to this playlist from your library." : "Add a music folder to get started."} emptyAction={!scanning && !search && !inlineSearch && selectedPlaylist && selectedPlaylist.name.toLocaleLowerCase() !== "youtube" ? <button className="primary-button playlist-add-songs" onClick={() => { setAddSongsPlaylistId(selectedPlaylist.id); setAddSongsSelected([]); setAddSongsSearch(""); setAddSongsVisibleLimit(100); }}><Plus size={15}/>Add songs</button> : undefined} />;
+  const rows = (items: Track[], emptyTitle = "No songs here") => <TrackRows items={items} player={player} favorites={favoriteSet} compact={compact} rowHeight={isAndroid ? 64 : undefined} playCounts={playCounts} showPlayCount={page.section === "Recently Played"} onPlay={(track) => playCollection(track, items)} onFavorite={toggleFavorite} onMenu={openTrackMenu} emptyTitle={scanning ? "Scanning music…" : search || inlineSearch ? "No results" : emptyTitle} emptyMessage={scanning ? "Reading local audio and artwork." : search || inlineSearch ? "Try another search." : page.section === "Favorites" ? "Save songs with the heart in their action menu." : page.section === "Recently Played" ? "Songs will appear here after you play them." : page.detail?.kind === "playlist" ? "Add songs to this playlist from your library." : "Add a music folder to get started."} emptyAction={!scanning && !search && !inlineSearch && selectedPlaylist && selectedPlaylist.name.toLocaleLowerCase() !== "youtube" ? <button className="primary-button playlist-add-songs" onClick={() => { setAddSongsPlaylistId(selectedPlaylist.id); setAddSongsSelected([]); setAddSongsSearch(""); setAddSongsVisibleLimit(100); }}><Plus size={15}/>Add songs</button> : undefined} />;
   async function loadMoreYoutubeFolderResults() {
     const query = youtubeQuery.trim();
     if (!query || youtubeSearching || youtubeLoadingMore || !youtubeHasMore) return;
@@ -1958,11 +1958,11 @@ function CollectionGrid({ collections, kind, onOpen, onPlay, isCurrentCollection
     </article>;
   })}</div>;
 }
-const TrackRows = memo(function TrackRows({ items, player, favorites, compact, playCounts, showPlayCount = false, onPlay, onFavorite, onMenu, emptyTitle, emptyMessage, emptyAction }: { items: Track[]; player: PlayerSnapshot; favorites: Set<number>; compact: boolean; playCounts?: Map<number, number>; showPlayCount?: boolean; onPlay: (track: Track) => void; onFavorite: (id: number) => void; onMenu: (track: Track, event: MouseEvent) => void; emptyTitle: string; emptyMessage: string; emptyAction?: React.ReactNode }) {
+const TrackRows = memo(function TrackRows({ items, player, favorites, compact, rowHeight: rowHeightOverride, playCounts, showPlayCount = false, onPlay, onFavorite, onMenu, emptyTitle, emptyMessage, emptyAction }: { items: Track[]; player: PlayerSnapshot; favorites: Set<number>; compact: boolean; rowHeight?: number; playCounts?: Map<number, number>; showPlayCount?: boolean; onPlay: (track: Track) => void; onFavorite: (id: number) => void; onMenu: (track: Track, event: MouseEvent) => void; emptyTitle: string; emptyMessage: string; emptyAction?: React.ReactNode }) {
   const [dismissedPlayControl, setDismissedPlayControl] = useState<number | null>(null);
   const [range, setRange] = useState({ start: 0, end: 80 });
   const listRef = useRef<HTMLDivElement>(null);
-  const rowHeight = compact ? 43 : 54;
+  const rowHeight = rowHeightOverride ?? (compact ? 43 : 54);
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
