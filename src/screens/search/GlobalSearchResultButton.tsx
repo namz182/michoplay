@@ -1,0 +1,10 @@
+import { AudioLines, Disc3, FolderOpen, ListMusic, Music2, Pause, Play } from "lucide-react";
+import { Cover } from "../../app/Artwork";
+
+type SearchResult = { type: "Song" | "Folder" | "Album" | "Artist" | "Playlist"; title: string; subtitle: string; artworkKey: string | null; trackId?: number };
+
+export function SearchResultButton({ result, onClick, isPlaying = false, showPlayHover = true }: { result: SearchResult; onClick: () => void; isPlaying?: boolean; showPlayHover?: boolean }) {
+  const icon = result.type === "Song" ? <Music2 size={18}/> : result.type === "Artist" ? <AudioLines size={18}/> : result.type === "Folder" ? <FolderOpen size={18}/> : result.type === "Playlist" ? <ListMusic size={18}/> : <Disc3 size={18}/>;
+  const hasPlaybackHover = showPlayHover && result.type === "Song";
+  return <button className={`global-search-result ${hasPlaybackHover ? "has-playback-hover" : ""}`} role="option" aria-selected={false} aria-label={`${isPlaying ? "Pause" : "Play"} ${result.title}`} onClick={onClick}><Cover className={`global-search-cover ${result.type === "Artist" ? "artist-art" : ""}`} keys={[result.artworkKey]} icon={icon}/><span className="search-result-copy"><strong>{result.title}</strong><small>{result.subtitle}</small></span>{hasPlaybackHover && <span className="search-result-play" aria-hidden="true">{isPlaying ? <Pause size={15} fill="currentColor"/> : <Play size={15} fill="currentColor"/>}</span>}</button>;
+}
