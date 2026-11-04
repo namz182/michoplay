@@ -156,10 +156,10 @@ button:disabled { cursor: default; }
 .sort-menu-divider { height: 1px; margin: 6px 8px; background: rgba(255,255,255,.1); }
 .sort-menu-option.view-option { min-height: 32px; }
 .track-table { padding: 0 24px; }
-.table-head { display: grid; grid-template-columns: 31px minmax(0, 1.65fr) minmax(0, 1.05fr) minmax(80px, .75fr) 40px; align-items: center; gap: 9px; height: 35px; border-bottom: 1px solid rgba(255,255,255,.12); color: #aaa4ae; font-size: 10px; }
+.table-head { display: grid; grid-template-columns: 31px minmax(0, 2.5fr) minmax(0, .7fr) minmax(0, .65fr) 96px; align-items: center; gap: 9px; height: 35px; border-bottom: 1px solid rgba(255,255,255,.12); color: #aaa4ae; font-size: 10px; }
 .table-head span:first-child { text-align: center; }
 .table-head span:last-child { text-align: right; }
-.track-row { display: grid; width: 100%; grid-template-columns: 31px minmax(0, 1.65fr) minmax(0, 1.05fr) minmax(80px, .75fr) 40px; align-items: center; gap: 9px; min-height: 54px; padding: 5px 0; border: 0; border-bottom: 1px solid transparent; background: transparent; color: #b8b3bd; text-align: left; cursor: pointer; }
+.track-row { display: grid; width: 100%; grid-template-columns: 31px minmax(0, 2.5fr) minmax(0, .7fr) minmax(0, .65fr) 96px; align-items: center; gap: 9px; min-height: 54px; padding: 5px 0; border: 0; border-bottom: 1px solid transparent; background: transparent; color: #b8b3bd; text-align: left; cursor: pointer; }
 .track-row:hover { border-radius: 5px; background: rgba(255,255,255,.08); }
 .track-row.playing .track-name strong, .track-row.playing .track-number { color: var(--brand-highlight); }
 .track-number { color: #aaa4ae; text-align: center; font-size: 11px; }
@@ -364,8 +364,8 @@ button:disabled { cursor: default; }
 .home-quick-card strong, .home-quick-card small { overflow-wrap: anywhere; white-space: normal; }
 .home-quick-card strong { font-size: 12px; font-weight: 700; }
 .home-quick-card small { color: #b7b2ba; font-size: 10px; }
-.track-row { grid-template-columns: 31px minmax(0, 1.65fr) minmax(0, 1.05fr) minmax(80px, .75fr) 100px; }
-.table-head { grid-template-columns: 31px minmax(0, 1.65fr) minmax(0, 1.05fr) minmax(80px, .75fr) 100px; }
+.track-row { grid-template-columns: 31px minmax(0, 2.5fr) minmax(0, .7fr) minmax(0, .65fr) 96px; }
+.table-head { grid-template-columns: 31px minmax(0, 2.5fr) minmax(0, .7fr) minmax(0, .65fr) 96px; }
 .track-number { position: relative; width: 31px; height: 32px; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .row-play { display: none; position: absolute; inset: 8px; margin: auto; color: white; }
 .track-row:hover .row-index { opacity: 0; }
@@ -631,7 +631,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .scan-cancel-button { margin-left:auto; padding:4px 9px; border:1px solid rgba(255,255,255,.14); border-radius:6px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
 .status-message { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 25px; background: #292729; color: #d2cfd2; font-size: 11px; line-height: 1.6; }
 .inline-link { padding: 0; border: 0; background: transparent; color: var(--brand-highlight); font-size: inherit; text-decoration: underline; cursor: pointer; }
-.track-row, .table-head { grid-template-columns: 27px minmax(0,1.65fr) minmax(0,1fr) minmax(65px,.7fr) 110px; gap: 9px; }
+.track-row, .table-head { grid-template-columns: 27px minmax(0,2.5fr) minmax(0,.7fr) minmax(0,.65fr) 96px; gap: 9px; }
 .track-title-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .row-cover { width: 38px; height: 38px; }
 .track-name { flex: 1; }
@@ -639,7 +639,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .track-name small { font-size: 10px; }
 .track-number { width: 27px; }
 .table-head > span:last-child { display: flex; justify-content: center; }
-.track-actions { gap: 7px; }
+.track-actions { gap: 5px; }
 .track-row:hover .row-action, .track-row:focus-within .row-action { opacity: 1; }
 .row-action.visible { opacity: 1; }
 .now-track { position: relative; isolation: isolate; overflow: hidden; border-radius: 6px; }
