@@ -1283,19 +1283,20 @@ export default function App() {
     return () => unlisten?.();
   }, [isAndroid, run]);
   useEffect(() => {
-    if (!isTauri()) return;
+    // Android's Rust playback loop publishes directly to the media service,
+    // including while the WebView is suspended in the background.
+    if (!isTauri() || isAndroid) return;
     let active = true;
     const update = async () => {
       if (!active) return;
       try {
         const state = await api.state();
         if (!active) return;
-        if (isAndroid && !current) await api.mediaStop();
-        else await api.mediaUpdate(current, state.isPlaying, state.durationMs, state.positionMs, currentArtworkDataUrl);
+        await api.mediaUpdate(current, state.isPlaying, state.durationMs, state.positionMs, currentArtworkDataUrl);
       } catch { /* The player can start before Android creates the service. */ }
     };
     void update();
-    const timer = window.setInterval(() => { void update(); }, isAndroid ? 4000 : 2000);
+    const timer = window.setInterval(() => { void update(); }, 2000);
     return () => { active = false; window.clearInterval(timer); };
   }, [isAndroid, current?.id, current?.title, current?.artist, currentArtworkDataUrl, player.isPlaying]);
   const playCollection = (track: Track, items = sortedVisibleTracks) => {

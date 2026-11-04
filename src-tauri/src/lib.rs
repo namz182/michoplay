@@ -278,6 +278,11 @@ struct PlayerCore {
     sink: Option<Sink>,
     output_failed: Arc<AtomicBool>,
     is_playing: bool,
+    resume_after_interruption: bool,
+    #[cfg(any(target_os = "android", test))]
+    audio_focus_generation: u64,
+    #[cfg(target_os = "android")]
+    android_media: Option<tauri::plugin::PluginHandle<tauri::Wry>>,
     volume: f32,
     shuffle: bool,
     repeat_mode: String,
@@ -327,38 +332,48 @@ fn android_media_plugin(
         .ok_or_else(|| "Android media services are still starting. Try again shortly.".to_owned())
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn apply_android_media_action(core: &mut PlayerCore, action: &str) -> Result<(), String> {
+    let (action, generation) = match action.split_once(':') {
+        Some((
+            kind @ ("focus-loss"
+            | "focus-loss-transient"
+            | "focus-gain"
+            | "becoming-noisy"
+            | "service-stopped"),
+            generation,
+        )) => (
+            kind,
+            Some(
+                generation
+                    .parse::<u64>()
+                    .map_err(|_| "Invalid audio focus generation.".to_owned())?,
+            ),
+        ),
+        _ => (action, None),
+    };
+    // A queued interruption from an earlier focus request must not pause a new
+    // song the user explicitly started while the event was in flight.
+    if generation.is_some_and(|generation| generation != core.audio_focus_generation) {
+        return Ok(());
+    }
     match action {
-        "play" | "toggle" => {
-            core.discard_failed_output();
-            if core.current_queue_index.is_none() {
-                let first = core
-                    .queue
-                    .first()
-                    .copied()
-                    .ok_or_else(|| "Add a music folder first.".to_owned())?;
-                core.play_track(first)
-            } else if core.sink.as_ref().map_or(true, Sink::empty) {
-                core.play_queue_index(core.current_queue_index.unwrap_or(0))
-            } else if let Some(sink) = &core.sink {
-                if action == "toggle" && core.is_playing {
-                    sink.pause();
-                    core.is_playing = false;
-                } else {
-                    sink.play();
-                    core.is_playing = true;
-                }
-                Ok(())
-            } else {
-                Ok(())
-            }
+        "play" => core.set_playing(true),
+        "toggle" => core.set_playing(!core.is_playing),
+        "pause" | "focus-loss" | "becoming-noisy" | "service-stopped" => core.set_playing(false),
+        "focus-loss-transient" => {
+            let resume = core.is_playing || core.resume_after_interruption;
+            core.set_playing(false)?;
+            core.resume_after_interruption = resume;
+            Ok(())
         }
-        "pause" => {
-            if let Some(sink) = &core.sink {
-                sink.pause();
+        "focus-gain" => {
+            if core.resume_after_interruption {
+                // Only resume a song interrupted by Android. A user's pause
+                // clears this flag, even while focus is temporarily held away.
+                core.resume_after_interruption = false;
+                core.set_playing(true)?;
             }
-            core.is_playing = false;
             Ok(())
         }
         "next" => {
@@ -626,28 +641,6 @@ fn media_update(
     state: State<'_, MediaBridge>,
     desktop: State<'_, DesktopMediaBridge>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        let bridge = state
-            .0
-            .lock()
-            .map_err(|_| "Media controls are unavailable.".to_owned())?;
-        if let Some(handle) = bridge.as_ref() {
-            handle
-                .run_mobile_plugin::<()>(
-                    "update",
-                    serde_json::json!({
-                        "title": title.unwrap_or_default(),
-                        "artist": artist.unwrap_or_default(),
-                        "isPlaying": is_playing,
-                        "durationMs": duration_ms,
-                        "positionMs": position_ms,
-                        "artworkDataUrl": artwork_data_url,
-                    }),
-                )
-                .map_err(|error| error.to_string())?;
-        }
-    }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let mut controls = desktop
@@ -682,7 +675,7 @@ fn media_update(
         }
         let _ = &state;
     }
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = (
         title,
         artist,
@@ -1690,9 +1683,83 @@ fn prune_artwork_cache(directory: &Path, live_keys: &HashSet<String>) {
 }
 
 impl PlayerCore {
+    #[cfg(target_os = "android")]
+    fn android_media_revision(&self) -> (Option<u64>, bool, bool, u64) {
+        (
+            self.current_queue_index
+                .and_then(|index| self.queue.get(index))
+                .copied(),
+            self.is_playing,
+            self.resume_after_interruption,
+            self.audio_focus_generation,
+        )
+    }
+
+    // On Android, commands that lock PlayerCore run on Tauri's worker pool:
+    // the main thread must remain available to grant focus while this lock is held.
+    fn ensure_playback_focus(&mut self) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Deserialize)]
+            struct FocusResponse {
+                granted: bool,
+                generation: u64,
+            }
+            let plugin = self.android_media.as_ref().ok_or_else(|| {
+                "Android media services are still starting. Try again shortly.".to_owned()
+            })?;
+            let response = match plugin.run_mobile_plugin::<FocusResponse>("requestAudioFocus", ())
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    self.set_playing(false)?;
+                    return Err(format!("Android could not start playback: {error}"));
+                }
+            };
+            self.audio_focus_generation = response.generation;
+            if !response.granted {
+                self.set_playing(false)?;
+                return Err(
+                    "Another app is using audio. Try playing again when it finishes.".to_owned(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn set_playing(&mut self, playing: bool) -> Result<(), String> {
+        self.discard_failed_output();
+        self.resume_after_interruption = false;
+        if !playing {
+            if let Some(sink) = &self.sink {
+                sink.pause();
+            }
+            self.is_playing = false;
+            return Ok(());
+        }
+        let Some(index) = self.current_queue_index else {
+            let first = self
+                .queue
+                .first()
+                .copied()
+                .ok_or_else(|| "Add a music folder first.".to_owned())?;
+            return self.play_track(first);
+        };
+        if self.sink.as_ref().map_or(true, Sink::empty) {
+            return self.play_queue_index(index);
+        }
+        self.ensure_playback_focus()?;
+        if let Some(sink) = &self.sink {
+            sink.play();
+        }
+        self.is_playing = true;
+        Ok(())
+    }
+
     fn discard_failed_output(&mut self) {
         if self.output_failed.swap(false, Ordering::AcqRel) {
             self.is_playing = false;
+            self.resume_after_interruption = false;
             self.sink = None;
             self.output = None;
         }
@@ -1804,6 +1871,7 @@ impl PlayerCore {
             }
         }
         if self.current_queue_index.is_none() {
+            self.resume_after_interruption = false;
             self.is_playing = false;
             if let Some(sink) = &self.sink {
                 sink.stop();
@@ -1931,6 +1999,7 @@ impl PlayerCore {
                 .unwrap_or(0);
         }
 
+        self.ensure_playback_focus()?;
         if self.output.is_none() {
             let output_failed = self.output_failed.clone();
             self.output = Some(
@@ -1960,6 +2029,7 @@ impl PlayerCore {
             self.equalizer_enabled.clone(),
         ));
         sink.play();
+        self.resume_after_interruption = false;
         self.current_queue_index = Some(queue_index);
         let upcoming = self
             .queue
@@ -1999,6 +2069,7 @@ impl PlayerCore {
                 sink.pause();
             }
             self.is_playing = false;
+            self.resume_after_interruption = false;
             self.sleep_timer_deadline = None;
             self.sleep_timer_at_track_end = false;
         } else if track_ended {
@@ -3393,7 +3464,8 @@ async fn library_refresh(
     Ok(core.replace_library(roots, tracks))
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn library_saved_roots(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let core = state
         .0
@@ -3412,7 +3484,8 @@ fn library_saved_roots(state: State<'_, AppState>) -> Result<Vec<String>, String
         .collect())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
     let storage_dir = state
         .0
@@ -3469,7 +3542,8 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
     .collect()
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_play_track(track_id: u64, state: State<'_, AppState>) -> Result<(), String> {
     state
         .0
@@ -3478,7 +3552,8 @@ fn player_play_track(track_id: u64, state: State<'_, AppState>) -> Result<(), St
         .play_track(track_id)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_queue_add(track_id: u64, state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3487,7 +3562,8 @@ fn player_queue_add(track_id: u64, state: State<'_, AppState>) -> Result<(), Str
     core.queue_add(track_id)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn library_artwork(
     artwork_key: String,
     state: State<'_, AppState>,
@@ -3502,7 +3578,8 @@ fn library_artwork(
     Ok(art.map(|art| format!("data:{};base64,{}", art.mime, STANDARD.encode(&art.data))))
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_play_collection(
     track_ids: Vec<u64>,
     start_id: u64,
@@ -3539,7 +3616,8 @@ fn player_play_collection(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_queue_move(
     from_index: usize,
     to_index: usize,
@@ -3552,7 +3630,8 @@ fn player_queue_move(
     core.queue_move(from_index, to_index)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_queue_remove(index: usize, state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3561,7 +3640,8 @@ fn player_queue_remove(index: usize, state: State<'_, AppState>) -> Result<(), S
     core.queue_remove(index)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_autoplay(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
     state
         .0
@@ -3571,7 +3651,8 @@ fn player_set_autoplay(enabled: bool, state: State<'_, AppState>) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_sleep_timer(
     duration_minutes: Option<u32>,
     at_track_end: bool,
@@ -3598,74 +3679,29 @@ fn player_set_sleep_timer(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_toggle(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
         .lock()
         .map_err(|_| "The player is unavailable.".to_owned())?;
-    if core.current_queue_index.is_none() {
-        let first = core
-            .queue
-            .first()
-            .copied()
-            .ok_or_else(|| "Add a music folder first.".to_owned())?;
-        return core.play_track(first);
-    }
-    core.discard_failed_output();
-    if core.sink.is_none() {
-        let index = core
-            .current_queue_index
-            .ok_or_else(|| "No song is loaded.".to_owned())?;
-        return core.play_queue_index(index);
-    }
-    let sink = core.sink.as_ref().expect("sink checked above");
-    if core.is_playing {
-        sink.pause();
-        core.is_playing = false;
-    } else if sink.empty() {
-        let index = core.current_queue_index.unwrap_or(0);
-        core.play_queue_index(index)?;
-    } else {
-        sink.play();
-        core.is_playing = true;
-    }
-    Ok(())
+    let playing = !core.is_playing;
+    core.set_playing(playing)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_playing(is_playing: bool, state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
         .lock()
         .map_err(|_| "The player is unavailable.".to_owned())?;
-    core.discard_failed_output();
-    if !is_playing {
-        if let Some(sink) = &core.sink {
-            sink.pause();
-        }
-        core.is_playing = false;
-        return Ok(());
-    }
-    if core.current_queue_index.is_none() {
-        let first = core
-            .queue
-            .first()
-            .copied()
-            .ok_or_else(|| "Add a music folder first.".to_owned())?;
-        return core.play_track(first);
-    }
-    if core.sink.as_ref().map_or(true, Sink::empty) {
-        let index = core.current_queue_index.unwrap_or(0);
-        core.play_queue_index(index)?;
-    } else if let Some(sink) = &core.sink {
-        sink.play();
-        core.is_playing = true;
-    }
-    Ok(())
+    core.set_playing(is_playing)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_next(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3677,7 +3713,8 @@ fn player_next(state: State<'_, AppState>) -> Result<(), String> {
     core.play_next_available()
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_previous(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3718,7 +3755,8 @@ fn player_previous(state: State<'_, AppState>) -> Result<(), String> {
     core.play_queue_index(previous)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_toggle_shuffle(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3731,7 +3769,8 @@ fn player_toggle_shuffle(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_toggle_repeat(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3745,7 +3784,8 @@ fn player_toggle_repeat(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_seek(position_ms: u64, state: State<'_, AppState>) -> Result<(), String> {
     let core = state
         .0
@@ -3759,7 +3799,8 @@ fn player_seek(position_ms: u64, state: State<'_, AppState>) -> Result<(), Strin
         .map_err(|_| "This audio format can’t seek.".to_owned())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_volume(volume: f32, state: State<'_, AppState>) -> Result<(), String> {
     if !volume.is_finite() {
         return Err("Volume must be a number between 0 and 100.".to_owned());
@@ -3775,7 +3816,8 @@ fn player_set_volume(volume: f32, state: State<'_, AppState>) -> Result<(), Stri
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_equalizer_bands(
     bands: Vec<f32>,
     enabled: bool,
@@ -3795,7 +3837,8 @@ fn player_set_equalizer_bands(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_state(state: State<'_, AppState>) -> Result<PlayerSnapshot, String> {
     Ok(state
         .0
@@ -3878,6 +3921,8 @@ pub fn run() {
                     {
                         let handle =
                             api.register_android_plugin("app.michoplay.desktop", "MediaPlugin")?;
+                        app.state::<AppState>().0.lock()
+                            .map_err(|_| "The player is unavailable.")?.android_media = Some(handle.clone());
                         *app.state::<MediaBridge>()
                             .0
                             .lock()
@@ -4020,94 +4065,102 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn_blocking::<_, ()>(move || {
                     let mut last_media_signature = None;
+                    let mut last_media_update = std::time::Instant::now();
+                    let mut retry_after = None;
                     loop {
-                        std::thread::sleep(Duration::from_millis(400));
-                        let plugin = handle
-                            .state::<MediaBridge>()
-                            .0
-                            .lock()
-                            .ok()
+                        std::thread::sleep(Duration::from_millis(250));
+                        let plugin = handle.state::<MediaBridge>().0.lock().ok()
                             .and_then(|bridge| bridge.clone());
                         let Some(plugin) = plugin else { continue };
-
-                        let actions = plugin
-                            .run_mobile_plugin::<PendingMediaActions>("takePendingActions", ())
-                            .map(|response| response.actions)
-                            .unwrap_or_default();
-                        let mut received_action = false;
+                        let actions = match plugin.run_mobile_plugin::<PendingMediaActions>("takePendingActions", ()) {
+                            Ok(response) => response.actions,
+                            Err(error) => {
+                                eprintln!("Android media action delivery failed: {error}");
+                                continue;
+                            }
+                        };
+                        let received_action = !actions.is_empty();
                         for action in actions {
-                            let handled = handle
-                                .state::<AppState>()
-                                .0
-                                .lock()
-                                .map(|mut core| {
-                                    apply_android_media_action(&mut core, &action).is_ok()
-                                })
-                                .unwrap_or(false);
-                            if handled {
-                                received_action = true;
-                                let _ = handle.emit("android-player-state", ());
+                            if let Ok(mut core) = handle.state::<AppState>().0.lock() {
+                                if let Err(error) = apply_android_media_action(&mut core, &action) {
+                                    eprintln!("Android media action {action} failed: {error}");
+                                }
                             }
                         }
-
-                        let (signature, media) = {
+                        let (revision, media) = {
                             let state = handle.state::<AppState>();
-                            let Ok(mut core) = state.0.lock() else {
-                                continue;
-                            };
+                            let Ok(mut core) = state.0.lock() else { continue };
                             let snapshot = core.snapshot();
                             let media = snapshot.current_track_id.and_then(|id| {
-                                core.tracks
-                                    .iter()
-                                    .find(|track| track.track.id == id)
+                                core.track_indices.get(&id).and_then(|index| core.tracks.get(*index))
                                     .map(|track| {
-                                        let artwork_data_url =
-                                            track.artwork.as_ref().map(|artwork| {
-                                                format!(
-                                                    "data:{};base64,{}",
-                                                    artwork.mime,
-                                                    STANDARD.encode(&artwork.data)
-                                                )
-                                            });
-                                        (
-                                            track.track.title.clone(),
-                                            track.track.artist.clone(),
-                                            snapshot.duration_ms,
-                                            snapshot.position_ms,
-                                            snapshot.is_playing,
-                                            artwork_data_url,
-                                        )
+                                        let artwork = track.track.artwork_key.as_ref()
+                                            .zip(track.artwork.as_ref())
+                                            .map(|(key, art)| (artwork_cache_path(&core.storage_dir, key, &art.mime), art.clone()));
+                                        let payload = serde_json::json!({
+                                            "title": track.track.title,
+                                            "artist": track.track.artist,
+                                            "isPlaying": snapshot.is_playing,
+                                            "interrupted": core.resume_after_interruption,
+                                            "focusGeneration": core.audio_focus_generation,
+                                            "durationMs": snapshot.duration_ms,
+                                            "positionMs": snapshot.position_ms,
+                                            "artworkPath": artwork.as_ref().map(|(path, _)| path.to_string_lossy()),
+                                        });
+                                        (payload, artwork)
                                     })
                             });
-                            ((snapshot.current_track_id, snapshot.is_playing), media)
+                            (core.android_media_revision(), media)
                         };
-
-                        if received_action || last_media_signature != Some(signature) {
-                            if let Some((
-                                title,
-                                artist,
-                                duration_ms,
-                                position_ms,
-                                is_playing,
-                                artwork,
-                            )) = media
-                            {
-                                let _ = plugin.run_mobile_plugin::<()>(
-                                    "update",
-                                    serde_json::json!({
-                                        "title": title,
-                                        "artist": artist,
-                                        "isPlaying": is_playing,
-                                        "durationMs": duration_ms,
-                                        "positionMs": position_ms,
-                                        "artworkDataUrl": artwork,
-                                    }),
-                                );
+                        let mut signature = media.as_ref().map(|(payload, _)| payload.clone())
+                            .unwrap_or(serde_json::Value::Null);
+                        // Publish position corrections without sending updates on every audio tick.
+                        if let Some(position) = signature.get_mut("positionMs") {
+                            *position = serde_json::json!(position.as_u64().unwrap_or(0) / 2000);
+                        }
+                        let changed = last_media_signature.as_ref() != Some(&signature);
+                        if changed || received_action {
+                            let _ = handle.emit("android-player-state", ());
+                        }
+                        if retry_after.is_some_and(|deadline| std::time::Instant::now() < deadline) {
+                            continue;
+                        }
+                        if changed || received_action || last_media_update.elapsed() >= Duration::from_secs(5) {
+                            // Materialize missing artwork before locking the player for delivery.
+                            if let Some((_, Some((path, art)))) = &media {
+                                if !path.is_file() {
+                                    let saved = path.parent().map(fs::create_dir_all)
+                                        .transpose().and_then(|_| fs::write(path, &art.data));
+                                    if let Err(error) = saved {
+                                        eprintln!("Android notification artwork cache failed: {error}");
+                                    }
+                                }
+                            }
+                            let state = handle.state::<AppState>();
+                            let Ok(core) = state.0.lock() else { continue };
+                            if core.android_media_revision() != revision { continue; }
+                            // Serialize delivery with engine changes. Android commands that
+                            // acquire this lock run off the main thread, leaving the service free
+                            // to acknowledge updates without a main-thread/engine-lock deadlock.
+                            let result = if let Some((payload, _)) = media {
+                                plugin.run_mobile_plugin::<()>("update", payload)
                             } else {
-                                let _ = plugin.run_mobile_plugin::<()>("stop", ());
+                                plugin.run_mobile_plugin::<()>("stop", ())
+                            };
+                            drop(core);
+                            match result {
+                                Ok(()) => {
+                                    last_media_signature = Some(signature);
+                                    last_media_update = std::time::Instant::now();
+                                    retry_after = None;
+                                }
+                                Err(error) => {
+                                    // Keep the old signature so delivery is retried, not marked successful.
+                                    eprintln!("Android media state update failed: {error}");
+                                    retry_after = Some(std::time::Instant::now() + Duration::from_secs(1));
+                                }
                             }
                         }
-                        last_media_signature = Some(signature);
                     }
                 });
             }
@@ -4203,6 +4256,90 @@ mod tests {
             current_queue_index: Some(0),
             ..PlayerCore::default()
         }
+    }
+
+    fn playing_without_audio_device() -> (PlayerCore, rodio::queue::SourcesQueueOutput) {
+        let mut core = library();
+        let (sink, output) = Sink::new();
+        sink.append(rodio::source::SineWave::new(440.0).take_duration(Duration::from_secs(10)));
+        sink.play();
+        core.sink = Some(sink);
+        core.is_playing = true;
+        core.audio_focus_generation = 7;
+        (core, output)
+    }
+
+    #[test]
+    fn interruption_transient_pauses_and_resumes_the_same_song() {
+        let (mut core, _output) = playing_without_audio_device();
+        let queue = core.queue.clone();
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        assert!(!core.is_playing);
+        assert!(core.sink.as_ref().unwrap().is_paused());
+        assert!(core.resume_after_interruption);
+        // A second late snapshot of the interruption must preserve resume intent.
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        assert!(core.resume_after_interruption);
+        apply_android_media_action(&mut core, "focus-gain:7").unwrap();
+        assert!(core.is_playing);
+        assert!(!core.sink.as_ref().unwrap().is_paused());
+        assert!(!core.resume_after_interruption);
+        assert_eq!(core.queue, queue);
+        assert_eq!(core.current_queue_index, Some(0));
+    }
+
+    #[test]
+    fn interruption_manual_pause_cancels_automatic_resume() {
+        let (mut core, _output) = playing_without_audio_device();
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        core.set_playing(false).unwrap();
+        apply_android_media_action(&mut core, "focus-gain:7").unwrap();
+        assert!(!core.is_playing);
+        assert!(core.sink.as_ref().unwrap().is_paused());
+        assert!(!core.resume_after_interruption);
+    }
+
+    #[test]
+    fn interruption_permanent_loss_and_disconnection_require_manual_play() {
+        for event in ["focus-loss:7", "becoming-noisy:7", "service-stopped:7"] {
+            let (mut core, _output) = playing_without_audio_device();
+            apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+            apply_android_media_action(&mut core, event).unwrap();
+            apply_android_media_action(&mut core, "focus-gain:7").unwrap();
+            assert!(!core.is_playing, "Unexpected resume after {event}");
+            assert!(core.sink.as_ref().unwrap().is_paused());
+            assert!(!core.resume_after_interruption);
+        }
+    }
+
+    #[test]
+    fn interruption_events_from_old_focus_do_not_pause_new_playback() {
+        let (mut core, _output) = playing_without_audio_device();
+        for event in [
+            "focus-loss:6",
+            "focus-loss-transient:6",
+            "becoming-noisy:6",
+            "service-stopped:6",
+        ] {
+            apply_android_media_action(&mut core, event).unwrap();
+            assert!(core.is_playing);
+            assert!(!core.sink.as_ref().unwrap().is_paused());
+        }
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        apply_android_media_action(&mut core, "focus-gain:6").unwrap();
+        assert!(!core.is_playing);
+        assert!(core.resume_after_interruption);
+    }
+
+    #[test]
+    fn interruption_sleep_timer_cancels_automatic_resume() {
+        let (mut core, _output) = playing_without_audio_device();
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        core.sleep_timer_deadline = Some(SystemTime::now() - Duration::from_secs(1));
+        assert!(!core.snapshot().is_playing);
+        apply_android_media_action(&mut core, "focus-gain:7").unwrap();
+        assert!(!core.is_playing);
+        assert!(!core.resume_after_interruption);
     }
 
     #[test]

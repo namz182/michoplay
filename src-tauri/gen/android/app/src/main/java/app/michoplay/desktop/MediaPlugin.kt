@@ -37,7 +37,9 @@ class MediaUpdateArgs {
   var isPlaying: Boolean = false
   var durationMs: Long = 0
   var positionMs: Long = 0
-  var artworkDataUrl: String? = null
+  var artworkPath: String? = null
+  var interrupted: Boolean = false
+  var focusGeneration: Long = 0
 }
 
 @InvokeArg
@@ -497,38 +499,44 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
+  fun requestAudioFocus(invoke: Invoke) {
+    activity.runOnUiThread {
+      try {
+        MediaPlaybackService.requestFocus(activity) { granted, generation ->
+          invoke.resolve(JSObject().apply { put("granted", granted); put("generation", generation) })
+        }
+      } catch (error: Exception) {
+        android.util.Log.e("MichoPlayMedia", "Could not acquire audio focus", error)
+        invoke.reject(error.message ?: "Could not acquire audio focus.")
+      }
+    }
+  }
+
+  @Command
   fun update(invoke: Invoke) {
-    try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-        ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
-        !notificationPermissionPrompted) {
-        notificationPermissionPrompted = true
-        activity.runOnUiThread {
+    activity.runOnUiThread {
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+          ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+          !notificationPermissionPrompted) {
+          notificationPermissionPrompted = true
           activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9043)
         }
+        MediaPlaybackService.publish(invoke.parseArgs(MediaUpdateArgs::class.java))
+        invoke.resolve()
+      } catch (error: Exception) {
+        android.util.Log.e("MichoPlayMedia", "Could not update playback notification", error)
+        invoke.reject(error.message ?: "Could not update Android playback controls.")
       }
-      val args = invoke.parseArgs(MediaUpdateArgs::class.java)
-      val intent = Intent(activity, MediaPlaybackService::class.java).apply {
-        action = MediaPlaybackService.ACTION_UPDATE
-        putExtra(MediaPlaybackService.EXTRA_TITLE, args.title)
-        putExtra(MediaPlaybackService.EXTRA_ARTIST, args.artist)
-        putExtra(MediaPlaybackService.EXTRA_PLAYING, args.isPlaying)
-        putExtra(MediaPlaybackService.EXTRA_DURATION, args.durationMs)
-        putExtra(MediaPlaybackService.EXTRA_POSITION, args.positionMs)
-        putExtra(MediaPlaybackService.EXTRA_ARTWORK, args.artworkDataUrl)
-      }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ContextCompat.startForegroundService(activity, intent)
-      else activity.startService(intent)
-      invoke.resolve()
-    } catch (error: Exception) {
-      invoke.reject(error.message ?: "Could not update Android playback controls.")
     }
   }
 
   @Command
   fun stop(invoke: Invoke) {
-    activity.stopService(Intent(activity, MediaPlaybackService::class.java))
-    invoke.resolve()
+    activity.runOnUiThread {
+      MediaPlaybackService.stopFromPlayer(activity)
+      invoke.resolve()
+    }
   }
 
   @Command
