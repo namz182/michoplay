@@ -2,6 +2,7 @@ import { AudioLines, Disc3, FolderOpen, Plus } from "lucide-react";
 import type { Track } from "../../lib/api";
 import { Cover } from "../../app/Artwork";
 import { Empty } from "../../components/EmptyState";
+import { useHorizontalDragScroll } from "../../components/library/useHorizontalDragScroll";
 import { HomeQuickLinks } from "./quick-links";
 
 type Collection = { key: string; title: string; subtitle: string; tracks: Track[] };
@@ -34,9 +35,10 @@ export function HomeScreen({ albums, artists, availableTracks, folders, isScanni
 
 type ShelfItem = { key: string; title: string; label: string; meta: string; tracks: Track[]; onOpen: () => void };
 function HomeArtShelf({ title, items, onViewAll, addLabel, addDisabled = false, onAdd }: { title: string; items: ShelfItem[]; onViewAll: () => void; addLabel?: string; addDisabled?: boolean; onAdd?: () => void }) {
+  const dragScroll = useHorizontalDragScroll();
   return <section className="home-art-shelf" aria-label={title}>
     <header className="home-art-shelf-heading"><h2>{title}</h2><div>{onAdd && <button className="home-shelf-action" disabled={addDisabled} onClick={onAdd}><Plus size={14}/>{addLabel}</button>}<button className="home-shelf-action home-shelf-view-all" onClick={onViewAll}>Show all</button></div></header>
-    {items.length > 0 && <div className="home-art-shelf-row">{items.map((item) => <button key={item.key} className="home-art-card" onClick={item.onOpen}>
+    {items.length > 0 && <div ref={dragScroll.scrollRef} className="home-art-shelf-row" onPointerDown={dragScroll.onPointerDown} onPointerMove={dragScroll.onPointerMove} onPointerUp={dragScroll.onPointerUp} onPointerCancel={dragScroll.onPointerCancel} onClickCapture={dragScroll.onClickCapture}>{items.map((item) => <button key={item.key} className="home-art-card" onClick={item.onOpen}>
       <Cover className="home-art-card-cover" keys={item.tracks.map((track) => track.artworkKey)} icon={item.label === "Folder" ? <FolderOpen size={30}/> : item.label === "Artist" ? <AudioLines size={30}/> : <Disc3 size={30}/>}/>
       <span className="home-art-card-label">{item.label}</span><strong>{item.title}</strong><small>{item.meta}</small>
     </button>)}</div>}

@@ -625,10 +625,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .heading-copy { min-width: 0; }
 .heading-copy h1 { overflow-wrap: anywhere; }
 .heading-copy p { font-size: 11px; line-height: 1.6; }
-.playlist-heading-search { position: relative; width: min(260px, 100%); margin-top: 11px; }
-.playlist-heading-search .library-search { width: 100%; height: 34px; box-sizing: border-box; flex: none; padding: 0 9px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; background: rgba(0,0,0,.22); }
-.playlist-heading-search .library-search:focus-within { flex-basis: auto; border-color: rgba(255,255,255,.42); background: rgba(0,0,0,.3); }
-.playlist-heading-search .library-search input, .playlist-heading-search .library-search input:not(:placeholder-shown) { width: auto; flex: 1; flex-basis: auto; font-size: 11px; }
+.playlist-heading-search { position: relative; width: min(420px, 100%); margin-top: 11px; }
+.playlist-search-control { width: 100%; max-width: none; height: 39px; margin: 0; }
+.playlist-search-control:focus-within { border-color: rgba(255,255,255,.42); box-shadow: 0 0 0 1px rgba(255,255,255,.12); }
+.playlist-search-control input { width: auto; flex: 1; font-size: 12px; }
+.playlist-search-control > button { display:grid; width:24px; height:24px; flex:0 0 24px; place-items:center; padding:0; border:0; border-radius:50%; background:transparent; color:#aaa5af; cursor:pointer; }
+.playlist-search-control > button:hover { color:#fff; }
 .playlist-heading-search-menu { position: absolute; z-index: 8; top: calc(100% + 7px); left: 0; display: grid; width: min(320px, calc(100vw - 50px)); max-height: min(300px, 45vh); overflow-y: auto; padding: 5px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: rgba(39,37,42,.99); box-shadow: 0 12px 35px rgba(0,0,0,.5); }
 .playlist-heading-search-menu button { display: grid; min-height: 48px; grid-template-columns: 34px minmax(0,1fr); align-items: center; gap: 9px; padding: 5px 7px; border: 0; border-radius: 5px; background: transparent; color: #f3eff5; text-align: left; cursor: pointer; }
 .playlist-heading-search-menu button:hover, .playlist-heading-search-menu button:focus-visible { background: rgba(255,255,255,.1); outline: none; }
@@ -640,7 +642,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .playlist-heading-search-menu p { margin: 8px; color: #aaa4ae; font-size: 11px; }
 .playlist-search-toggle { display:none; width:36px; height:36px; place-items:center; padding:0; border-radius:50%; color:#aaa4ae; }
 .playlist-search-toggle:hover, .playlist-search-toggle[aria-expanded="true"] { background:rgba(255,255,255,.1); color:#f4f1f5; }
-@media (min-width: 821px) { .content-scroll:has(.playlist-heading-search) .collection-tools .collection-search { display:none; } }
+.desktop-app .playlist-heading-search { display:none; }
 .android-app .collection-tools .collection-search { display:none; }
 .android-app .collection-tools.mobile-collection-search-open .collection-search { display:flex; }
 .cover { display: grid; grid-template-columns: minmax(0,1fr); overflow: hidden; flex: 0 0 auto; border-radius: 4px; background: #29282a; }
@@ -1038,6 +1040,21 @@ body.resizing { cursor: col-resize; user-select: none; }
 .collection-kind-label { display:none; }
 .artist-grid .collection-open { justify-items: center; text-align: center; }
 .artist-grid .collection-open > strong, .artist-grid .collection-open > small { text-align: center; }
+
+@media (min-width: 821px) {
+  .desktop-app .collection-grid.folder-grid,
+  .desktop-app .collection-grid.album-grid { display:flex; gap:14px; overflow-x:auto; overscroll-behavior-inline:contain; scrollbar-width:none; }
+  .desktop-app .collection-grid.folder-grid::-webkit-scrollbar,
+  .desktop-app .collection-grid.album-grid::-webkit-scrollbar { display:none; }
+  .desktop-app .collection-grid.folder-grid > .media-card,
+  .desktop-app .collection-grid.album-grid > .media-card { width:clamp(145px, 18vw, 210px); flex:0 0 clamp(145px, 18vw, 210px); }
+  .desktop-app .collection-grid.folder-grid,
+  .desktop-app .collection-grid.album-grid,
+  .desktop-app .home-art-shelf-row { cursor:grab; touch-action:pan-y; }
+  .desktop-app .collection-grid.folder-grid.is-dragging,
+  .desktop-app .collection-grid.album-grid.is-dragging,
+  .desktop-app .home-art-shelf-row.is-dragging { cursor:grabbing; user-select:none; }
+}
 
 /* Range controls retain a clear track while their small thumb appears on interaction. */
 .seek-row input[type="range"], .player-options input[type="range"], .settings-volume input[type="range"] {
