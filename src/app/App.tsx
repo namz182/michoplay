@@ -1533,7 +1533,7 @@ export default function App() {
         <div className="mobile-header-actions">
           {mobileTab === "home" && <button className="mobile-icon-button" aria-label="Search music" onClick={() => { setMobileTab("search"); setSearch(""); }}><Search size={24}/></button>}
           {mobileTab === "library" && <button className="mobile-icon-button" aria-label="Create playlist or import music" onClick={() => setMobileLibraryActionsOpen(true)}><Plus size={25}/></button>}
-          {mobileTab === "youtube" && <button className="mobile-icon-button" aria-label="Open downloads" onClick={openMobileDownloads}><Download size={21}/></button>}
+          {mobileTab === "youtube" && <button className="mobile-icon-button" aria-label="Search YouTube" onClick={() => { setMobileTab("search"); setSearch(""); }}><Search size={24}/></button>}
           <button className="mobile-icon-button" aria-label="Settings" onClick={() => { setMobileTab("home"); navigate({ section: "Settings" }); }}><Settings2 size={20}/></button>
         </div>
       </header>}
@@ -1639,14 +1639,14 @@ export default function App() {
             onDefaultPlayer={() => isAndroid ? setMessage("Open an audio file from your file manager, choose MichoPlay, then tap Always to make it the default.") : void run(() => api.setDefaultPlayer())}
           /> : <>
             {!listPage && (page.section === "Folders" || page.section === "Playlists" || page.section === "Albums" || page.section === "Artists") && <button className="browse-back-button" onClick={() => navigate({ section: "Home" })}><ChevronLeft size={17}/>Back to Home</button>}
-            <div className={`collection-heading ${listPage ? "detail-heading" : ""} ${isYoutubePlaylist ? "youtube-detail-heading" : ""}`}>
-              {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/> }{isAndroid && listPage && <button className="mobile-detail-back" aria-label="Back" onClick={() => { if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}><ChevronLeft size={24}/></button>}<div className="heading-foreground">{listPage && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={page.detail?.kind === "folder" ? <FolderOpen size={40}/> : page.section === "Favorites" ? <Heart size={36} fill="currentColor"/> : <Music2 size={36}/>}/>}<div className="heading-copy"><h1>{heading}</h1><p>{isYoutubePlaylist ? "Download audio from YouTube by searching or pasting a link." : listPage ? `${collectionTracks.length} ${collectionTracks.length === 1 ? "Song" : "Songs"} · ${time(collectionDurationMs)}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : page.section === "Folders" ? `${folders.length} folders` : `${playlists.length} playlists`}</p></div></div>
+            <div className={`collection-heading ${listPage ? "detail-heading" : ""}`}>
+              {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/> }{isAndroid && listPage && <button className="mobile-detail-back" aria-label="Back" onClick={() => { if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}><ChevronLeft size={24}/></button>}<div className="heading-foreground">{listPage && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={isYoutubePlaylist ? <Youtube size={36}/> : page.detail?.kind === "folder" ? <FolderOpen size={40}/> : page.section === "Favorites" ? <Heart size={36} fill="currentColor"/> : <Music2 size={36}/>}/>}<div className="heading-copy"><h1>{heading}</h1><p>{isYoutubePlaylist ? "Download audio from YouTube by searching or pasting a link." : listPage ? `${collectionTracks.length} ${collectionTracks.length === 1 ? "Song" : "Songs"} · ${time(collectionDurationMs)}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : page.section === "Folders" ? `${folders.length} folders` : `${playlists.length} playlists`}</p></div></div>
             </div>
           {listPage ? <>{isYoutubePlaylist && <section className="youtube-downloader" aria-label="Search YouTube audio">
             <div className="youtube-search-header">
-            <form className="youtube-search-form" onSubmit={(event) => event.preventDefault()}>
-              <label className="search-box youtube-global-search"><Search size={17}/><input type="text" aria-label="Search YouTube" placeholder="Song, artist, or paste a YouTube link" value={youtubeQuery} onChange={(event) => setYoutubeQuery(event.target.value)}/>{youtubeQuery && <button type="button" aria-label="Clear YouTube search" onClick={() => setYoutubeQuery("")}><X size={15}/></button>}</label>
-            </form>
+              <form className="youtube-search-form" onSubmit={(event) => event.preventDefault()}>
+                <label className="search-box youtube-global-search"><Search size={17}/><input type="text" aria-label="Search YouTube" placeholder="Song, artist, or paste a link" value={youtubeQuery} onChange={(event) => setYoutubeQuery(event.target.value)}/>{youtubeQuery && <button type="button" aria-label="Clear YouTube search" onClick={() => setYoutubeQuery("")}><X size={15}/></button>}</label>
+              </form>
             </div>
             {youtubeSearching ? <div className="youtube-search-grid" aria-label="Loading YouTube results">{Array.from({ length: 6 }, (_, index) => <div className="youtube-result-skeleton" key={index}><span/><div><i/><i/></div></div>)}</div>
               : youtubeSearchError ? <p className="youtube-search-empty" role="alert">{youtubeSearchError}</p>
@@ -1663,14 +1663,12 @@ export default function App() {
               albums={albums}
               artists={artists}
               availableTracks={availableTracks}
-              playlists={playlists}
               folders={folders}
               isScanning={scanning}
               navigate={(section) => navigate({ section })}
               openYoutube={openYoutubePage}
               chooseLibrarySource={chooseLibrarySource}
               openFolder={(item) => openDetail("Home", "folder", item)}
-              openPlaylist={(item) => openDetail("Playlists", "playlist", { key: item.id, title: item.name, subtitle: "", tracks: [] })}
               openAlbum={(item) => openDetail("Albums", "album", item)}
               openArtist={(item) => openDetail("Artists", "artist", item)}
             /> : page.section === "Albums" ? <CollectionGrid collections={albums} kind="album" onOpen={(item) => openDetail("Albums", "album", item)}/> : page.section === "Artists" ? <CollectionGrid collections={artists} kind="artist" onOpen={(item) => openDetail("Artists", "artist", item)}/> : page.section === "Folders" ? <div className="home-section"><div className="section-title-row"><h2>Folders</h2><button className="outline-button" disabled={scanning} onClick={chooseLibrarySource}><Plus size={15}/>Add folder</button></div><CollectionGrid collections={folders} kind="folder" onOpen={(item) => openDetail("Home", "folder", item)} onPlay={playCardCollection} isCurrentCollection={isCollectionCurrent} playingId={player.currentTrackId} isPlaying={player.isPlaying}/>{!folders.length && <Empty title={scanning ? "Scanning music…" : "No folders yet"} description="Add a music folder to browse its songs."/>}</div> : <div className="home-section"><div className="section-title-row"><h2>Your playlists</h2><button className="outline-button" onClick={() => newPlaylist()}><Plus size={15}/>Create playlist</button></div><CollectionGrid collections={playlists.map((item) => ({ key: item.id, title: item.name, subtitle: "", tracks: item.trackIds.flatMap((id) => !hiddenTrackSet.has(id) && trackMap.get(id) ? [trackMap.get(id)!] : []) }))} kind="playlist" onOpen={(item) => openDetail("Playlists", "playlist", item)} onPlay={playCardCollection} isCurrentCollection={isCollectionCurrent} playingId={player.currentTrackId} isPlaying={player.isPlaying}/>{!playlists.length && <Empty title="No playlists yet" description="Create a playlist and add songs from their action menu."/>}</div>}
