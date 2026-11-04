@@ -625,6 +625,24 @@ body.resizing { cursor: col-resize; user-select: none; }
 .heading-copy { min-width: 0; }
 .heading-copy h1 { overflow-wrap: anywhere; }
 .heading-copy p { font-size: 11px; line-height: 1.6; }
+.playlist-heading-search { position: relative; width: min(260px, 100%); margin-top: 11px; }
+.playlist-heading-search .library-search { width: 100%; height: 34px; box-sizing: border-box; flex: none; padding: 0 9px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; background: rgba(0,0,0,.22); }
+.playlist-heading-search .library-search:focus-within { flex-basis: auto; border-color: rgba(255,255,255,.42); background: rgba(0,0,0,.3); }
+.playlist-heading-search .library-search input, .playlist-heading-search .library-search input:not(:placeholder-shown) { width: auto; flex: 1; flex-basis: auto; font-size: 11px; }
+.playlist-heading-search-menu { position: absolute; z-index: 8; top: calc(100% + 7px); left: 0; display: grid; width: min(320px, calc(100vw - 50px)); max-height: min(300px, 45vh); overflow-y: auto; padding: 5px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: rgba(39,37,42,.99); box-shadow: 0 12px 35px rgba(0,0,0,.5); }
+.playlist-heading-search-menu button { display: grid; min-height: 48px; grid-template-columns: 34px minmax(0,1fr); align-items: center; gap: 9px; padding: 5px 7px; border: 0; border-radius: 5px; background: transparent; color: #f3eff5; text-align: left; cursor: pointer; }
+.playlist-heading-search-menu button:hover, .playlist-heading-search-menu button:focus-visible { background: rgba(255,255,255,.1); outline: none; }
+.playlist-heading-search-menu .cover { width: 34px; height: 34px; border-radius: 4px; }
+.playlist-heading-search-menu button > span { display: grid; min-width: 0; gap: 2px; }
+.playlist-heading-search-menu strong, .playlist-heading-search-menu small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playlist-heading-search-menu strong { font-size: 11px; }
+.playlist-heading-search-menu small { color: #aaa4ae; font-size: 10px; }
+.playlist-heading-search-menu p { margin: 8px; color: #aaa4ae; font-size: 11px; }
+.playlist-search-toggle { display:none; width:36px; height:36px; place-items:center; padding:0; border-radius:50%; color:#aaa4ae; }
+.playlist-search-toggle:hover, .playlist-search-toggle[aria-expanded="true"] { background:rgba(255,255,255,.1); color:#f4f1f5; }
+@media (min-width: 821px) { .content-scroll:has(.playlist-heading-search) .collection-tools .collection-search { display:none; } }
+.android-app .collection-tools .collection-search { display:none; }
+.android-app .collection-tools.mobile-collection-search-open .collection-search { display:flex; }
 .cover { display: grid; grid-template-columns: minmax(0,1fr); overflow: hidden; flex: 0 0 auto; border-radius: 4px; background: #29282a; }
 .cover img { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: cover; }
 .cover-mosaic { grid-template-columns: repeat(2,minmax(0,1fr)); grid-template-rows: repeat(2,minmax(0,1fr)); }
@@ -1195,6 +1213,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .detail-heading .heading-copy { position:relative; z-index:1; width:100%; }
 .android-app .detail-heading .heading-copy h1 { margin:0; font-size:clamp(32px,8.5vw,44px); line-height:.98; font-weight:850; letter-spacing:-1.4px; }
 .android-app .detail-heading .heading-copy p { margin:6px 0 0; color:#e5e1e7; font-size:14px; font-weight:750; letter-spacing:-.2px; }
+.android-app .playlist-search-toggle { display:grid; }
 .android-app .mobile-detail-back { position:absolute; z-index:2; top:9px; left:13px; display:grid; width:38px; height:38px; place-items:center; border:0; border-radius:50%; background:rgba(0,0,0,.32); color:#fff; }
 .android-app .home-section { padding:2px 18px 22px; }
 .android-app .section-title-row { margin:17px 0 11px; }
