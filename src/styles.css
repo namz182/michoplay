@@ -15,7 +15,6 @@
   --muted: #b1adb6;
   --quiet: #827d88;
   --accent: #d8eee4;
-  --accent-strong: #73dda0;
   --brand-highlight: #d8eee4;
   --blush: #f5c6be;
   --youtube-red: #ff0033;
@@ -167,7 +166,7 @@ button:disabled { cursor: default; }
 .track-name strong { overflow: hidden; color: #f3f0f5; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .track-name small, .track-album, .track-artist-cell { overflow: hidden; color: #aaa4ae; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .track-duration { color: #aaa4ae; text-align: right; font-size: 10px; font-variant-numeric: tabular-nums; }
-.playing-bars { color: var(--accent-strong); }
+.playing-bars { color: var(--brand-highlight); }
 .empty-library { display: grid; min-height: 300px; align-content: center; justify-items: center; padding: 30px 20px 60px; text-align: center; }
 .empty-library h2 { margin: 0; color: #f2eef4; font-size: 16px; font-weight: 750; letter-spacing: -.35px; }
 .empty-library p { margin: 7px 0 15px; color: #aaa4ae; font-size: 11px; }
@@ -296,7 +295,7 @@ button:disabled { cursor: default; }
 .full-mode-track strong, .full-mode-track small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .full-mode-track strong { color: #f1f1f1; font-size: 11px; font-weight: 600; }
 .full-mode-track small { color: #aaa; font-size: 10px; }
-.full-mode-track.current strong { color: var(--accent-strong); }
+.full-mode-track.current strong { color: var(--brand-highlight); }
 .full-mode-empty { margin: 8px 0; color: #aaa; font-size: 11px; }
 .full-mode-browse-tabs { display: flex; flex: 0 0 auto; gap: 7px; padding: 3px 0 7px; }
 .full-mode-browse-tabs button { min-height: 27px; padding: 0 10px; border: 0; border-radius: 999px; background: rgba(255,255,255,.07); color: #bcb7c0; font-size: 10px; font-weight: 650; cursor: pointer; }
@@ -493,7 +492,7 @@ button:disabled { cursor: default; }
 .queue-expand-button { display: block; width: 100%; margin: 8px 0 14px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.11); border-radius: 5px; background: rgba(255,255,255,.035); color: #c9c2ce; font: inherit; font-size: 11px; text-align: center; cursor: pointer; }
 .queue-expand-button:hover { background: rgba(255,255,255,.08); color: #fff; }
 .queue-list button { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border: 0; background: transparent; color: #88828e; text-align: left; cursor: pointer; }
-.queue-list button.current { color: var(--accent-strong); }
+.queue-list button.current { color: var(--brand-highlight); }
 .queue-list button > span:first-child { width: 15px; font-size: 9px; text-align: center; }
 .queue-list button > span:last-child { display: grid; min-width: 0; gap: 3px; }
 .queue-song-copy { display:grid; min-width:0; flex:1 1 auto; gap:3px; overflow:hidden; }
@@ -577,7 +576,6 @@ button:disabled { cursor: default; }
 }
 
 /* Artwork, collection navigation, and queue editing */
-:root { --accent-strong: #73dda0; }
 button.brand { padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .primary-play, .play-button { background: var(--brand-gradient); color: #302b38; cursor: pointer; }
 .primary-play:hover:not(:disabled), .play-button:hover:not(:disabled) { filter: brightness(1.08); }
@@ -1366,11 +1364,11 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-queue-row > span:nth-child(2), .mobile-queue-song > span:last-child { display:grid; min-width:0; flex:1; gap:4px; }
 .mobile-queue-row strong { overflow:hidden; font-size:15px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-queue-row small { overflow:hidden; color:#b6b1ba; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
-.mobile-queue-row.current strong { color:var(--accent-strong); }
+.mobile-queue-row.current strong { color:var(--brand-highlight); }
 .mobile-queue-row.current { min-height:68px; }
 .mobile-queue-cover { width:42px; height:42px; flex:0 0 42px; border-radius:5px; }
 .mobile-queue-song > .mobile-queue-cover { width:42px !important; height:42px !important; min-width:42px; max-width:42px; flex:0 0 42px; aspect-ratio:1; }
-.mobile-queue-state { color:var(--accent-strong); font-size:11px; }
+.mobile-queue-state { color:var(--brand-highlight); font-size:11px; }
 .mobile-queue-play { display:grid; width:42px; height:42px; flex:0 0 42px; place-items:center; border:0; border-radius:50%; background:var(--brand-gradient); color:#302b38; }
 .mobile-queue-song { display:flex; min-width:0; flex:1; align-items:center; gap:10px; padding:0; border:0; background:transparent; color:inherit; text-align:left; }
 .mobile-queue-order { display:flex; flex:0 0 auto; align-items:center; gap:1px; color:#d4d0d8; }
