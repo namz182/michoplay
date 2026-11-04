@@ -48,11 +48,11 @@ function playlistSubmenuPlacement(menuX: number) {
 type ListeningRecord = { trackId: number; lastPlayedAt: number; playCount: number; positionMs: number; durationMs: number };
 type SavedPlaybackSession = { currentTrackId: number | null; queue: number[]; positionMs: number; isPlaying: boolean };
 type GlobalSearchResult = { type: "Song" | "Folder" | "Album" | "Artist" | "Playlist"; title: string; subtitle: string; artworkKey: string | null; trackId?: number; page?: Page };
-type TrackSort = "custom" | "title" | "artist" | "album" | "recentlyAdded" | "releaseDate" | "duration";
+type TrackSort = "titleAsc" | "titleDesc" | "recentlyAdded" | "durationAsc" | "durationDesc";
 const trackSortOptions: { key: TrackSort; label: string }[] = [
-  { key: "custom", label: "Custom order" }, { key: "title", label: "Title" }, { key: "artist", label: "Artist" },
-  { key: "album", label: "Album" }, { key: "recentlyAdded", label: "Recently added" },
-  { key: "releaseDate", label: "Release date" }, { key: "duration", label: "Duration" },
+  { key: "titleAsc", label: "Title A–Z" }, { key: "titleDesc", label: "Title Z–A" },
+  { key: "recentlyAdded", label: "Recently added" },
+  { key: "durationAsc", label: "Duration (short to long)" }, { key: "durationDesc", label: "Duration (long to short)" },
 ];
 const latestReleaseApiUrl = "https://api.github.com/repos/namz182/michoplay/releases/latest";
 const michoplayGithubUrl = "https://github.com/namz182/michoplay";
@@ -251,8 +251,10 @@ export default function App() {
   const [panelView, setPanelView] = useState<"now-playing" | "downloads">("now-playing");
   const [compact, setCompact] = useState(() => stored("compact", false));
   const [sortBy, setSortBy] = useState<TrackSort>(() => {
-    const saved = stored<string>("collection-sort", "custom");
-    return trackSortOptions.some((option) => option.key === saved) ? saved as TrackSort : "custom";
+    const saved = stored<string>("collection-sort", "recentlyAdded");
+    if (saved === "title") return "titleAsc";
+    if (saved === "duration") return "durationAsc";
+    return trackSortOptions.some((option) => option.key === saved) ? saved as TrackSort : "recentlyAdded";
   });
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<"home" | "search" | "library" | "youtube" | "downloads">("home");
@@ -1190,11 +1192,12 @@ export default function App() {
   const collectionHasCurrent = useMemo(() => collectionTracks.some((track) => track.id === player.currentTrackId), [collectionTracks, player.currentTrackId]);
   const sortedVisibleTracks = useMemo(() => {
     const sorted = [...visibleTracks];
-    if (sortBy === "title" || sortBy === "artist" || sortBy === "album") {
-      sorted.sort((a, b) => a[sortBy].localeCompare(b[sortBy], undefined, { numeric: true, sensitivity: "base" }));
-    } else if (sortBy === "recentlyAdded") sorted.sort((a, b) => b.addedAt - a.addedAt);
-    else if (sortBy === "releaseDate") sorted.sort((a, b) => (b.releaseDate || "").localeCompare(a.releaseDate || "") || a.title.localeCompare(b.title));
-    else if (sortBy === "duration") sorted.sort((a, b) => a.durationMs - b.durationMs || a.title.localeCompare(b.title));
+    const compareTitle = (a: Track, b: Track) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" });
+    if (sortBy === "titleAsc") sorted.sort(compareTitle);
+    else if (sortBy === "titleDesc") sorted.sort((a, b) => compareTitle(b, a));
+    else if (sortBy === "recentlyAdded") sorted.sort((a, b) => b.addedAt - a.addedAt || compareTitle(a, b));
+    else if (sortBy === "durationAsc") sorted.sort((a, b) => a.durationMs - b.durationMs || compareTitle(a, b));
+    else if (sortBy === "durationDesc") sorted.sort((a, b) => b.durationMs - a.durationMs || compareTitle(a, b));
     return sorted;
   }, [visibleTracks, sortBy]);
   const heading = selectedPlaylist?.name ?? page.detail?.title ?? page.section;
