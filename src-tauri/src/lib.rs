@@ -365,18 +365,7 @@ fn apply_android_media_action(core: &mut PlayerCore, action: &str) -> Result<(),
             if core.queue.is_empty() {
                 return Err("Add a music folder first.".to_owned());
             }
-            if let Some(next) = core
-                .current_queue_index
-                .and_then(|index| core.next_index(index))
-            {
-                core.play_queue_index(next)
-            } else {
-                core.is_playing = false;
-                if let Some(sink) = &core.sink {
-                    sink.stop();
-                }
-                Ok(())
-            }
+            core.play_next_available()
         }
         "previous" => {
             if core.queue.is_empty() {
@@ -1467,7 +1456,11 @@ where
     let mut paths = Vec::new();
     let mut visited = 0usize;
     for root in &canonical_roots {
-        for entry in WalkDir::new(root).follow_links(false) {
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| !is_protected_android_storage_dir(entry.path()))
+        {
             if LIBRARY_SCAN_CANCELLED.load(Ordering::Relaxed) {
                 return Err("Library scan cancelled.".to_owned());
             }
@@ -1650,6 +1643,17 @@ where
         prune_artwork_cache(&storage_dir.join("artwork"), &live_artwork);
     }
     Ok(result)
+}
+
+fn is_protected_android_storage_dir(path: &Path) -> bool {
+    let components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    components.windows(2).any(|pair| {
+        pair[0].eq_ignore_ascii_case("Android")
+            && (pair[1].eq_ignore_ascii_case("data") || pair[1].eq_ignore_ascii_case("obb"))
+    })
 }
 
 fn prune_artwork_cache(directory: &Path, live_keys: &HashSet<String>) {
@@ -1855,6 +1859,54 @@ impl PlayerCore {
         }
     }
 
+    fn remove_unplayable_queue_item(&mut self, index: usize) {
+        if let Some(id) = self.queue.get(index).copied() {
+            self.queue.remove(index);
+            self.priority_queue.retain(|queued| *queued != id);
+            if let Some(current) = self.current_queue_index {
+                if index < current {
+                    self.current_queue_index = Some(current - 1);
+                } else if index == current {
+                    self.current_queue_index = None;
+                }
+            }
+        }
+    }
+
+    fn play_next_available(&mut self) -> Result<(), String> {
+        let mut remaining_attempts = self.queue.len();
+        while remaining_attempts > 0 {
+            remaining_attempts -= 1;
+            let next = match self.current_queue_index {
+                Some(current) => self.next_index(current),
+                None if !self.queue.is_empty() => Some(0),
+                None => None,
+            };
+            let Some(next) = next else {
+                self.is_playing = false;
+                if let Some(sink) = &self.sink {
+                    sink.stop();
+                }
+                return Ok(());
+            };
+            match self.play_queue_index(next) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if error == "This music file can’t be opened."
+                        || error == "This audio format could not be decoded." =>
+                {
+                    self.remove_unplayable_queue_item(next);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.is_playing = false;
+        if let Some(sink) = &self.sink {
+            sink.stop();
+        }
+        Ok(())
+    }
+
     fn find_track_index(&self, id: u64) -> Result<usize, String> {
         self.track_indices.get(&id).copied().ok_or_else(|| {
             "That song is no longer in the library. Refresh the folder and try again.".to_owned()
@@ -1926,7 +1978,13 @@ impl PlayerCore {
             self.play_queue_index(index)
         } else {
             self.queue.push(id);
-            self.play_queue_index(self.queue.len() - 1)
+            match self.play_queue_index(self.queue.len() - 1) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    self.queue.pop();
+                    Err(error)
+                }
+            }
         }
     }
 
@@ -1946,11 +2004,15 @@ impl PlayerCore {
         } else if track_ended {
             let current = self.current_queue_index.unwrap_or(0);
             if self.repeat_mode == "one" && self.priority_queue.is_empty() {
-                let _ = self.play_queue_index(current);
+                if self.play_queue_index(current).is_err() {
+                    self.is_playing = false;
+                }
             } else {
                 if self.autoplay || !self.priority_queue.is_empty() {
-                    if let Some(next) = self.next_index(current) {
-                        let _ = self.play_queue_index(next);
+                    if self.next_index(current).is_some() {
+                        if self.play_next_available().is_err() {
+                            self.is_playing = false;
+                        }
                     } else {
                         self.is_playing = false;
                     }
@@ -3340,6 +3402,12 @@ fn library_saved_roots(state: State<'_, AppState>) -> Result<Vec<String>, String
     Ok(core
         .roots
         .iter()
+        .filter(|root| {
+            !root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Android"))
+        })
         .map(|root| root.to_string_lossy().into_owned())
         .collect())
 }
@@ -3458,9 +3526,13 @@ fn player_play_collection(
         .iter()
         .position(|id| *id == start_id)
         .ok_or_else(|| "Choose a song in this collection.".to_owned())?;
-    core.queue = track_ids;
-    core.priority_queue.clear();
-    core.play_queue_index(start)?;
+    let previous_queue = std::mem::replace(&mut core.queue, track_ids);
+    let previous_priority_queue = std::mem::take(&mut core.priority_queue);
+    if let Err(error) = core.play_queue_index(start) {
+        core.queue = previous_queue;
+        core.priority_queue = previous_priority_queue;
+        return Err(error);
+    }
     if core.shuffle {
         core.shuffle_upcoming();
     }
@@ -3602,19 +3674,7 @@ fn player_next(state: State<'_, AppState>) -> Result<(), String> {
     if core.queue.is_empty() {
         return Err("Add a music folder first.".to_owned());
     }
-    if core.current_queue_index.is_none() {
-        return core.play_queue_index(0);
-    }
-    let index = core.current_queue_index.unwrap_or(0);
-    if let Some(next) = core.next_index(index) {
-        core.play_queue_index(next)
-    } else {
-        core.is_playing = false;
-        if let Some(sink) = &core.sink {
-            sink.stop();
-        }
-        Ok(())
-    }
+    core.play_next_available()
 }
 
 #[tauri::command]

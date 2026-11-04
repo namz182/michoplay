@@ -185,6 +185,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
     val relative = path.removePrefix("$volumeRoot/")
     val topLevel = relative.substringBefore('/')
+    // Android/data and Android/obb are protected by scoped storage. Never
+    // promote their files to a broad Android/ scan root; users can still add
+    // a readable folder explicitly through the system folder picker.
+    if (topLevel.equals("Android", ignoreCase = true)) return null
     return if (topLevel.isBlank()) parent else File(volumeRoot, topLevel)
   }
 

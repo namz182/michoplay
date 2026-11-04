@@ -21,7 +21,7 @@ export function MobileDownloadsScreen({ downloads, clearable, onClear, onControl
 }) {
   const activeCount = downloads.filter((item) => item.status === "downloading" || item.status === "queued").length;
   return <div className="mobile-downloads-page">
-    <div className="mobile-downloads-destination"><FolderOpen size={20}/><span><strong>Music / MichoPlay / YouTube</strong><small>Saved to your phone and added to Your Library</small></span></div>
+    <div className="mobile-downloads-destination"><FolderOpen size={14}/><span><strong>Download location</strong><small>Music / MichoPlay / YouTube</small></span></div>
     <div className="section-title-row"><h2>Your downloads</h2><span>{activeCount} active</span>{clearable && <button className="download-clear-button" onClick={onClear}><Trash2 size={14}/>Clear</button>}</div>
     {downloads.length ? <div className="mobile-download-list">{downloads.map((item) => <article className={`mobile-download-row status-${item.status}`} key={item.id}>
       <div className="mobile-download-art">{item.thumbnail && <img src={item.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/>}<Youtube size={16}/>{item.status === "completed" && <button aria-label={`Play ${item.title}`} onClick={() => onPlay(item)}><Play size={16} fill="currentColor"/></button>}</div>

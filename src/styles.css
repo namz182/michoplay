@@ -986,6 +986,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .collection-grid .collection-open > strong, .collection-grid .collection-open > small { display: block; width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collection-grid .collection-open > strong { color: #f5f2f6; font-size: 12px; font-weight: 650; line-height: 1.4; }
 .collection-grid .collection-open > small { color: #aaa4ae; font-size: 10px; line-height: 1.4; }
+.collection-kind-label { display:none; }
 .artist-grid .collection-open { justify-items: center; text-align: center; }
 .artist-grid .collection-open > strong, .artist-grid .collection-open > small { text-align: center; }
 
@@ -1165,6 +1166,8 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-filter-row::-webkit-scrollbar { display:none; }
 .mobile-filter-row button { min-height:37px; flex:0 0 auto; padding:0 16px; border:0; border-radius:999px; background:#29292c; color:#f0eef1; font-size:14px; font-weight:700; }
 .mobile-filter-row button.selected { background:var(--brand-gradient); color:#241d2c; }
+.home-filter-row { gap:7px; padding:6px 0 9px; }
+.home-filter-row button { min-height:33px; padding-inline:13px; font-size:12px; }
 .android-app .folder-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; padding:0; }
 .android-app .folder-grid > .media-card { display:grid; grid-template-columns:minmax(0,1fr) 25px; align-items:center; min-width:0; min-height:58px; padding:0; border-radius:6px; background:#29292c; }
 .android-app .folder-grid .collection-open { grid-column:1; display:grid; grid-template-columns:50px minmax(0,1fr); grid-template-rows:1fr; align-items:center; gap:6px; width:100%; min-height:58px; }
@@ -1243,10 +1246,12 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-downloads-page { display:grid; gap:14px; padding:14px 13px 24px; }
 .mobile-downloads-page .section-title-row { margin:3px 0 0; }
 .mobile-downloads-page .section-title-row > span { color:#aaa6af; font-size:12px; }
-.mobile-downloads-destination { display:flex; min-width:0; align-items:center; gap:12px; padding:13px; border:1px solid rgba(255,255,255,.07); border-radius:9px; background:#252427; color:var(--blush); }
-.mobile-downloads-destination > span { display:grid; min-width:0; gap:4px; }
-.mobile-downloads-destination strong { overflow:hidden; color:#f5f3f6; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
-.mobile-downloads-destination small { color:#aaa6af; font-size:11px; line-height:1.4; }
+.mobile-downloads-destination { display:flex; min-width:0; align-items:center; gap:7px; margin:0 4px; color:#aaa6af; }
+.mobile-downloads-destination > svg { flex:0 0 auto; color:var(--blush); }
+.mobile-downloads-destination > span { display:flex; min-width:0; align-items:baseline; gap:5px; }
+.mobile-downloads-destination strong, .mobile-downloads-destination small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mobile-downloads-destination strong { color:#d5d1d8; font-size:10px; font-weight:600; }
+.mobile-downloads-destination small { font-size:10px; }
 .mobile-download-list { display:grid; gap:8px; }
 .mobile-download-empty { display:grid; min-height:250px; align-content:center; justify-items:center; gap:10px; padding:24px; border:1px solid rgba(255,255,255,.06); border-radius:10px; background:#222124; color:#aaa6af; text-align:center; }
 .mobile-download-empty strong { color:#f4f1f5; font-size:16px; }
@@ -1257,7 +1262,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-download-art > img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
 .mobile-download-art > button { position:absolute; inset:0; display:grid; place-items:center; border:0; background:rgba(0,0,0,.45); color:#fff; opacity:0; }
 .mobile-download-art:active > button { opacity:1; }
-.mobile-download-row.status-completed .mobile-download-art > button { inset:auto 3px 3px auto; width:27px; height:27px; border-radius:50%; background:rgba(18,18,21,.88); opacity:1; }
+.mobile-download-row.status-completed .mobile-download-art > button { inset:50% auto auto 50%; width:27px; height:27px; border-radius:50%; background:rgba(18,18,21,.88); opacity:1; transform:translate(-50%,-50%); }
 .mobile-download-copy { display:grid; min-width:0; flex:1; gap:4px; }
 .mobile-download-copy strong, .mobile-download-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-download-copy strong { font-size:13px; }
@@ -1461,7 +1466,15 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .track-row .row-cover { width:46px; height:46px; }
 .android-app .track-actions .favorite-action, .android-app .track-actions .track-duration { display:none; }
 .android-app .track-actions .row-action { width:38px; height:40px; opacity:1; }
-.android-app .home-section .folder-grid { margin-bottom:10px; }
+.android-app .home-section .folder-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px 9px; overflow:visible; margin-bottom:10px; padding:0 0 12px; }
+.android-app .home-section .folder-grid > .folder-card { display:block; min-width:0; padding:0; background:transparent; }
+.android-app .home-section .folder-grid .collection-open { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto; align-items:start; gap:5px; min-height:0; padding:0; }
+.android-app .home-section .folder-grid .card-cover { grid-row:auto; width:100%; height:auto; aspect-ratio:1; border-radius:5px; }
+.android-app .home-section .folder-grid .collection-kind-label { display:block; margin-top:5px; color:#aaa6af; font-size:12px; line-height:1.2; }
+.android-app .home-section .folder-grid .collection-open > strong { display:block; padding:0; font-size:15px; line-height:1.25; white-space:nowrap; }
+.android-app .home-section .folder-grid .collection-open > small { display:block; font-size:12px; line-height:1.3; }
+.android-app .home-section .folder-grid .collection-play-button { position:absolute; right:6px; bottom:47px; width:28px; height:28px; margin:0; opacity:1; transform:none; box-shadow:0 3px 12px rgba(0,0,0,.35); pointer-events:auto; }
+.android-app .home-section .folder-grid .collection-play-button svg { width:13px; height:13px; }
 .android-app .media-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; padding:10px 13px 20px; }
 .android-app .media-card { gap:8px; padding:8px; border-radius:10px; background:#1b1a1d; }
 .android-app .collection-grid .collection-open > strong { font-size:13px; }
