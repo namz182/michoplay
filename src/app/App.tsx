@@ -27,7 +27,8 @@ import { SearchResultButton as GlobalSearchResultButton } from "../screens/searc
 import { Empty } from "../components/EmptyState";
 import { CollectionGrid } from "../components/library/CollectionGrid";
 import packageInfo from "../../package.json";
-import { youtubeDownloadErrorText, youtubeDownloadProgressText, youtubeResultSizeText } from "../lib/youtube-size";
+import { youtubeDownloadErrorText, youtubeResultSizeText } from "../lib/youtube-size";
+import { youtubeDownloadDescription } from "../components/downloads/DownloadStatus";
 import { Cover, useArtwork } from "./Artwork";
 
 type Section = "Home" | "Songs" | "Albums" | "Artists" | "Playlists" | "Folders" | "Favorites" | "Recently Played" | "Settings";
@@ -104,12 +105,6 @@ function headingTime(ms: number) {
 }
 function sleepTimerLabel(ms: number) { const seconds = Math.ceil(Math.max(0, ms) / 1000); const hours = Math.floor(seconds / 3600); const minutes = Math.floor((seconds % 3600) / 60); const remainder = seconds % 60; return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}` : `${minutes}:${String(remainder).padStart(2, "0")}`; }
 function durationLabel(seconds: number) { const safeSeconds = Math.max(0, Math.floor(seconds)); return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, "0")}`; }
-function youtubeDownloadDescription(item: YoutubeDownload) {
-  if (["queued", "downloading", "paused"].includes(item.status)) return youtubeDownloadProgressText(item);
-  if (item.status === "completed") return youtubeDownloadProgressText(item);
-  if (item.status === "failed") return youtubeDownloadErrorText(item.message, item.isPlaylist);
-  return item.message;
-}
 function normalizedAudioPath(path: string) {
   const normalized = path.replaceAll("\\", "/").replace(/^\/\/\?\//, "");
   return /^[a-z]:\//i.test(normalized) ? normalized.toLocaleLowerCase() : normalized;

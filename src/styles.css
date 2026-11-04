@@ -669,8 +669,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .scan-cancel-button { margin-left:auto; padding:4px 9px; border:1px solid rgba(255,255,255,.14); border-radius:6px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
 .status-message { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 25px; background: #292729; color: #d2cfd2; font-size: 11px; line-height: 1.6; }
 .inline-link { padding: 0; border: 0; background: transparent; color: var(--brand-highlight); font-size: inherit; text-decoration: underline; cursor: pointer; }
-.app-notification-stack { position:fixed; z-index:90; right:18px; bottom:96px; left:18px; display:grid; box-sizing:border-box; width:auto; max-width:none; gap:8px; pointer-events:none; }
-.app-notification-badge { display:flex; min-width:0; max-width:100%; align-items:center; gap:10px; overflow:hidden; padding:8px 9px 8px 13px; border:1px solid rgba(255,255,255,.12); border-radius:999px; background:rgba(41,39,41,.98); box-shadow:0 12px 30px rgba(0,0,0,.36); color:#d2cfd2; font-size:11px; line-height:1.45; pointer-events:auto; }
+.app-notification-stack { position:fixed; z-index:90; right:18px; bottom:96px; left:18px; display:grid; justify-items:center; box-sizing:border-box; width:auto; max-width:none; gap:8px; pointer-events:none; }
+.app-notification-badge { display:flex; box-sizing:border-box; width:fit-content; min-width:0; max-width:100%; align-items:center; gap:10px; overflow:hidden; padding:8px 9px 8px 13px; border:1px solid rgba(255,255,255,.12); border-radius:999px; background:rgba(41,39,41,.98); box-shadow:0 12px 30px rgba(0,0,0,.36); color:#d2cfd2; font-size:11px; line-height:1.45; pointer-events:auto; }
 .app-notification-badge.scanning { background:rgba(36,35,38,.99); }
 .app-notification-spinner { width:15px; height:15px; flex:0 0 15px; }
 .app-notification-copy { min-width:0; flex:1; overflow:hidden; overflow-wrap:anywhere; word-break:break-word; }
@@ -914,6 +914,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 .download-item-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
 .download-item-copy strong { display: -webkit-box; overflow: hidden; color: #f1edf4; font-size: 10px; font-weight: 650; line-height: 1.3; text-overflow: ellipsis; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .download-item-copy small { overflow: hidden; color: #99929f; font-size: 9px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.download-pending-label { display:block; min-width:0; overflow:hidden; color:var(--brand-highlight); text-overflow:ellipsis; white-space:nowrap; }
+.download-item:has(.download-pending-label), .mobile-download-row:has(.download-pending-label) { background-image:linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--brand-highlight) 3%, transparent) 44%, color-mix(in srgb, var(--brand-highlight) 8%, transparent) 50%, color-mix(in srgb, var(--brand-highlight) 3%, transparent) 56%, transparent 65%); background-size:220% 100%; background-repeat:no-repeat; animation:download-pending-shimmer 2.6s ease-in-out infinite; }
+@keyframes download-pending-shimmer { 0% { background-position:150% 0; } 75%, 100% { background-position:-150% 0; } }
+@media (prefers-reduced-motion:reduce) { .download-item:has(.download-pending-label), .mobile-download-row:has(.download-pending-label) { animation:none; background-image:none; } }
 .download-item.status-failed .download-item-copy small { overflow: visible; text-overflow: clip; white-space: normal; }
 .download-item-progress { height: 3px; overflow: hidden; border-radius: 3px; background: rgba(255,255,255,.09); }
 .download-item-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blush), #f5eee8, var(--accent)); transition: width 180ms linear; }

@@ -39,7 +39,11 @@ export function youtubeDownloadProgressText(item: YoutubeDownload) {
 }
 
 export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
-  const detail = error.toLowerCase();
+  const lines = error.split(/\r?\n/).map((line) => line.trim());
+  const reportedErrors = lines.filter((line) => /^error:/i.test(line));
+  // Verbose logs also list FFmpeg and authentication options on successful
+  // setup; classify the actual reported error instead of those debug lines.
+  const detail = (reportedErrors.length ? reportedErrors.join("\n") : error).toLowerCase();
   if (/sign.?in|log.?in|age.restrict|confirm you.re not a bot|cookies|members.only/.test(detail)) {
     return "YouTube requires sign-in for this video. Try another song.";
   }
@@ -59,7 +63,10 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
     return error.trim();
   }
   if (/ffmpeg|ffprobe|postprocess|audio conversion|convert.*mp3|codec|playable audio file/.test(detail)) {
-    const reason = error.split(/\r?\n/).map((line) => line.trim()).reverse().find((line) => /^error:/i.test(line));
+    // yt-dlp's final line can be just "Conversion failed"; prefer FFmpeg's
+    // underlying error when verbose output includes it.
+    const reason = lines.find((line) => !line.startsWith("[debug]") && /error opening|unknown encoder|unknown decoder|unknown input format|unable to find|could not (?:write|open|find)|invalid data found|unsupported codec/i.test(line))
+      ?? reportedErrors.at(-1);
     return reason ? `Audio processing failed: ${reason.replace(/^error:\s*/i, "").slice(0, 180)}` : "Audio processing failed. Try again.";
   }
   if (/429|too many requests|rate.limit/.test(detail)) {

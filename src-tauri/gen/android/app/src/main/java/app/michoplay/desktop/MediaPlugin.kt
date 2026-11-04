@@ -371,7 +371,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--newline"); request.addOption("--progress")
           if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
           request.addOption("--playlist-end", "100")
-          request.addOption("-f", "bestaudio/best")
+          // The app only needs an audio stream; selecting `best` can return a
+          // video+audio file that fails during MP3 conversion on some devices.
+          request.addOption("-f", "bestaudio[acodec!=none]/bestaudio")
           request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
           request.addOption("--embed-thumbnail")
           request.addOption("-o", File(staging, "%(title).180B.%(ext)s").absolutePath)

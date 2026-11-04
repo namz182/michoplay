@@ -3215,7 +3215,8 @@ fn run_youtube_download(
             "--no-playlist"
         })
         .arg("--format")
-        .arg("bestaudio/best")
+        // Download an audio-only input for MP3 extraction.
+        .arg("bestaudio[acodec!=none]/bestaudio")
         .arg("--extract-audio")
         .arg("--audio-format")
         .arg("mp3")
@@ -3227,6 +3228,15 @@ fn run_youtube_download(
         .arg("--js-runtimes")
         .arg(format!("deno:{}", deno.to_string_lossy()))
         .arg("--embed-metadata")
+        // --embed-metadata also enables chapters. The audio-only FFmpeg bundle
+        // has no ffmetadata demuxer, so chapter sidecars make post-processing fail.
+        .arg("--no-embed-chapters")
+        // Existing MP3s may contain attached pictures. The audio-only FFmpeg
+        // cannot probe their dimensions and fails when copying them to the MP3
+        // output. Reattach the downloaded cover with Lofty after tagging.
+        .arg("--postprocessor-args")
+        .arg("Metadata+ffmpeg_o:-vn")
+        .arg("--verbose")
         .arg("--print")
         .arg("after_move:__MICHOPLAY_FILE__%(filepath)s")
         .arg("--output")
@@ -3272,7 +3282,7 @@ fn run_youtube_download(
             if !report_youtube_progress(&app_for_stderr, &task_id, &line) {
                 if let Ok(mut lines) = tail.lock() {
                     lines.push(line);
-                    if lines.len() > 24 {
+                    if lines.len() > 100 {
                         lines.remove(0);
                     }
                 }
@@ -3347,7 +3357,7 @@ fn run_youtube_download(
             lines
                 .iter()
                 .rev()
-                .take(5)
+                .take(40)
                 .cloned()
                 .collect::<Vec<_>>()
                 .into_iter()
