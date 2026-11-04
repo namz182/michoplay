@@ -380,8 +380,6 @@ button:disabled { cursor: default; }
 .home-art-card strong { color:#f6f3f7; font-size:16px; font-weight:800; }
 .home-art-card small { color:#aaa5ad; font-size:13px; }
 .home-art-card:hover strong { text-decoration:underline; text-underline-offset:3px; }
-.browse-back-button { display:inline-flex; min-height:34px; align-items:center; gap:5px; margin:8px 0 2px 24px; padding:0 8px 0 2px; border:0; border-radius:6px; background:transparent; color:#d1cbd5; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }
-.browse-back-button:hover { background:rgba(255,255,255,.07); color:#fff; }
 .track-row { grid-template-columns: 31px minmax(0, 2.5fr) minmax(0, .7fr) minmax(0, .65fr) 96px; }
 .table-head { grid-template-columns: 31px minmax(0, 2.5fr) minmax(0, .7fr) minmax(0, .65fr) 96px; }
 .track-number { position: relative; width: 31px; height: 32px; padding: 0; border: 0; background: transparent; cursor: pointer; }
@@ -621,6 +619,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .cover-backdrop { position:absolute; z-index:-2; inset:-24px; background-position:center; background-size:cover; filter:blur(24px); opacity:.58; transform:scale(1.08); }
 .detail-heading::after { position: absolute; z-index: -1; inset: 0; background: linear-gradient(0deg, rgba(21,20,22,.8), rgba(21,20,22,.05)); content: ""; }
 .heading-foreground { display: flex; align-items: flex-end; gap: 24px; }
+.collection-heading:not(.detail-heading) .heading-foreground { align-items: center; gap: 10px; }
+.collection-heading-back { display: grid; width: 38px; height: 38px; flex: 0 0 38px; place-items: center; border: 1px solid rgba(255,255,255,.14); border-radius: 50%; background: rgba(0,0,0,.2); color: #f4f1f5; cursor: pointer; }
+.collection-heading-back:hover { background: rgba(255,255,255,.1); }
 .heading-copy { min-width: 0; }
 .heading-copy h1 { overflow-wrap: anywhere; }
 .heading-copy p { font-size: 11px; line-height: 1.6; }
@@ -1076,6 +1077,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .workspace { flex:1; min-height:0; }
 .mobile-header { z-index:5; display:flex; flex:0 0 62px; align-items:center; justify-content:space-between; gap:12px; padding:0 18px; background:#101012; }
 .mobile-header-title { display:flex; min-width:0; align-items:center; gap:13px; }
+.mobile-header-back { display:grid; width:38px; height:38px; flex:0 0 38px; place-items:center; border:0; border-radius:50%; background:transparent; color:#f4f1f5; }
 .mobile-header-title .brand-mark { width:38px; height:38px; flex-basis:38px; }
 .mobile-header-title h1 { overflow:hidden; margin:0; font-size:24px; font-weight:850; letter-spacing:-.8px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-header-actions { display:flex; align-items:center; gap:10px; }
@@ -1267,7 +1269,6 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .home-art-shelf-heading h2 { font-size:21px; }
 .android-app .home-art-shelf-row { gap:10px; margin-right:-18px; padding-right:18px; }
 .android-app .home-art-card { flex-basis:calc((100% - 20px)/3.35); gap:4px; }
-.android-app .browse-back-button { margin:8px 0 2px 17px; }
 .android-app .home-art-card-cover { margin-bottom:4px; border-radius:6px; }
 .android-app .home-art-card-label { font-size:12px; }
 .android-app .home-art-card strong { font-size:14px; }

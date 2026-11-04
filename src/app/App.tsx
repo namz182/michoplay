@@ -1242,6 +1242,7 @@ export default function App() {
   const firstArt = useMemo(() => collectionTracks.find((track) => track.artworkKey)?.artworkKey, [collectionTracks]);
   const headingArt = useArtwork(firstArt);
   const listPage = Boolean(page.detail) || page.section === "Songs" || page.section === "Favorites" || page.section === "Recently Played";
+  const showAllPage = !listPage && ["Folders", "Playlists", "Albums", "Artists"].includes(page.section);
   const buildSearchResults = useCallback((value: string): GlobalSearchResult[] => {
     const query = value.trim().toLocaleLowerCase();
     if (!query) return [];
@@ -1527,7 +1528,7 @@ export default function App() {
     <section className="workspace">
       {isAndroid && !mobilePlayerOpen && page.section !== "Settings" && !(listPage && (mobileTab === "home" || mobileTab === "youtube")) && <header className="mobile-header">
         <div className="mobile-header-title">
-          <span className="brand-mark"><AudioLines size={19}/></span>
+          {showAllPage ? <button className="mobile-header-back" aria-label="Back to Home" onClick={() => navigate({ section: "Home" })}><ChevronLeft size={24}/></button> : <span className="brand-mark"><AudioLines size={19}/></span>}
           <h1>{mobileTab === "downloads" ? "Downloads" : page.section === "Home" ? mobileTab === "home" ? "MichoPlay" : mobileTab === "search" ? "Search" : mobileTab === "youtube" ? "YouTube" : "Your Library" : page.section}</h1>
         </div>
         <div className="mobile-header-actions">
@@ -1638,9 +1639,8 @@ export default function App() {
             onSleepTimer={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))}
             onDefaultPlayer={() => isAndroid ? setMessage("Open an audio file from your file manager, choose MichoPlay, then tap Always to make it the default.") : void run(() => api.setDefaultPlayer())}
           /> : <>
-            {!listPage && (page.section === "Folders" || page.section === "Playlists" || page.section === "Albums" || page.section === "Artists") && <button className="browse-back-button" onClick={() => navigate({ section: "Home" })}><ChevronLeft size={17}/>Back to Home</button>}
             <div className={`collection-heading ${listPage ? "detail-heading" : ""}`}>
-              {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/> }{isAndroid && listPage && <button className="mobile-detail-back" aria-label="Back" onClick={() => { if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}><ChevronLeft size={24}/></button>}<div className="heading-foreground">{listPage && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={isYoutubePlaylist ? <Youtube size={36}/> : page.detail?.kind === "folder" ? <FolderOpen size={40}/> : page.section === "Favorites" ? <Heart size={36} fill="currentColor"/> : <Music2 size={36}/>}/>}<div className="heading-copy"><h1>{heading}</h1><p>{isYoutubePlaylist ? "Download audio from YouTube by searching or pasting a link." : listPage ? `${collectionTracks.length} ${collectionTracks.length === 1 ? "Song" : "Songs"} · ${time(collectionDurationMs)}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : page.section === "Folders" ? `${folders.length} folders` : `${playlists.length} playlists`}</p></div></div>
+              {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/> }{isAndroid && listPage && <button className="mobile-detail-back" aria-label="Back" onClick={() => { if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}><ChevronLeft size={24}/></button>}<div className="heading-foreground">{showAllPage && <button className="collection-heading-back" aria-label="Back to Home" onClick={() => navigate({ section: "Home" })}><ChevronLeft size={22}/></button>}{listPage && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={isYoutubePlaylist ? <Youtube size={36}/> : page.detail?.kind === "folder" ? <FolderOpen size={40}/> : page.section === "Favorites" ? <Heart size={36} fill="currentColor"/> : <Music2 size={36}/>}/>}<div className="heading-copy"><h1>{heading}</h1><p>{isYoutubePlaylist ? "Download audio from YouTube by searching or pasting a link." : listPage ? `${collectionTracks.length} ${collectionTracks.length === 1 ? "Song" : "Songs"} · ${time(collectionDurationMs)}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : page.section === "Folders" ? `${folders.length} folders` : `${playlists.length} playlists`}</p></div></div>
             </div>
           {listPage ? <>{isYoutubePlaylist && <section className="youtube-downloader" aria-label="Search YouTube audio">
             <div className="youtube-search-header">
