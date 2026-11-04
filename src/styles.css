@@ -413,7 +413,7 @@ button:disabled { cursor: default; }
 .playlist-empty h2 { margin: 0; color: #f4f0f6; font-size: 17px; }
 .playlist-empty p { max-width: 360px; margin: 0; font-size: 10px; line-height: 1.6; }
 .settings-page { max-width: 780px; margin: 0 auto; padding: 35px 35px 60px; }
-.settings-title { margin-bottom: 27px; }
+.settings-title { position:sticky; top:0; z-index:12; margin:-35px 0 27px; padding:35px 0 0; background:#211f20; }
 .settings-title h1 { margin: 0; font-size: 34px; letter-spacing: -1.5px; }
 .settings-title p { margin: 7px 0 0; color: #aaa4ae; font-size: 11px; }
 .zoom-settings > h2 { margin-bottom: 9px; }
@@ -529,7 +529,7 @@ button:disabled { cursor: default; }
 .compact .track-table { padding-top: 0; }
 @media (max-width: 1100px) { .app-frame { grid-template-columns: minmax(184px, var(--sidebar-width, 215px)) 5px minmax(0, 1fr); } .work-area.with-panel { grid-template-columns: minmax(0, 1fr) 5px minmax(240px, var(--panel-width, 265px)); } }
 @media (max-width: 820px) { .app-frame { grid-template-columns: 68px 0 minmax(0, 1fr); } .sidebar-resize { display: none; } .work-area.with-panel { grid-template-columns: minmax(0, 1fr); } .panel-resize, .now-panel { display: none; } .content-scroll { margin-right: 0; } }
-@media (max-width: 560px) { .home-section { padding-inline: 13px; } .folder-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .track-row, .table-head { grid-template-columns: 24px minmax(0,1fr) 70px; gap: 6px; } .track-row .track-album, .track-row .track-artist-cell, .table-head span:nth-child(3), .table-head span:nth-child(4) { display: none; } .track-actions { gap: 2px; } .track-actions .favorite-action { display: none; } .track-actions .track-duration { min-width: 28px; } .settings-page { padding: 25px 15px 40px; } .folder-setting { align-items: flex-start; padding: 10px 0; } .media-grid { padding-inline: 13px; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); } .eq-bands { grid-template-columns: repeat(5,minmax(0,1fr)); row-gap: 14px; } .eq-band input[type="range"] { height: 88px; } .equalizer-settings { padding-inline: 12px; } }
+@media (max-width: 560px) { .home-section { padding-inline: 13px; } .folder-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .track-row, .table-head { grid-template-columns: 24px minmax(0,1fr) 70px; gap: 6px; } .track-row .track-album, .track-row .track-artist-cell, .table-head span:nth-child(3), .table-head span:nth-child(4) { display: none; } .track-actions { gap: 2px; } .track-actions .favorite-action { display: none; } .track-actions .track-duration { min-width: 28px; } .settings-page { padding: 25px 15px 40px; } .settings-title { margin-top:-25px; padding-top:25px; } .folder-setting { align-items: flex-start; padding: 10px 0; } .media-grid { padding-inline: 13px; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); } .eq-bands { grid-template-columns: repeat(5,minmax(0,1fr)); row-gap: 14px; } .eq-band input[type="range"] { height: 88px; } .equalizer-settings { padding-inline: 12px; } }
 
 @media (max-width: 1100px) {
   .app-frame { grid-template-columns: minmax(184px, min(var(--sidebar-width, 248px), 26vw)) 5px minmax(0, 1fr); }
@@ -924,7 +924,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .about-version { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 13px 14px; border-radius: 7px; background: rgba(255,255,255,.07); color: #bdb8c1; font-size: 12px; }
 .about-version strong { color: #f4f1f6; font-weight: 650; }
 .about-dialog { width: min(500px, calc(100vw - 32px)); max-height: calc(100dvh - 24px); overflow: auto; gap: 20px; padding: 18px; }
-.about-dialog-head { min-height: 30px; }
+.about-dialog-head { position:sticky; top:0; z-index:2; min-height:30px; margin:0 -18px; padding:0 18px; background:#19191b; }
 .about-dialog-kicker { color: #f6f4f8; font-size: 18px; font-weight: 800; letter-spacing: -.3px; }
 .about-dialog-hero { display: grid; justify-items: center; gap: 10px; padding: 28px 22px 24px; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: #151416; text-align: center; }
 .about-dialog-hero .about-mark { width: 92px; height: 92px; border-radius: 25px; box-shadow: 0 10px 26px rgba(0,0,0,.24); }
@@ -1070,7 +1070,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-header-actions { display:flex; align-items:center; gap:10px; }
 .mobile-icon-button { display:grid; width:38px; height:42px; place-items:center; border:0; background:transparent; color:#f4f1f5; }
 .android-app .mobile-settings-page { min-height:100%; padding:4px 18px 42px; background:#101012; }
-.mobile-settings-header { display:grid; grid-template-columns:44px minmax(0,1fr) 44px; align-items:center; min-height:66px; margin:0 -7px 2px; }
+.mobile-settings-header { position:sticky; top:0; z-index:20; display:grid; grid-template-columns:44px minmax(0,1fr) 44px; align-items:center; min-height:66px; margin:0 -7px 2px; padding:4px 7px 2px; background:#101012; }
 .mobile-settings-header button { display:grid; width:44px; height:44px; place-items:center; border:0; border-radius:50%; background:transparent; color:#f7f4f7; }
 .mobile-settings-header h1 { margin:0; color:#f7f4f7; font-size:39px; font-weight:850; letter-spacing:-1.8px; line-height:1; }
 .mobile-settings-search { display:flex; min-height:58px; align-items:center; gap:12px; margin:6px 0 22px; padding:0 17px; border-radius:30px; background:#242326; color:#aca7b0; }
@@ -1141,7 +1141,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 @keyframes mobile-folder-marquee { 0%, 16% { transform:translateX(0); } 76%, 100% { transform:translateX(calc(-50% - 21px)); } }
 @media (prefers-reduced-motion: reduce) { .mobile-folder-path.long .mobile-folder-path-track { animation:none; transform:none; } }
 .mobile-about-page { min-height:100%; padding:4px 18px 42px; background:#101012; }
-.mobile-about-header { display:flex; min-height:66px; align-items:center; gap:10px; margin:0 -7px 15px; }
+.mobile-about-header { position:sticky; top:0; z-index:20; display:flex; min-height:66px; align-items:center; gap:10px; margin:0 -7px 15px; padding:4px 7px 2px; background:#101012; }
 .mobile-about-header button { display:grid; width:44px; height:44px; place-items:center; border:0; border-radius:50%; background:transparent; color:#f7f4f7; }
 .mobile-about-header h1 { margin:0; color:#f7f4f7; font-size:29px; font-weight:850; letter-spacing:-1.1px; }
 .mobile-about-hero { display:grid; justify-items:center; gap:10px; padding:28px 17px 24px; border:1px solid rgba(255,255,255,.2); border-radius:23px; background:#151416; text-align:center; }
@@ -1533,6 +1533,15 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .mobile-bottom-nav button.active { color:var(--brand-highlight); }
 .android-app .mobile-bottom-nav button svg { width:21px; height:21px; }
 .android-app .mobile-bottom-nav button span { font-size:10px; font-weight:650; }
+.mobile-bottom-nav .mobile-downloads-nav { position:relative; }
+.mobile-bottom-nav .mobile-downloads-nav .mobile-download-badge { position:absolute; top:1px; left:calc(50% + 7px); display:grid; min-width:18px; height:18px; max-width:none; overflow:visible; place-items:center; padding:0 4px; border:2px solid #111113; border-radius:999px; background:var(--brand-highlight); color:#211d23; font-size:10px; font-weight:800; line-height:1; animation:mobile-download-badge-pop .35s ease-out both; }
+.mobile-download-flight { position:fixed; z-index:56; display:grid; width:34px; height:34px; place-items:center; border-radius:50%; background:var(--brand-gradient); color:#211d23; box-shadow:0 6px 18px rgba(0,0,0,.38); pointer-events:none; animation:mobile-download-flight .75s cubic-bezier(.25,.8,.25,1) both; }
+.mobile-download-confirmation { position:fixed; z-index:55; bottom:calc(144px + env(safe-area-inset-bottom)); left:50%; display:flex; max-width:calc(100vw - 32px); min-height:39px; align-items:center; gap:9px; padding:0 15px; border:1px solid rgba(255,255,255,.12); border-radius:999px; background:#302c32; color:#f5f0f5; box-shadow:0 10px 25px rgba(0,0,0,.35); font-size:13px; font-weight:700; white-space:nowrap; pointer-events:none; animation:mobile-download-toast 2.2s ease both; }
+.mobile-download-confirmation svg { flex:0 0 auto; color:var(--brand-highlight); }
+@keyframes mobile-download-flight { 0% { opacity:0; transform:translate(-50%,-50%) scale(.65); } 14% { opacity:1; transform:translate(-50%,-50%) scale(1.08); } 75% { opacity:1; } 100% { left:var(--flight-end-x); top:var(--flight-end-y); opacity:0; transform:translate(-50%,-50%) scale(.35); } }
+@keyframes mobile-download-toast { 0% { opacity:0; transform:translate(-50%,10px); } 15%,82% { opacity:1; transform:translate(-50%,0); } 100% { opacity:0; transform:translate(-50%,-5px); } }
+@keyframes mobile-download-badge-pop { 0% { transform:scale(.55); } 70% { transform:scale(1.16); } 100% { transform:scale(1); } }
+@media (prefers-reduced-motion:reduce) { .mobile-download-flight { display:none; } .mobile-download-confirmation, .mobile-bottom-nav .mobile-downloads-nav .mobile-download-badge { animation:none; } }
 .android-app .status-message { margin:8px 12px; }
 .android-app .settings-page { padding:12px 17px 24px; }
 .android-app .settings-page h1 { font-size:27px; }

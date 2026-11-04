@@ -36,6 +36,7 @@ type Page = { section: Section; detail?: Detail };
 type Playlist = { id: string; name: string; trackIds: number[] };
 type Collection = { key: string; title: string; subtitle: string; tracks: Track[] };
 type TrackMenu = { track: Track; x: number; y: number };
+type DownloadFeedback = { key: number; label: string; x: number; y: number; targetX: number; targetY: number };
 function playlistSubmenuPlacement(menuX: number) {
   const menuWidth = 228;
   const submenuWidth = 256;
@@ -282,6 +283,8 @@ export default function App() {
   const [youtubeHasMore, setYoutubeHasMore] = useState(false);
   const [youtubeLoadingMore, setYoutubeLoadingMore] = useState(false);
   const [youtubeDownloads, setYoutubeDownloads] = useState<YoutubeDownload[]>([]);
+  const [unseenDownloadIds, setUnseenDownloadIds] = useState<string[]>([]);
+  const [downloadFeedback, setDownloadFeedback] = useState<DownloadFeedback | null>(null);
   const [globalYoutubeDownloadRequested, setGlobalYoutubeDownloadRequested] = useState<string[]>([]);
   const [globalYoutubeVisibleLimit, setGlobalYoutubeVisibleLimit] = useState(youtubeGlobalInitialResultLimit);
   const [globalYoutubeHasMore, setGlobalYoutubeHasMore] = useState(false);
@@ -290,6 +293,8 @@ export default function App() {
   const [draggedQueue, setDraggedQueue] = useState<number | null>(null);
   const [queueDrop, setQueueDrop] = useState<number | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
+  const downloadNavRef = useRef<HTMLButtonElement>(null);
+  const downloadFeedbackVersion = useRef(0);
   const lastStartedTrack = useRef<number | null>(null);
   const playbackRestoreStarted = useRef(false);
   const playbackRestoreComplete = useRef(false);
@@ -322,6 +327,8 @@ export default function App() {
     return () => window.removeEventListener("resize", closeOnResize);
   }, [menu, isAndroid]);
   const clearableYoutubeDownloads = youtubeDownloads.some(isFinishedYoutubeDownload);
+  const activeYoutubeDownloadCount = youtubeDownloads.filter((item) => item.status === "queued" || item.status === "downloading").length;
+  const mobileDownloadBadgeCount = Math.max(activeYoutubeDownloadCount, unseenDownloadIds.length);
   const selectedPlaylist = page.detail?.kind === "playlist" ? playlists.find((item) => item.id === page.detail?.key) : undefined;
   const addSongsSearchTerm = addSongsSearch.trim().toLocaleLowerCase();
   const youtubePlaylist = playlists.find((item) => item.name.trim().toLocaleLowerCase() === "youtube");
@@ -537,6 +544,13 @@ export default function App() {
     }, 20_000);
     return () => window.clearTimeout(timeout);
   }, [startupLoading]);
+  useEffect(() => {
+    if (!downloadFeedback) return;
+    const timeout = window.setTimeout(() => {
+      setDownloadFeedback((current) => current?.key === downloadFeedback.key ? null : current);
+    }, 2200);
+    return () => window.clearTimeout(timeout);
+  }, [downloadFeedback]);
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
@@ -990,25 +1004,45 @@ export default function App() {
     const payloads = await Promise.all(supported.map(async (file) => ({ name: file.name, dataBase64: await fileToBase64(file) })));
     await importAudioPayloads(payloads);
   }
-  async function queueYoutubeDownload(selected: YoutubeSearchResult) {
+  function showMobileDownloadFeedback(source?: DOMRect, label = "Added to Downloads") {
+    const target = downloadNavRef.current?.getBoundingClientRect();
+    const x = Math.max(16, Math.min(window.innerWidth - 16, source ? source.left + source.width / 2 : window.innerWidth / 2));
+    const y = Math.max(24, Math.min(window.innerHeight - 80, source ? source.top + source.height / 2 : window.innerHeight / 2));
+    const targetX = target ? target.left + target.width / 2 : window.innerWidth * .9;
+    const targetY = target ? target.top + target.height / 2 : window.innerHeight - 44;
+    setDownloadFeedback({ key: ++downloadFeedbackVersion.current, label, x, y, targetX, targetY });
+  }
+  function openMobileDownloads() {
+    setMobileTab("downloads");
+    setUnseenDownloadIds([]);
+    setDownloadFeedback(null);
+  }
+  async function queueYoutubeDownload(selected: YoutubeSearchResult, source?: DOMRect) {
     setMessage("");
     try {
       const item = await api.youtubeDownloadEnqueue(selected.url, selected.title, selected.thumbnail, selected.isPlaylist);
       setYoutubeDownloads((prior) => prior.some((download) => download.id === item.id) ? prior : [...prior, item]);
-      if (isAndroid) setMobileTab("downloads");
+      if (isAndroid) {
+        setUnseenDownloadIds((prior) => prior.includes(item.id) ? prior : [...prior, item.id]);
+        showMobileDownloadFeedback(source);
+      }
       else { setPanelView("downloads"); setShowPanel(true); }
       return true;
     } catch (error) { setMessage(youtubeDownloadErrorText(String(error), selected.isPlaylist)); return false; }
   }
-  function requestYoutubeDownload(selected: YoutubeSearchResult, query?: string) {
+  function requestYoutubeDownload(selected: YoutubeSearchResult, query?: string, source?: DOMRect) {
     if (query) rememberSearch(query);
-    if (youtubeDownloads.some((download) => download.url === selected.url && !["failed", "cancelled"].includes(download.status))) {
-      if (isAndroid) setMobileTab("downloads");
+    const existing = youtubeDownloads.find((download) => download.url === selected.url && !["failed", "cancelled"].includes(download.status));
+    if (existing) {
+      if (isAndroid) {
+        setUnseenDownloadIds((prior) => prior.includes(existing.id) ? prior : [...prior, existing.id]);
+        showMobileDownloadFeedback(source, "Already in Downloads");
+      }
       return;
     }
     if (globalYoutubeDownloadRequested.includes(selected.url)) return;
     setGlobalYoutubeDownloadRequested((prior) => prior.includes(selected.url) ? prior : [...prior, selected.url]);
-    void queueYoutubeDownload(selected).then((queued) => {
+    void queueYoutubeDownload(selected, source).then((queued) => {
       if (!queued) setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => url !== selected.url));
     });
   }
@@ -1437,11 +1471,11 @@ export default function App() {
       {globalYoutubeSearching ? Array.from({ length: 3 }, (_, index) => <div className="global-search-youtube-skeleton" key={index}><span/><i/><i/></div>) : globalYoutubeError ? <p className="global-search-status" role="status">{globalYoutubeError}</p> : globalYoutubeResults.length ? <>
         <div className="global-youtube-results-scroll" role="region" aria-label="YouTube search results">
           {globalYoutubeResults.slice(0, globalYoutubeVisibleLimit).map((result) => <div className="global-youtube-result-row" key={result.id}>
-            <button className="global-search-result global-youtube-result" role="option" aria-label={`Download ${result.title} from YouTube`} onClick={() => requestYoutubeDownload(result, search)}>
+            <button className="global-search-result global-youtube-result" role="option" aria-label={`Download ${result.title} from YouTube`} onClick={(event) => requestYoutubeDownload(result, search, event.currentTarget.getBoundingClientRect())}>
               {result.thumbnail ? <img className="cover global-search-cover" src={result.thumbnail} alt="" loading="lazy"/> : <span className="cover global-search-cover global-youtube-placeholder"><Youtube size={18}/></span>}
               <span className="search-result-copy"><strong>{result.title}</strong><small>YouTube · {result.isPlaylist ? "Playlist" : `${result.durationSeconds == null ? "Audio" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span>
             </button>
-            {!globalYoutubeDownloadRequested.includes(result.url) && !youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) && <button className="global-youtube-download" aria-label={`Download ${result.title}`} title="Download audio" onClick={() => requestYoutubeDownload(result, search)}><Download size={16}/></button>}
+            {!globalYoutubeDownloadRequested.includes(result.url) && !youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) && <button className="global-youtube-download" aria-label={`Download ${result.title}`} title="Download audio" onClick={(event) => requestYoutubeDownload(result, search, event.currentTarget.getBoundingClientRect())}><Download size={16}/></button>}
           </div>)}
         </div>
         {globalYoutubeHasMore && <button className="youtube-load-more global-youtube-load-more" disabled={globalYoutubeLoadingMore} onClick={() => void loadMoreGlobalYoutubeResults()}>{globalYoutubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}
@@ -1495,7 +1529,7 @@ export default function App() {
         <div className="mobile-header-actions">
           {mobileTab === "home" && <button className="mobile-icon-button" aria-label="Search music" onClick={() => { setMobileTab("search"); setSearch(""); }}><Search size={24}/></button>}
           {mobileTab === "library" && <button className="mobile-icon-button" aria-label="Create playlist or import music" onClick={() => setMobileLibraryActionsOpen(true)}><Plus size={25}/></button>}
-          {mobileTab === "youtube" && <button className="mobile-icon-button" aria-label="Open downloads" onClick={() => setMobileTab("downloads")}><Download size={21}/></button>}
+          {mobileTab === "youtube" && <button className="mobile-icon-button" aria-label="Open downloads" onClick={openMobileDownloads}><Download size={21}/></button>}
           <button className="mobile-icon-button" aria-label="Settings" onClick={() => { setMobileTab("home"); navigate({ section: "Settings" }); }}><Settings2 size={20}/></button>
         </div>
       </header>}
@@ -1550,7 +1584,7 @@ export default function App() {
             youtubeHasMore={globalYoutubeHasMore}
             youtubeLoadingMore={globalYoutubeLoadingMore}
             youtubeError={globalYoutubeError}
-            onYoutubeDownload={(result, query) => requestYoutubeDownload(result, query)}
+            onYoutubeDownload={(result, query, source) => requestYoutubeDownload(result, query, source)}
             onLoadMoreYoutube={() => void loadMoreGlobalYoutubeResults()}
             searchResults={searchResults}
             recentSearchResults={recentSearchResults}
@@ -1619,7 +1653,7 @@ export default function App() {
                   <span className="youtube-result-art">{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/> : <Youtube size={24}/>}<span className="youtube-result-duration">{result.durationSeconds === null ? (result.isPlaylist ? "Playlist" : "YouTube") : durationLabel(result.durationSeconds)}</span></span>
                   <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · MP3 audio" : `Video · ${youtubeResultSize(result)}`}</small></span>
                 </div>
-                <button className="youtube-result-download" aria-label={`Download ${result.title}`} onClick={() => requestYoutubeDownload(result)} disabled={globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status))}><Download size={14}/><span>{globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) ? "Queued" : "Download"}</span></button>
+                <button className="youtube-result-download" aria-label={`Download ${result.title}`} onClick={(event) => requestYoutubeDownload(result, undefined, event.currentTarget.getBoundingClientRect())} disabled={globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status))}><Download size={14}/><span>{globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) ? "Queued" : "Download"}</span></button>
               </article>)}</div></div>{youtubeHasMore && <button className="youtube-load-more" disabled={youtubeLoadingMore} onClick={() => void loadMoreYoutubeFolderResults()}>{youtubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}</>
               : youtubeQuery.trim() ? <p className="youtube-search-empty">No videos found. Try a different title or link.</p> : null}
           </section>}
@@ -1677,8 +1711,9 @@ export default function App() {
         <button className={mobileTab === "search" ? "active" : ""} onClick={() => { setMobileTab("search"); setSearch(""); }}><Search size={22}/><span>Search</span></button>
         <button className={mobileTab === "library" ? "active" : ""} onClick={() => setMobileTab("library")}><Library size={22}/><span>Your Library</span></button>
         <button className={mobileTab === "youtube" ? "active" : ""} onClick={openYoutubePage}><Youtube size={22}/><span>YouTube</span></button>
-        <button className={mobileTab === "downloads" ? "active" : ""} onClick={() => setMobileTab("downloads")}><Download size={22}/><span>Downloads</span></button>
+        <button ref={downloadNavRef} className={`mobile-downloads-nav ${mobileTab === "downloads" ? "active" : ""}`} aria-label={mobileDownloadBadgeCount ? `Downloads, ${mobileDownloadBadgeCount} active or new` : "Downloads"} onClick={openMobileDownloads}><Download size={22}/>{mobileDownloadBadgeCount > 0 && <span className="mobile-download-badge" aria-hidden="true">{mobileDownloadBadgeCount > 99 ? "99+" : mobileDownloadBadgeCount}</span>}<span>Downloads</span></button>
       </nav>
+      {downloadFeedback && <><span key={`flight-${downloadFeedback.key}`} className="mobile-download-flight" aria-hidden="true" style={{ left:downloadFeedback.x, top:downloadFeedback.y, "--flight-end-x": `${downloadFeedback.targetX}px`, "--flight-end-y": `${downloadFeedback.targetY}px` } as CSSProperties}><Download size={18}/></span><div key={`notice-${downloadFeedback.key}`} className="mobile-download-confirmation" role="status"><Download size={16}/><span>{downloadFeedback.label}</span></div></>}
     </>}
     {isAndroid && mobilePlayerOpen && <section className="mobile-player-screen" aria-label="Now playing">
       <header className="mobile-player-top"><button aria-label="Close player" onClick={() => setMobilePlayerOpen(false)}><ChevronDown size={27}/></button><div><span className="brand-mark mobile-player-brand-mark"><AudioLines size={15}/></span><small>Playing from {page.detail?.kind === "playlist" ? "Playlist" : page.detail?.kind ?? "Your library"}</small><strong>{page.detail?.title ?? "Now playing"}</strong></div><button aria-label="Track options" onClick={(event) => footerTrack && openTrackMenu(footerTrack, event)}><MoreVertical size={23}/></button></header>
