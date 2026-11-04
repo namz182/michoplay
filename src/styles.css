@@ -648,6 +648,16 @@ body.resizing { cursor: col-resize; user-select: none; }
 .scan-cancel-button { margin-left:auto; padding:4px 9px; border:1px solid rgba(255,255,255,.14); border-radius:6px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
 .status-message { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 25px; background: #292729; color: #d2cfd2; font-size: 11px; line-height: 1.6; }
 .inline-link { padding: 0; border: 0; background: transparent; color: var(--brand-highlight); font-size: inherit; text-decoration: underline; cursor: pointer; }
+.app-notification-stack { position:fixed; z-index:90; right:18px; bottom:96px; left:18px; display:grid; box-sizing:border-box; width:auto; max-width:none; gap:8px; pointer-events:none; }
+.app-notification-badge { display:flex; min-width:0; max-width:100%; align-items:center; gap:10px; overflow:hidden; padding:8px 9px 8px 13px; border:1px solid rgba(255,255,255,.12); border-radius:999px; background:rgba(41,39,41,.98); box-shadow:0 12px 30px rgba(0,0,0,.36); color:#d2cfd2; font-size:11px; line-height:1.45; pointer-events:auto; }
+.app-notification-badge.scanning { background:rgba(36,35,38,.99); }
+.app-notification-spinner { width:15px; height:15px; flex:0 0 15px; }
+.app-notification-copy { min-width:0; flex:1; overflow:hidden; overflow-wrap:anywhere; word-break:break-word; }
+.app-notification-action, .app-notification-dismiss { display:grid; flex:0 0 auto; place-items:center; border:0; border-radius:7px; background:transparent; color:#eeeaf1; font-size:10px; font-weight:800; cursor:pointer; }
+.app-notification-action { min-height:28px; padding:0 9px; }
+.app-notification-dismiss { width:28px; height:28px; padding:0; background:transparent; }
+.app-notification-action:hover { background:transparent; color:#fff; }
+.app-notification-dismiss:hover { background:transparent; color:#fff; }
 .track-row, .table-head { grid-template-columns: 27px minmax(0,2.5fr) minmax(0,.7fr) minmax(0,.65fr) 96px; gap: 9px; }
 .track-title-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .row-cover { width: 38px; height: 38px; }
@@ -1542,6 +1552,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 @keyframes mobile-download-toast { 0% { opacity:0; transform:translate(-50%,10px); } 15%,82% { opacity:1; transform:translate(-50%,0); } 100% { opacity:0; transform:translate(-50%,-5px); } }
 @keyframes mobile-download-badge-pop { 0% { transform:scale(.55); } 70% { transform:scale(1.16); } 100% { transform:scale(1); } }
 @media (prefers-reduced-motion:reduce) { .mobile-download-flight { display:none; } .mobile-download-confirmation, .mobile-bottom-nav .mobile-downloads-nav .mobile-download-badge { animation:none; } }
+.android-app .app-notification-stack { z-index:55; right:12px; bottom:calc(145px + env(safe-area-inset-bottom)); left:12px; width:auto; max-width:none; }
 .android-app .status-message { margin:8px 12px; }
 .android-app .settings-page { padding:12px 17px 24px; }
 .android-app .settings-page h1 { font-size:27px; }
