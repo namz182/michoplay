@@ -66,7 +66,7 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
     return "YouTube is limiting downloads right now. Try again later.";
   }
   if (/403|forbidden/.test(detail)) {
-    return "YouTube blocked this download. Try again later.";
+    return "YouTube blocked this download. Try again.";
   }
   if (/timed? out|connection|network|dns|name resolution|unable to download webpage|certificate/.test(detail)) {
     return "Couldn't connect to YouTube. Check your internet connection and try again.";

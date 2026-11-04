@@ -20,37 +20,48 @@ const cacheDirectory = join(fileURLToPath(new URL("../.cache/desktop-tools/", im
 mkdirSync(cacheDirectory, { recursive: true });
 const suffix = target.endsWith("-pc-windows-msvc") ? ".exe" : "";
 const outputs = ["yt-dlp", "ffmpeg", "ffprobe", "deno"].map((name) => join(outputDirectory, `michoplay-${name}-${target}${suffix}`));
+const ytDlpVersionPath = join(cacheDirectory, "yt-dlp-version");
+const stagedYtDlpVersion = existsSync(ytDlpVersionPath) ? readFileSync(ytDlpVersionPath, "utf8").trim() : "";
 const needsFfmpegPackage = !ffmpegSupportsMp3(outputs[1], target) || !existsSync(outputs[2]);
-const needsTool = [!existsSync(outputs[0]), needsFfmpegPackage, !existsSync(outputs[3])];
+const needsDeno = !existsSync(outputs[3]);
 
+let ytDlpRelease = null;
+try {
+  ytDlpRelease = await githubRelease("yt-dlp", "yt-dlp");
+} catch (error) {
+  if (!existsSync(outputs[0])) throw error;
+  console.warn(`Could not check for a newer yt-dlp release; keeping the staged downloader: ${String(error)}`);
+}
+const needsYtDlp = !existsSync(outputs[0]) || Boolean(ytDlpRelease && stagedYtDlpVersion !== ytDlpRelease.tag_name);
+const needsTool = [needsYtDlp, needsFfmpegPackage, needsDeno];
 if (!needsTool.some(Boolean)) {
-  console.log(`Desktop downloader tools are already staged for ${target}.`);
+  console.log(`Desktop downloader tools are current for ${target}${ytDlpRelease ? ` (yt-dlp ${ytDlpRelease.tag_name})` : ""}.`);
   process.exit(0);
 }
 
 const temporaryDirectory = mkdtempSync(join(tmpdir(), "michoplay-tools-"));
 try {
-  const [ytDlpRelease, denoRelease, ffmpegRelease] = await Promise.all([
-    needsTool[0] ? githubRelease("yt-dlp", "yt-dlp") : null,
-    needsTool[2] ? githubRelease("denoland", "deno") : null,
-    needsTool[1] ? githubRelease("Xiragi", "FFmpeg-Audio-Builds") : null,
+  const [denoRelease, ffmpegRelease] = await Promise.all([
+    needsDeno ? githubRelease("denoland", "deno") : null,
+    needsFfmpegPackage ? githubRelease("Xiragi", "FFmpeg-Audio-Builds") : null,
   ]);
 
   const stagedTools = [];
-  if (needsTool[0]) {
+  if (needsYtDlp) {
+    if (!ytDlpRelease) throw new Error("Could not find a current yt-dlp release for this target.");
     const ytDlpAsset = requireAsset(ytDlpRelease, targetInfo.ytDlpAsset);
     const ytDlpSumsAsset = requireAsset(ytDlpRelease, "SHA2-256SUMS");
     stagedTools.push([await downloadVerified(ytDlpAsset, ytDlpSumsAsset, basename(ytDlpAsset.name), cacheDirectory), outputs[0]]);
   }
 
-  if (needsTool[2]) {
+  if (needsDeno) {
     const denoAsset = requireAsset(denoRelease, targetInfo.denoAsset);
     const denoSumsAsset = requireAsset(denoRelease, `${targetInfo.denoAsset}.sha256sum`);
     const denoArchive = await downloadVerified(denoAsset, denoSumsAsset, targetInfo.denoAsset, cacheDirectory);
     stagedTools.push([extractBinary(denoArchive, targetInfo.denoBinary, temporaryDirectory), outputs[3]]);
   }
 
-  if (needsTool[1]) {
+  if (needsFfmpegPackage) {
     const ffmpegAsset = ffmpegRelease.assets.find((asset) => asset.name.startsWith("ffmpeg-") && !asset.name.includes("-shared-") && asset.name.endsWith(targetInfo.ffmpegSuffix));
     if (!ffmpegAsset) throw new Error(`FFmpeg has no release asset for ${target}.`);
     const ffmpegSumsAsset = requireAsset(ffmpegRelease, "checksums.sha256");
@@ -65,6 +76,7 @@ try {
   for (const [source, output] of stagedTools) {
     copyFileSync(source, output);
     if (!suffix) chmodSync(output, 0o755);
+    if (output === outputs[0] && ytDlpRelease) writeFileSync(ytDlpVersionPath, ytDlpRelease.tag_name);
   }
   console.log(`Staged ${stagedTools.map(([, output]) => basename(output)).join(", ")} for ${target}.`);
   const versions = [ytDlpRelease && `yt-dlp ${ytDlpRelease.tag_name}`, ffmpegRelease && `FFmpeg ${ffmpegRelease.tag_name}`, denoRelease && `Deno ${denoRelease.tag_name}`].filter(Boolean);
