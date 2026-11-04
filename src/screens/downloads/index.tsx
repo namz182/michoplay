@@ -1,13 +1,7 @@
 import { Download, FolderOpen, MoreVertical, Pause, Play, Trash2, Youtube, X } from "lucide-react";
 import type { MouseEvent } from "react";
 import type { YoutubeDownload } from "../../lib/api";
-import { youtubeDownloadErrorText, youtubeDownloadProgressText } from "../../lib/youtube-size";
-
-function description(item: YoutubeDownload) {
-  if (["queued", "downloading", "paused", "completed"].includes(item.status)) return youtubeDownloadProgressText(item);
-  if (item.status === "failed") return youtubeDownloadErrorText(item.message, item.isPlaylist);
-  return item.message;
-}
+import { youtubeDownloadDescription as description } from "../../components/downloads/DownloadStatus";
 
 type DownloadAction = "pause" | "cancel" | "resume" | "remove";
 export function MobileDownloadsScreen({ downloads, clearable, onClear, onControl, onPlay, onMenu, onOpenYoutube }: {
