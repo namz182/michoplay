@@ -353,11 +353,11 @@ export default function App() {
 
   const navigate = useCallback((next: Page) => {
     setHistory((prior) => ({ entries: [...prior.entries.slice(0, prior.index + 1), next], index: prior.index + 1 }));
-    setInlineSearch(""); setMenu(null); setAppMenu(false); setSortMenuOpen(false); setSearchOpen(false);
+    setSearch(""); setInlineSearch(""); setMenu(null); setAppMenu(false); setSortMenuOpen(false); setSearchOpen(false);
   }, []);
   function travel(delta: number) {
     setHistory((prior) => ({ ...prior, index: Math.max(0, Math.min(prior.entries.length - 1, prior.index + delta)) }));
-    setInlineSearch(""); setMenu(null); setAppMenu(false); setSortMenuOpen(false); setSearchOpen(false);
+    setSearch(""); setInlineSearch(""); setMenu(null); setAppMenu(false); setSortMenuOpen(false); setSearchOpen(false);
   }
   const run = useCallback(async (action: () => Promise<unknown>) => {
     try { await action(); setPlayer(await api.state()); setMessage(""); }
@@ -1430,8 +1430,9 @@ export default function App() {
   }
   function chooseSearchResult(result: GlobalSearchResult) {
     rememberSearch(search || result.title);
-    setSearch(""); setSearchOpen(false);
     if (result.trackId !== undefined) {
+      if (isAndroid) setSearch("");
+      setSearchOpen(!isAndroid);
       if (result.trackId === player.currentTrackId) void run(api.toggle);
       else void run(() => api.play(result.trackId!));
     }
