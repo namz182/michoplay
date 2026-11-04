@@ -1151,7 +1151,6 @@ export default function App() {
   const footerTrack = current ?? recentTracks[0] ?? null;
   useEffect(() => {
     if (current && player.isPlaying) {
-      setPanelView("now-playing");
       setShowPanel(true);
     }
   }, [current?.id, player.isPlaying]);
