@@ -683,6 +683,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .refresh-button { margin: 14px 0 5px; }
 .track-menu { width: 225px; }
 .playlist-menu-wrap { position: relative; }
+.playlist-actions-wrap { position:relative; display:flex; align-items:center; }
+.playlist-actions-menu { position:absolute; top:calc(100% + 7px); right:0; left:auto; box-sizing:border-box; width:min(205px,calc(100vw - 28px)); max-height:min(60dvh,320px); overflow-y:auto; overscroll-behavior:contain; }
 .menu-arrow { margin-left: auto; }
 .playlist-submenu { position: absolute; right: calc(100% + 5px); top: -5px; width: 240px; padding: 5px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; background: #28262a; box-shadow: 0 12px 35px rgba(0,0,0,.55); }
 .playlist-submenu.opens-right { left: calc(100% + 5px); right: auto; }
@@ -1487,13 +1489,23 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .collection-tools-right { width:auto; flex:1; gap:5px; }
 .android-app .collection-search { min-width:0; flex:1; }
 .android-app .sort-trigger { min-height:38px; padding-inline:5px; }
-.android-app .collection-tools { position:sticky; top:0; z-index:4; flex-wrap:wrap; padding:9px 13px; background:rgba(17,17,19,.97); backdrop-filter:blur(14px); }
-.android-app .collection-tools .play-actions { gap:8px; }
-.android-app .collection-tools .primary-play { width:42px; height:42px; }
-.android-app .collection-tools-right { order:2; width:100%; flex:1 0 100%; }
-.android-app .collection-search { height:42px; padding-inline:11px; border:1px solid rgba(255,255,255,.08); border-radius:9px; background:#242326; }
+.android-app .collection-tools { position:sticky; top:0; z-index:4; display:grid; grid-template-columns:minmax(0,1fr) max-content 38px; grid-template-rows:auto auto; gap:9px 8px; padding:10px 14px 12px; background:rgba(17,17,19,.97); backdrop-filter:blur(14px); }
+.android-app .collection-tools:not(:has(.playlist-actions-wrap)) { grid-template-columns:minmax(0,1fr) max-content; }
+.android-app .collection-tools .play-actions { grid-column:1; grid-row:1; width:auto; min-width:0; gap:5px; }
+.android-app .collection-tools .playlist-actions-wrap { grid-column:3; grid-row:1; justify-self:end; }
+.android-app .collection-tools .playlist-actions-trigger { width:38px; height:40px; padding:0; border-radius:50%; background:transparent; }
+.android-app .collection-tools .primary-play { width:42px; height:42px; flex:0 0 42px; }
+.android-app .collection-tools .play-actions > .round-button,
+.android-app .collection-tools .play-actions > .icon-button { width:38px; height:40px; flex:0 0 38px; border-radius:50%; background:transparent; }
+.android-app .collection-tools .play-actions > .text-action { min-height:40px; padding:0 8px; border-radius:8px; background:transparent; font-size:12px; }
+.android-app .collection-tools-right { display:contents; }
+.android-app .collection-search { grid-column:1 / -1; grid-row:2; box-sizing:border-box; width:100%; height:44px; padding-inline:12px; border:1px solid rgba(255,255,255,.08); border-radius:12px; background:#242326; }
+.android-app .collection-search:focus-within { border-color:color-mix(in srgb,var(--brand-highlight) 55%,transparent); }
 .android-app .collection-search input { font-size:14px; }
-.android-app .collection-tools .sort-trigger { min-height:42px; padding-inline:8px; border-radius:8px; background:#242326; }
+.android-app .collection-tools .sort-control { grid-column:2; grid-row:1; width:auto; }
+.android-app .collection-tools .sort-trigger { display:flex; width:auto; min-height:42px; align-items:center; justify-content:flex-end; gap:6px; padding:0; border:0; border-radius:0; background:transparent; font-size:12px; }
+.android-app .collection-tools .sort-trigger > span { display:inline; }
+.android-app .collection-tools .sort-menu { top:calc(100% + 8px); width:220px; max-height:min(58vh,420px); border-radius:12px; }
 .android-app .track-table { padding:0 13px; }
 .android-app .table-head { display:none; }
 .android-app .track-row { grid-template-columns:27px minmax(0,1fr) 40px; gap:8px; min-height:64px; border-bottom:1px solid rgba(255,255,255,.055); }
