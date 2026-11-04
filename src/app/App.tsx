@@ -15,6 +15,7 @@ import {
   Maximize2, Minimize2, MoreVertical, Github, Globe2, Bug,
 } from "lucide-react";
 import { api } from "../lib/api";
+import { saveStoredData, stored } from "../lib/storage";
 import type { PlayerSnapshot, Track, YoutubeDownload, YoutubeSearchResult } from "../lib/api";
 import { MobileAboutPage, MobileSettingsPage, SettingsPage } from "../screens/settings";
 import { HomeScreen } from "../screens/home";
@@ -81,9 +82,6 @@ const navigation: { label: Section; icon: typeof Home }[] = [
   { label: "Playlists", icon: ListMusic }, { label: "Favorites", icon: Heart },
 ];
 const initialPlayer: PlayerSnapshot = { currentTrackId: null, isPlaying: false, positionMs: 0, durationMs: 0, volume: 0.75, shuffle: false, repeatMode: "off", queue: [], priorityQueue: [], autoplay: true, sleepTimerRemainingMs: null, sleepTimerAtTrackEnd: false, equalizerBands: Array(6).fill(0), equalizerEnabled: false };
-function stored<T>(key: string, fallback: T): T {
-  try { const value = localStorage.getItem(`michoplay-${key}`); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; }
-}
 function storedLibraryRoots(): string[] {
   const roots = stored<unknown>("library-roots", []);
   return Array.isArray(roots)
@@ -341,7 +339,7 @@ export default function App() {
   }, []);
   useEffect(() => { if (player.volume > 0) lastAudibleVolume.current = player.volume; }, [player.volume]);
   function setVolume(volume: number) {
-    localStorage.setItem("michoplay-volume", JSON.stringify(volume));
+    saveStoredData("volume", JSON.stringify(volume));
     void run(() => api.volume(volume));
   }
   function toggleMute() {
@@ -724,7 +722,7 @@ export default function App() {
     let active = true;
     const savePlaybackSession = (state: PlayerSnapshot) => {
       const queue = state.currentTrackId === null ? state.queue : [state.currentTrackId, ...state.queue];
-      localStorage.setItem("michoplay-playback-session", JSON.stringify({ currentTrackId: state.currentTrackId, queue, positionMs: state.positionMs, isPlaying: state.isPlaying } satisfies SavedPlaybackSession));
+      saveStoredData("playback-session", JSON.stringify({ currentTrackId: state.currentTrackId, queue, positionMs: state.positionMs, isPlaying: state.isPlaying } satisfies SavedPlaybackSession));
     };
     const flushPlaybackSession = () => {
       if (!playbackRestoreComplete.current || tracks.length === 0) return;
@@ -776,7 +774,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [tracks, hiddenTrackIds]);
-  useEffect(() => { localStorage.setItem("michoplay-library-roots", JSON.stringify(roots)); }, [roots]);
+  useEffect(() => { saveStoredData("library-roots", JSON.stringify(roots)); }, [roots]);
   useEffect(() => {
     if (!sortMenuOpen) return;
     const onPointerDown = (event: globalThis.PointerEvent) => {
@@ -788,8 +786,8 @@ export default function App() {
     return () => { document.removeEventListener("pointerdown", onPointerDown); document.removeEventListener("keydown", onKeyDown); };
   }, [sortMenuOpen]);
   useEffect(() => {
-    localStorage.setItem("michoplay-zoom-level", JSON.stringify(zoomLevel));
-    localStorage.setItem("michoplay-zoom-level-customized", "true");
+    saveStoredData("zoom-level", JSON.stringify(zoomLevel));
+    saveStoredData("zoom-level-customized", "true");
     const applyZoom = () => {
       const scale = zoomLevel / 100;
       document.documentElement.style.setProperty("--app-zoom", String(scale));
@@ -817,11 +815,11 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isAndroid]);
-  useEffect(() => { localStorage.setItem("michoplay-favorites", JSON.stringify(favorites)); }, [favorites]);
-  useEffect(() => { localStorage.setItem("michoplay-hidden-tracks", JSON.stringify(hiddenTrackIds)); }, [hiddenTrackIds]);
-  useEffect(() => { localStorage.setItem("michoplay-playlists", JSON.stringify(playlists)); }, [playlists]);
-  useEffect(() => { localStorage.setItem("michoplay-listening-history", JSON.stringify(listeningHistory)); }, [listeningHistory]);
-  useEffect(() => { localStorage.setItem("michoplay-recent-searches", JSON.stringify(recentSearches)); }, [recentSearches]);
+  useEffect(() => { saveStoredData("favorites", JSON.stringify(favorites)); }, [favorites]);
+  useEffect(() => { saveStoredData("hidden-tracks", JSON.stringify(hiddenTrackIds)); }, [hiddenTrackIds]);
+  useEffect(() => { saveStoredData("playlists", JSON.stringify(playlists)); }, [playlists]);
+  useEffect(() => { saveStoredData("listening-history", JSON.stringify(listeningHistory)); }, [listeningHistory]);
+  useEffect(() => { saveStoredData("recent-searches", JSON.stringify(recentSearches)); }, [recentSearches]);
   useEffect(() => {
     if (!searchOpen) return;
     const onPointerDown = (event: globalThis.PointerEvent) => {
@@ -853,10 +851,10 @@ export default function App() {
       return prior.map((item) => item.trackId === player.currentTrackId ? { ...item, positionMs: player.positionMs, durationMs: player.durationMs || item.durationMs } : item);
     });
   }, [player.currentTrackId, player.positionMs, player.durationMs, player.isPlaying]);
-  useEffect(() => { localStorage.setItem("michoplay-sidebar-width", JSON.stringify(sidebarWidth)); }, [sidebarWidth]);
-  useEffect(() => { localStorage.setItem("michoplay-panel-width", JSON.stringify(panelWidth)); }, [panelWidth]);
-  useEffect(() => { localStorage.setItem("michoplay-show-now-playing", JSON.stringify(showPanel)); }, [showPanel]);
-  useEffect(() => { localStorage.setItem("michoplay-keep-screen-awake-in-full-mode", JSON.stringify(keepScreenAwake)); }, [keepScreenAwake]);
+  useEffect(() => { saveStoredData("sidebar-width", JSON.stringify(sidebarWidth)); }, [sidebarWidth]);
+  useEffect(() => { saveStoredData("panel-width", JSON.stringify(panelWidth)); }, [panelWidth]);
+  useEffect(() => { saveStoredData("show-now-playing", JSON.stringify(showPanel)); }, [showPanel]);
+  useEffect(() => { saveStoredData("keep-screen-awake-in-full-mode", JSON.stringify(keepScreenAwake)); }, [keepScreenAwake]);
   useEffect(() => {
     let active = true;
     type WakeLockSentinelLike = { release: () => Promise<void>; addEventListener?: (type: "release", listener: () => void) => void };
@@ -887,7 +885,7 @@ export default function App() {
       if (lock) void lock.release();
     };
   }, [fullMode, keepScreenAwake]);
-  useEffect(() => { localStorage.setItem("michoplay-compact", JSON.stringify(compact)); }, [compact]);
+  useEffect(() => { saveStoredData("compact", JSON.stringify(compact)); }, [compact]);
   useEffect(() => {
     const close = (event: globalThis.PointerEvent) => {
       if (!(event.target as HTMLElement).closest(".action-menu, .menu-trigger")) { setMenu(null); setAppMenu(false); }
@@ -1370,7 +1368,7 @@ export default function App() {
     if (!normalized) return;
     const next = [normalized, ...recentSearches.filter((item) => item.toLocaleLowerCase() !== normalized.toLocaleLowerCase())].slice(0, 8);
     setRecentSearches(next);
-    localStorage.setItem("michoplay-recent-searches", JSON.stringify(next));
+    saveStoredData("recent-searches", JSON.stringify(next));
   }
   function chooseSearchResult(result: GlobalSearchResult) {
     rememberSearch(search || result.title);
@@ -1449,7 +1447,7 @@ export default function App() {
       const group = searchResults.filter((result) => result.type === type);
       return group.length ? <section className="global-search-group" key={type}><h2>{type === "Song" ? "Songs" : `${type}s`}</h2>{group.map((result) => <GlobalSearchResultButton key={`${result.type}-${result.title}-${result.subtitle}`} result={result} onClick={() => chooseSearchResult(result)} isPlaying={result.trackId === player.currentTrackId && player.isPlaying}/>)}</section> : null;
     }) : <div className="global-search-empty"><strong>No matches in your library for “{search}”</strong><span>Try a song, artist, album, folder, or playlist name.</span></div>}
-  </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); localStorage.removeItem("michoplay-recent-searches"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
+  </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); saveStoredData("recent-searches", "[]"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
 
   const submenuPlacement = menu && !isAndroid ? playlistSubmenuPlacement(menu.x) : "";
   const updatePromptOpen = Boolean(availableUpdate && deferredUpdatePrompt !== availableUpdate);
@@ -1517,16 +1515,16 @@ export default function App() {
             onKeepScreenAwake={setKeepScreenAwake}
             onEqualizer={onEqualizer => {
               setEqualizerBands(onEqualizer);
-              localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(onEqualizer));
+              saveStoredData("equalizer-bands", JSON.stringify(onEqualizer));
               return api.equalizer(onEqualizer, equalizerEnabled).catch((error) => setMessage(String(error)));
             }}
             onEqualizerPreview={(bands) => api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)))}
-            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
+            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); saveStoredData("equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
             onCompact={setCompact}
             onAdd={chooseLibrarySource}
             onRemove={confirmRemoveFolder}
             onRefresh={() => void refresh()}
-            onVolume={(volume) => { localStorage.setItem("michoplay-volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
+            onVolume={(volume) => { saveStoredData("volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
             onSleepTimer={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))}
             onZoom={setZoomLevel}
             onAbout={() => setMobileAboutOpen(true)}
@@ -1576,7 +1574,7 @@ export default function App() {
             keepScreenAwake={keepScreenAwake}
             onKeepScreenAwake={setKeepScreenAwake}
             globalYoutubeSearchEnabled={globalYoutubeSearchEnabled}
-            onGlobalYoutubeSearch={(enabled) => { setGlobalYoutubeSearchEnabled(enabled); localStorage.setItem("michoplay-global-youtube-search-enabled", JSON.stringify(enabled)); }}
+            onGlobalYoutubeSearch={(enabled) => { setGlobalYoutubeSearchEnabled(enabled); saveStoredData("global-youtube-search-enabled", JSON.stringify(enabled)); }}
             scanning={scanning}
             mobile={isAndroid}
             zoomLevel={zoomLevel}
@@ -1585,18 +1583,18 @@ export default function App() {
             onZoom={setZoomLevel}
             onEqualizer={(bands) => {
               setEqualizerBands(bands);
-              localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(bands));
+              saveStoredData("equalizer-bands", JSON.stringify(bands));
               return api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)));
             }}
             onEqualizerPreview={(bands) => api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)))}
-            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
+            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); saveStoredData("equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
             onCompact={setCompact}
             onPanel={setShowPanel}
             onAdd={chooseLibrarySource}
             onRemove={confirmRemoveFolder}
             onRefresh={() => void refresh()}
-            onVolume={(volume) => { localStorage.setItem("michoplay-volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
-            onAutoplay={(enabled) => { localStorage.setItem("michoplay-autoplay", JSON.stringify(enabled)); void run(() => api.autoplay(enabled)); }}
+            onVolume={(volume) => { saveStoredData("volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
+            onAutoplay={(enabled) => { saveStoredData("autoplay", JSON.stringify(enabled)); void run(() => api.autoplay(enabled)); }}
             onSleepTimer={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))}
             onDefaultPlayer={() => isAndroid ? setMessage("Open an audio file from your file manager, choose MichoPlay, then tap Always to make it the default.") : void run(() => api.setDefaultPlayer())}
           /> : <>
@@ -1620,7 +1618,7 @@ export default function App() {
               </article>)}</div></div>{youtubeHasMore && <button className="youtube-load-more" disabled={youtubeLoadingMore} onClick={() => void loadMoreYoutubeFolderResults()}>{youtubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}</>
               : youtubeQuery.trim() ? <p className="youtube-search-empty">No videos found. Try a different title or link.</p> : null}
           </section>}
-            <div className="collection-tools"><div className="play-actions"><button className={`primary-play ${collectionHasCurrent ? "is-playing" : ""}`} aria-label={collectionHasCurrent && player.isPlaying ? `Pause ${heading}` : `Play ${heading}`} disabled={!visibleTracks.length} onClick={() => { if (collectionHasCurrent) void run(api.toggle); else if (sortedVisibleTracks[0]) playCollection(sortedVisibleTracks[0]); }}>{collectionHasCurrent && player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button><button className={`round-button shuffle-control ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" disabled={!visibleTracks.length} onClick={() => void run(api.shuffle)}><Shuffle size={18}/></button>{selectedPlaylist && <><button className="text-action" onClick={() => newPlaylist(undefined, selectedPlaylist)}><Pencil size={14}/>Rename</button><button className="icon-button" aria-label="Delete playlist" onClick={() => confirmDeletePlaylist(selectedPlaylist)}><Trash2 size={16}/></button></>}</div><div className="collection-tools-right"><label className="collection-search"><Search size={15}/><input aria-label={`Search in ${heading}`} placeholder={`Search in ${heading}`} value={inlineSearch} onChange={(event) => setInlineSearch(event.target.value)}/>{inlineSearch && <button className="icon-button" aria-label="Clear collection search" onClick={() => setInlineSearch("")}><X size={14}/></button>}</label><div className="sort-control"><button className={`sort-trigger ${sortMenuOpen ? "open" : ""}`} aria-label={`Sort by ${trackSortOptions.find((option) => option.key === sortBy)?.label}`} aria-expanded={sortMenuOpen} onClick={() => setSortMenuOpen((open) => !open)}><span>{trackSortOptions.find((option) => option.key === sortBy)?.label}</span><ListFilter size={15}/></button>{sortMenuOpen && <div className="sort-menu" role="menu"><strong className="sort-menu-heading">Sort by</strong>{trackSortOptions.map((option) => <button key={option.key} role="menuitemradio" aria-checked={sortBy === option.key} className={`sort-menu-option ${sortBy === option.key ? "selected" : ""}`} onClick={() => { setSortBy(option.key); localStorage.setItem("michoplay-collection-sort", JSON.stringify(option.key)); setSortMenuOpen(false); }}><span>{option.label}</span>{sortBy === option.key && <Check size={15}/>}</button>)}<span className="sort-menu-divider"/><strong className="sort-menu-heading">View as</strong><button role="menuitemradio" aria-checked={!compact} className={`sort-menu-option view-option ${!compact ? "selected" : ""}`} onClick={() => { setCompact(false); setSortMenuOpen(false); }}><List size={15}/><span>List</span>{!compact && <Check size={15}/>}</button><button role="menuitemradio" aria-checked={compact} className={`sort-menu-option view-option ${compact ? "selected" : ""}`} onClick={() => { setCompact(true); setSortMenuOpen(false); }}><AlignJustify size={15}/><span>Compact</span>{compact && <Check size={15}/>}</button></div>}</div></div></div>{rows(sortedVisibleTracks, page.section === "Favorites" ? "No favorites yet" : page.section === "Recently Played" ? "No listening history yet" : "No songs here")}</> : page.section === "Home" ? <HomeScreen
+            <div className="collection-tools"><div className="play-actions"><button className={`primary-play ${collectionHasCurrent ? "is-playing" : ""}`} aria-label={collectionHasCurrent && player.isPlaying ? `Pause ${heading}` : `Play ${heading}`} disabled={!visibleTracks.length} onClick={() => { if (collectionHasCurrent) void run(api.toggle); else if (sortedVisibleTracks[0]) playCollection(sortedVisibleTracks[0]); }}>{collectionHasCurrent && player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button><button className={`round-button shuffle-control ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" disabled={!visibleTracks.length} onClick={() => void run(api.shuffle)}><Shuffle size={18}/></button>{selectedPlaylist && <><button className="text-action" onClick={() => newPlaylist(undefined, selectedPlaylist)}><Pencil size={14}/>Rename</button><button className="icon-button" aria-label="Delete playlist" onClick={() => confirmDeletePlaylist(selectedPlaylist)}><Trash2 size={16}/></button></>}</div><div className="collection-tools-right"><label className="collection-search"><Search size={15}/><input aria-label={`Search in ${heading}`} placeholder={`Search in ${heading}`} value={inlineSearch} onChange={(event) => setInlineSearch(event.target.value)}/>{inlineSearch && <button className="icon-button" aria-label="Clear collection search" onClick={() => setInlineSearch("")}><X size={14}/></button>}</label><div className="sort-control"><button className={`sort-trigger ${sortMenuOpen ? "open" : ""}`} aria-label={`Sort by ${trackSortOptions.find((option) => option.key === sortBy)?.label}`} aria-expanded={sortMenuOpen} onClick={() => setSortMenuOpen((open) => !open)}><span>{trackSortOptions.find((option) => option.key === sortBy)?.label}</span><ListFilter size={15}/></button>{sortMenuOpen && <div className="sort-menu" role="menu"><strong className="sort-menu-heading">Sort by</strong>{trackSortOptions.map((option) => <button key={option.key} role="menuitemradio" aria-checked={sortBy === option.key} className={`sort-menu-option ${sortBy === option.key ? "selected" : ""}`} onClick={() => { setSortBy(option.key); saveStoredData("collection-sort", JSON.stringify(option.key)); setSortMenuOpen(false); }}><span>{option.label}</span>{sortBy === option.key && <Check size={15}/>}</button>)}<span className="sort-menu-divider"/><strong className="sort-menu-heading">View as</strong><button role="menuitemradio" aria-checked={!compact} className={`sort-menu-option view-option ${!compact ? "selected" : ""}`} onClick={() => { setCompact(false); setSortMenuOpen(false); }}><List size={15}/><span>List</span>{!compact && <Check size={15}/>}</button><button role="menuitemradio" aria-checked={compact} className={`sort-menu-option view-option ${compact ? "selected" : ""}`} onClick={() => { setCompact(true); setSortMenuOpen(false); }}><AlignJustify size={15}/><span>Compact</span>{compact && <Check size={15}/>}</button></div>}</div></div></div>{rows(sortedVisibleTracks, page.section === "Favorites" ? "No favorites yet" : page.section === "Recently Played" ? "No listening history yet" : "No songs here")}</> : page.section === "Home" ? <HomeScreen
               isAndroid={isAndroid}
               mobileHomeFilter={mobileHomeFilter}
               setMobileHomeFilter={setMobileHomeFilter}

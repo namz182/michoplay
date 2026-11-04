@@ -34,6 +34,9 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
+mod app_data;
+use app_data::{app_data_load, app_data_migrate, app_data_save};
+
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
 static LIBRARY_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static LIBRARY_SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
@@ -472,9 +475,7 @@ fn take_pending_audio_opens(state: State<'_, PendingAudioOpens>) -> Result<Vec<S
 }
 
 #[tauri::command]
-fn media_take_opened_audio(
-    state: State<'_, MediaBridge>,
-) -> Result<Vec<String>, String> {
+fn media_take_opened_audio(state: State<'_, MediaBridge>) -> Result<Vec<String>, String> {
     #[cfg(target_os = "android")]
     {
         let bridge = state
@@ -1129,7 +1130,13 @@ fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
             let legacy_path = storage_dir.join("library-index.json");
             if let Ok(bytes) = fs::read(legacy_path) {
                 if let Ok(entries) = serde_json::from_slice::<Vec<CachedTrack>>(&bytes) {
-                    let _ = write_library_cache(storage_dir, &entries);
+                    let roots = entries
+                        .iter()
+                        .map(|entry| PathBuf::from(&entry.root_path))
+                        .collect::<HashSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    let _ = write_library_cache(storage_dir, &entries, &roots);
                 }
             }
         }
@@ -1174,7 +1181,11 @@ fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
         .collect()
 }
 
-fn write_library_cache(storage_dir: &Path, entries: &[CachedTrack]) -> rusqlite::Result<()> {
+fn write_library_cache(
+    storage_dir: &Path,
+    entries: &[CachedTrack],
+    scanned_roots: &[PathBuf],
+) -> rusqlite::Result<()> {
     let mut connection = open_library_cache(storage_dir)?;
     let transaction = connection.transaction()?;
     transaction.execute_batch(
@@ -1243,10 +1254,18 @@ fn write_library_cache(storage_dir: &Path, entries: &[CachedTrack]) -> rusqlite:
             ])?;
         }
     }
-    transaction.execute(
-        "DELETE FROM tracks WHERE NOT EXISTS (SELECT 1 FROM scan_paths WHERE scan_paths.path = tracks.path)",
-        [],
-    )?;
+    // Only reconcile roots that were successfully scanned. A disconnected drive
+    // or an unreadable folder must not evict its cached tracks.
+    {
+        let mut delete_missing = transaction.prepare(
+            "DELETE FROM tracks
+             WHERE root_path = ?1
+               AND NOT EXISTS (SELECT 1 FROM scan_paths WHERE scan_paths.path = tracks.path)",
+        )?;
+        for root in scanned_roots {
+            delete_missing.execute([root.to_string_lossy().as_ref()])?;
+        }
+    }
     transaction.commit()
 }
 
@@ -1448,10 +1467,16 @@ where
     let mut paths = Vec::new();
     let mut visited = 0usize;
     for root in &canonical_roots {
-        for entry in WalkDir::new(root).follow_links(false).into_iter().flatten() {
+        for entry in WalkDir::new(root).follow_links(false) {
             if LIBRARY_SCAN_CANCELLED.load(Ordering::Relaxed) {
                 return Err("Library scan cancelled.".to_owned());
             }
+            let entry = entry.map_err(|_| {
+                format!(
+                    "MichoPlay couldn’t finish scanning “{}”. The previous index was kept.",
+                    root.display()
+                )
+            })?;
             visited += 1;
             if entry.file_type().is_file() && supported_audio(entry.path()) {
                 if let Ok(path) = entry.path().canonicalize() {
@@ -1621,7 +1646,7 @@ where
         let Ok(_cache_write) = LIBRARY_CACHE_WRITE_LOCK.lock() else {
             return Ok(result);
         };
-        let _ = write_library_cache(storage_dir, &index_entries);
+        let _ = write_library_cache(storage_dir, &index_entries, &canonical_roots);
         prune_artwork_cache(&storage_dir.join("artwork"), &live_artwork);
     }
     Ok(result)
@@ -2034,7 +2059,8 @@ fn library_import_audio_files(
         .map_err(|_| "The app couldn’t create its music storage folder.".to_owned())?;
 
     let mut total_bytes = 0usize;
-    for (index, file) in files.into_iter().enumerate() {
+    let mut prepared = Vec::with_capacity(files.len());
+    for file in files {
         let name = file
             .name
             .rsplit(|character| character == '/' || character == '\\')
@@ -2068,14 +2094,44 @@ fn library_import_audio_files(
             return Err("The selected audio files exceed the import size limit.".to_owned());
         }
         total_bytes += bytes.len();
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let destination = data_dir.join(format!("{stamp}-{index}-{name}"));
-        std::fs::write(destination, bytes)
-            .map_err(|_| format!("“{name}” couldn’t be saved to app storage."))?;
+        prepared.push((name, bytes));
     }
+
+    // Validate the complete batch before touching the music directory, then
+    // stage all files and roll back if any write or rename fails.
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let staging_dir = data_dir.join(format!(".import-{stamp}"));
+    std::fs::create_dir(&staging_dir)
+        .map_err(|_| "The selected audio files couldn’t be staged.".to_owned())?;
+    let result = (|| {
+        let mut staged = Vec::with_capacity(prepared.len());
+        for (index, (name, bytes)) in prepared.into_iter().enumerate() {
+            let staged_path = staging_dir.join(format!("{index}.audio"));
+            std::fs::write(&staged_path, bytes)
+                .map_err(|_| format!("“{name}” couldn’t be saved to app storage."))?;
+            staged.push((
+                staged_path,
+                data_dir.join(format!("{stamp}-{index}-{name}")),
+                name,
+            ));
+        }
+        let mut committed = Vec::with_capacity(staged.len());
+        for (staged_path, destination, name) in staged {
+            if let Err(_) = std::fs::rename(&staged_path, &destination) {
+                for path in committed {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(format!("“{name}” couldn’t be saved to app storage."));
+            }
+            committed.push(destination);
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    result?;
     Ok(data_dir.to_string_lossy().into_owned())
 }
 
@@ -2456,9 +2512,7 @@ async fn media_share_text(
 }
 
 #[tauri::command]
-async fn library_pick_audio_files(
-    bridge: State<'_, MediaBridge>,
-) -> Result<Vec<String>, String> {
+async fn library_pick_audio_files(bridge: State<'_, MediaBridge>) -> Result<Vec<String>, String> {
     #[cfg(target_os = "android")]
     {
         let plugin = android_media_plugin(&bridge)?;
@@ -3301,12 +3355,23 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
     if !storage_dir.join("library.sqlite").exists() {
         if let Ok(bytes) = fs::read(storage_dir.join("library-index.json")) {
             if let Ok(entries) = serde_json::from_slice::<Vec<CachedTrack>>(&bytes) {
-                let _ = write_library_cache(&storage_dir, &entries);
-                return Ok(entries.into_iter().map(|entry| {
-                    let mut track = entry.track;
-                    if track.path.is_empty() { track.path = entry.path; }
-                    track
-                }).collect());
+                let roots = entries
+                    .iter()
+                    .map(|entry| PathBuf::from(&entry.root_path))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let _ = write_library_cache(&storage_dir, &entries, &roots);
+                return Ok(entries
+                    .into_iter()
+                    .map(|entry| {
+                        let mut track = entry.track;
+                        if track.path.is_empty() {
+                            track.path = entry.path;
+                        }
+                        track
+                    })
+                    .collect());
             }
         }
         return Ok(Vec::new());
@@ -3317,7 +3382,9 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
         .prepare("SELECT path, track_json FROM tracks ORDER BY path")
         .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
     let rows = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
     rows.map(|row| {
         row.map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())
@@ -3325,7 +3392,9 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
                 let mut track: Track = serde_json::from_str(&json).map_err(|_| {
                     "MichoPlay’s saved library index contains invalid data.".to_owned()
                 })?;
-                if track.path.is_empty() { track.path = path; }
+                if track.path.is_empty() {
+                    track.path = path;
+                }
                 Ok(track)
             })
     })
@@ -3794,7 +3863,8 @@ pub fn run() {
                     }
                     let previous_artwork = previous_storage.join("artwork");
                     if previous_artwork.is_dir() {
-                        let _ = copy_directory_missing(&previous_artwork, &storage_dir.join("artwork"));
+                        let _ =
+                            copy_directory_missing(&previous_artwork, &storage_dir.join("artwork"));
                     }
                 }
             }
@@ -4005,6 +4075,9 @@ pub fn run() {
             library_cancel_scan,
             library_refresh,
             library_saved_roots,
+            app_data_load,
+            app_data_migrate,
+            app_data_save,
             library_cached_tracks,
             library_remove_folder,
             library_artwork,

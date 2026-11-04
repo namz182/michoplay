@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { AudioLines, Bug, ChevronDown, ChevronLeft, ChevronRight, Download, Eye, EyeOff, FolderOpen, Github, Globe2, List, ListFilter, Maximize2, Plus, RefreshCw, Search, Settings2, Share2, Timer, Trash2, Volume2, X } from "lucide-react";
 import type { PlayerSnapshot, Track } from "../../lib/api";
+import { saveStoredData, stored } from "../../lib/storage";
 import packageInfo from "../../../package.json";
 
 const equalizerFrequencies = ["60Hz", "150Hz", "400Hz", "1KHz", "2.4KHz", "15KHz"];
@@ -18,9 +19,6 @@ const michoplayGithubUrl = "https://github.com/namz182/michoplay";
 const michoplayIssueUrl = "https://github.com/namz182/michoplay/issues/new";
 const michoplayDeveloperUrl = "https://mainza.dev";
 const michoplayWebsiteUrl = "https://michoplay.mainza.dev/";
-function stored<T>(key: string, fallback: T): T {
-  try { const value = localStorage.getItem(`michoplay-${key}`); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; }
-}
 function sleepTimerLabel(ms: number) { const seconds = Math.ceil(Math.max(0, ms) / 1000); const hours = Math.floor(seconds / 3600); const minutes = Math.floor((seconds % 3600) / 60); const remainder = seconds % 60; return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}` : `${minutes}:${String(remainder).padStart(2, "0")}`; }
 
 export function EqualizerSettings({ bands, enabled, mobile = false, onChange, onPreview, onToggle }: { bands: number[]; enabled: boolean; mobile?: boolean; onChange: (bands: number[]) => void | Promise<unknown>; onPreview: (bands: number[]) => void | Promise<unknown>; onToggle: (enabled: boolean) => void }) {
@@ -62,7 +60,7 @@ export function EqualizerSettings({ bands, enabled, mobile = false, onChange, on
     const name = presetName.trim();
     if (!name || builtInName(name)) return;
     const next = [...savedPresets.filter((preset) => preset.name.toLocaleLowerCase() !== name.toLocaleLowerCase()), { name, bands: [...visibleBands] }];
-    setSavedPresets(next); localStorage.setItem("michoplay-equalizer-presets", JSON.stringify(next));
+    setSavedPresets(next); saveStoredData("equalizer-presets", JSON.stringify(next));
     setPresetName(""); setSaving(false);
   };
   const chartX = (index: number) => mobile ? 65 + index * 127 : 120 + index * 116;

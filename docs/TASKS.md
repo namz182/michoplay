@@ -1,6 +1,6 @@
 # MichoPlay Development Tasks
 
-**Status:** Initial roadmap derived from the blueprint. Foundation scaffolding has been created; feature work remains unstarted unless explicitly marked otherwise.
+**Status:** Release roadmap. Checked items indicate implementation work only; platform acceptance and release validation remain incomplete unless stated.
 
 ## Phase 0 — Foundations
 
@@ -24,7 +24,7 @@
 
 **Implementation note (2026-10-14):** Initial folder scanning and in-memory playback commands now exist for local audio files. The roadmap items remain open until persistence, recovery, queue behavior, and supported-platform playback are verified against the stated acceptance criteria.
 
-**Implementation note (2026-10-14):** Current UI and core work adds recursive folder/album/artist detail pages, embedded and folder cover loading, local playlists/favorites, scoped search, adjustable panes, library refresh, and editable playback queue. Playlists and preferences are persisted in WebView local storage for now; these features still need the SQLite migration and full platform acceptance checks before the roadmap items can be closed.
+**Implementation note (2026-11-04):** UI settings and user collections are persisted in `app-data.sqlite` as keyed JSON values. Existing WebView `michoplay-*` keys are migrated on launch. The library index remains in `library.sqlite`; lifecycle, platform, recovery, and release checks remain open.
 
 ## Phase 2 — Desktop integration and UX (P1)
 
