@@ -1165,13 +1165,22 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .content-scroll { height:100%; overflow-x:hidden; overflow-y:auto; overscroll-behavior-y:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y; margin:0; padding:0 0 calc(230px + env(safe-area-inset-bottom)); border-radius:0; background:#111113; scrollbar-width:none; }
 .android-app .content-scroll::-webkit-scrollbar { display:none; }
 .android-app .collection-heading:not(.detail-heading) { display:none; }
-.android-app .detail-heading { display:block; min-height:0; padding:52px 18px 17px; background:var(--brand-gradient); }
-.android-app .detail-heading .heading-foreground { display:flex; flex-direction:column; align-items:flex-start; gap:13px; }
-.android-app .detail-heading .heading-cover { width:min(43vw,170px); height:auto; aspect-ratio:1; align-self:center; margin:2px auto 5px; border-radius:5px; box-shadow:0 8px 28px rgba(0,0,0,.3); }
-.android-app .detail-heading .heading-copy { width:100%; }
-.android-app .detail-heading .heading-copy h1 { margin:0; font-size:29px; line-height:1.08; letter-spacing:-.8px; }
-.android-app .detail-heading .heading-copy p { margin:7px 0 0; color:#c2bec6; font-size:13px; }
-.android-app .youtube-detail-heading { padding-bottom:0; background:transparent; }
+.android-app .detail-heading { display:block; height:min(20vh,200px); height:min(20svh,200px); min-height:160px; padding:0; background:#111113; }
+.android-app .detail-heading::after { background:linear-gradient(0deg,#111113 0%,rgba(17,17,19,.84) 13%,rgba(17,17,19,.12) 59%,rgba(17,17,19,.2) 100%); }
+.android-app .detail-heading .cover-backdrop { display:none; }
+.android-app .detail-heading .heading-foreground { position:absolute; inset:0; display:flex; align-items:flex-end; padding:0 20px calc(12px + env(safe-area-inset-bottom)); }
+.android-app .detail-heading .heading-cover { position:absolute; z-index:-2; inset:0; width:100%; height:100%; aspect-ratio:auto; margin:0; border-radius:0; background:#252329; box-shadow:none; }
+.android-app .detail-heading .heading-cover:not(.cover-mosaic) img { object-fit:cover; }
+.android-app .detail-heading .heading-cover.cover-mosaic { display:block; }
+.android-app .detail-heading .heading-cover.cover-mosaic img { position:absolute; width:46%; height:auto; aspect-ratio:1; border:1px solid rgba(255,255,255,.16); border-radius:20px; object-fit:cover; box-shadow:0 10px 26px rgba(0,0,0,.4); }
+.android-app .detail-heading .heading-cover.cover-mosaic img:nth-child(1) { top:-21%; left:-5%; transform:rotate(12deg); }
+.android-app .detail-heading .heading-cover.cover-mosaic img:nth-child(2) { top:-31%; right:-6%; transform:rotate(-10deg); }
+.android-app .detail-heading .heading-cover.cover-mosaic img:nth-child(3) { top:23%; left:17%; transform:rotate(-10deg); }
+.android-app .detail-heading .heading-cover.cover-mosaic img:nth-child(4) { top:37%; right:-8%; transform:rotate(10deg); }
+.android-app .detail-heading .heading-copy { position:relative; z-index:1; width:100%; }
+.android-app .detail-heading .heading-copy h1 { margin:0; font-size:clamp(32px,8.5vw,44px); line-height:.98; font-weight:850; letter-spacing:-1.4px; }
+.android-app .detail-heading .heading-copy p { margin:6px 0 0; color:#e5e1e7; font-size:14px; font-weight:750; letter-spacing:-.2px; }
+.android-app .youtube-detail-heading { height:auto; min-height:0; padding:52px 18px 0; background:transparent; }
 .android-app .youtube-detail-heading::after, .android-app .youtube-detail-heading .cover-backdrop { display:none; }
 .android-app .youtube-detail-heading .heading-cover, .android-app .youtube-detail-heading .heading-copy { display:none; }
 .android-app .mobile-detail-back { position:absolute; z-index:2; top:9px; left:13px; display:grid; width:38px; height:38px; place-items:center; border:0; border-radius:50%; background:rgba(0,0,0,.32); color:#fff; }
