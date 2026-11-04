@@ -1137,7 +1137,14 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-eq-panel { display:grid; grid-column:1 / -1; gap:12px; padding:14px 17px 17px; border-top:1px solid rgba(255,255,255,.075); background:#171619; }
 .mobile-eq-toggle { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#e8e4ea; font-size:12px; font-weight:750; }
 .mobile-eq-panel > .mobile-equalizer-editor { grid-column:1 / -1; margin:0; }
-.mobile-equalizer-editor .eq-header, .mobile-equalizer-editor .eq-toolbar, .mobile-equalizer-editor .eq-card-footer { display:none; }
+.mobile-equalizer-editor .eq-header { display:none; }
+.mobile-equalizer-editor .eq-toolbar { display:flex; min-width:0; min-height:36px; flex-wrap:wrap; align-items:center; gap:7px; padding:0 0 5px; }
+.mobile-equalizer-editor .eq-select-wrap { min-width:0; flex:1 1 150px; }
+.mobile-equalizer-editor .eq-select-wrap select { width:100%; min-width:0; height:36px; border:1px solid rgba(255,255,255,.12); border-radius:9px; background:#121113; font-size:12px; }
+.mobile-equalizer-editor .eq-save-button, .mobile-equalizer-editor .eq-save-form button { min-height:36px; padding:0 10px; border-radius:9px; background:rgba(255,255,255,.06); font-size:11px; }
+.mobile-equalizer-editor .eq-save-form { min-width:0; flex:1 1 100%; }
+.mobile-equalizer-editor .eq-save-form input { min-width:0; flex:1; height:36px; font-size:11px; }
+.mobile-equalizer-editor .eq-card-footer { display:flex; min-height:36px; padding:2px 0 0; }
 .mobile-equalizer-editor .equalizer-settings { padding:5px 0 0; border-radius:0; background:transparent; opacity:1; }
 .mobile-equalizer-editor .eq-chart { height:205px; }
 .mobile-equalizer-editor .eq-db-label { font-size:12px; }

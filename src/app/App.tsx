@@ -82,7 +82,11 @@ const navigation: { label: Section; icon: typeof Home }[] = [
   { label: "Home", icon: Home }, { label: "Songs", icon: Music2 },
   { label: "Playlists", icon: ListMusic }, { label: "Favorites", icon: Heart },
 ];
-const initialPlayer: PlayerSnapshot = { currentTrackId: null, isPlaying: false, positionMs: 0, durationMs: 0, volume: 0.75, shuffle: false, repeatMode: "off", queue: [], priorityQueue: [], autoplay: true, sleepTimerRemainingMs: null, sleepTimerAtTrackEnd: false, equalizerBands: Array(6).fill(0), equalizerEnabled: false };
+function defaultVolume() {
+  const mobile = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+  return mobile ? 1 : 0.75;
+}
+const initialPlayer: PlayerSnapshot = { currentTrackId: null, isPlaying: false, positionMs: 0, durationMs: 0, volume: defaultVolume(), shuffle: false, repeatMode: "off", queue: [], priorityQueue: [], autoplay: true, sleepTimerRemainingMs: null, sleepTimerAtTrackEnd: false, equalizerBands: Array(6).fill(0), equalizerEnabled: false };
 function storedLibraryRoots(): string[] {
   const roots = stored<unknown>("library-roots", []);
   return Array.isArray(roots)
@@ -190,7 +194,7 @@ export default function App() {
     return Array.isArray(saved) ? saved.filter((id): id is number => Number.isSafeInteger(id)) : [];
   });
   const [player, setPlayer] = useState<PlayerSnapshot>(initialPlayer);
-  const lastAudibleVolume = useRef(Math.max(0.01, stored("volume", 0.75)));
+  const lastAudibleVolume = useRef(Math.max(0.01, stored("volume", defaultVolume())));
   const [fullMode, setFullMode] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [mobileAboutOpen, setMobileAboutOpen] = useState(false);
@@ -499,7 +503,7 @@ export default function App() {
   }, [appVersion]);
   useEffect(() => {
     if (!isTauri()) return;
-    void api.volume(stored("volume", 0.75));
+    void api.volume(stored("volume", defaultVolume()));
     void api.autoplay(stored("autoplay", true));
     void api.equalizer(equalizerBands, equalizerEnabled);
     // Restore library and playback preferences once on launch.
