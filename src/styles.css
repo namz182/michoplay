@@ -363,6 +363,25 @@ button:disabled { cursor: default; }
 .home-quick-card strong, .home-quick-card small { overflow-wrap: anywhere; white-space: normal; }
 .home-quick-card strong { font-size: 12px; font-weight: 700; }
 .home-quick-card small { color: #b7b2ba; font-size: 10px; }
+.home-art-shelf { min-width:0; margin:24px 0 27px; }
+.home-art-shelf-heading { display:flex; align-items:center; justify-content:space-between; gap:14px; margin:0 0 13px; }
+.home-art-shelf-heading h2 { margin:0; font-size:24px; font-weight:800; letter-spacing:-.8px; }
+.home-art-shelf-heading > div { display:flex; align-items:center; gap:9px; }
+.home-shelf-action { display:inline-flex; min-height:32px; align-items:center; justify-content:center; gap:5px; padding:0 4px; border:0; background:transparent; color:#bdb8c1; font:inherit; font-size:12px; font-weight:750; white-space:nowrap; cursor:pointer; }
+.home-shelf-action:hover:not(:disabled) { color:#fff; }
+.home-shelf-action:disabled { opacity:.5; cursor:default; }
+.home-shelf-view-all { color:var(--brand-highlight); }
+.home-art-shelf-row { display:flex; gap:18px; min-width:0; overflow-x:auto; padding:0 0 9px; scrollbar-width:none; overscroll-behavior-inline:contain; }
+.home-art-shelf-row::-webkit-scrollbar { display:none; }
+.home-art-card { display:grid; flex:0 0 calc((100% - 36px)/3.35); min-width:0; align-content:start; gap:5px; padding:0; border:0; background:transparent; color:var(--text); text-align:left; cursor:pointer; }
+.home-art-card-cover { display:grid; width:100%; aspect-ratio:1; margin-bottom:7px; border-radius:6px; background:#27252a; }
+.home-art-card-label { overflow:hidden; color:#aaa5ad; font-size:13px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
+.home-art-card strong, .home-art-card small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.home-art-card strong { color:#f6f3f7; font-size:16px; font-weight:800; }
+.home-art-card small { color:#aaa5ad; font-size:13px; }
+.home-art-card:hover strong { text-decoration:underline; text-underline-offset:3px; }
+.browse-back-button { display:inline-flex; min-height:34px; align-items:center; gap:5px; margin:8px 0 2px 24px; padding:0 8px 0 2px; border:0; border-radius:6px; background:transparent; color:#d1cbd5; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }
+.browse-back-button:hover { background:rgba(255,255,255,.07); color:#fff; }
 .track-row { grid-template-columns: 31px minmax(0, 2.5fr) minmax(0, .7fr) minmax(0, .65fr) 96px; }
 .table-head { grid-template-columns: 31px minmax(0, 2.5fr) minmax(0, .7fr) minmax(0, .65fr) 96px; }
 .track-number { position: relative; width: 31px; height: 32px; padding: 0; border: 0; background: transparent; cursor: pointer; }
@@ -1164,8 +1183,6 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-filter-row::-webkit-scrollbar { display:none; }
 .mobile-filter-row button { min-height:37px; flex:0 0 auto; padding:0 16px; border:0; border-radius:999px; background:#29292c; color:#f0eef1; font-size:14px; font-weight:700; }
 .mobile-filter-row button.selected { background:var(--brand-gradient); color:#241d2c; }
-.home-filter-row { gap:7px; padding:6px 0 9px; }
-.home-filter-row button { min-height:33px; padding-inline:13px; font-size:12px; }
 .android-app .folder-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; padding:0; }
 .android-app .folder-grid > .media-card { display:grid; grid-template-columns:minmax(0,1fr) 25px; align-items:center; min-width:0; min-height:58px; padding:0; border-radius:6px; background:#29292c; }
 .android-app .folder-grid .collection-open { grid-column:1; display:grid; grid-template-columns:50px minmax(0,1fr); grid-template-rows:1fr; align-items:center; gap:6px; width:100%; min-height:58px; }
@@ -1226,6 +1243,16 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .home-quick-card > span:last-child { display:grid; min-width:0; gap:4px; padding-right:5px; text-align:left; }
 .android-app .home-quick-card strong { font-size:12px; line-height:1.2; overflow-wrap:anywhere; white-space:normal; }
 .android-app .home-quick-card small { color:#b8b4bc; font-size:10px; overflow-wrap:anywhere; white-space:normal; }
+.android-app .home-art-shelf { margin:23px 0 27px; }
+.android-app .home-art-shelf-heading { margin-bottom:10px; }
+.android-app .home-art-shelf-heading h2 { font-size:21px; }
+.android-app .home-art-shelf-row { gap:10px; margin-right:-18px; padding-right:18px; }
+.android-app .home-art-card { flex-basis:calc((100% - 20px)/3.35); gap:4px; }
+.android-app .browse-back-button { margin:8px 0 2px 17px; }
+.android-app .home-art-card-cover { margin-bottom:4px; border-radius:6px; }
+.android-app .home-art-card-label { font-size:12px; }
+.android-app .home-art-card strong { font-size:14px; }
+.android-app .home-art-card small { font-size:11px; }
 .android-app .mobile-bottom-nav { grid-template-columns:repeat(5,minmax(0,1fr)); }
 .android-app .mobile-bottom-nav button { min-height:51px; }
 .android-app .mobile-bottom-nav button.active { color:var(--brand-highlight); }
