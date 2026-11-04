@@ -411,9 +411,9 @@ button:disabled { cursor: default; }
 .playlist-empty h2 { margin: 0; color: #f4f0f6; font-size: 17px; }
 .playlist-empty p { max-width: 360px; margin: 0; font-size: 10px; line-height: 1.6; }
 .settings-page { max-width: 780px; margin: 0 auto; padding: 35px 35px 60px; }
-.settings-title { position:sticky; top:0; z-index:12; margin:-35px 0 27px; padding:35px 0 0; background:#211f20; }
-.settings-title h1 { margin: 0; font-size: 34px; letter-spacing: -1.5px; }
-.settings-title p { margin: 7px 0 0; color: #aaa4ae; font-size: 11px; }
+.settings-title { position:sticky; top:0; z-index:12; margin:-35px -25px 27px; padding:35px 25px 14px; background:#211f20; }
+.settings-title h1 { margin:0; }
+.settings-title p { margin:12px 0 0; }
 .zoom-settings > h2 { margin-bottom: 9px; }
 .zoom-description, .zoom-shortcuts { margin: 0 0 13px; color: #b4afb8; font-size: 11px; line-height: 1.55; }
 .zoom-shortcuts { margin-top: 14px; }
@@ -527,7 +527,7 @@ button:disabled { cursor: default; }
 .compact .track-table { padding-top: 0; }
 @media (max-width: 1100px) { .app-frame { grid-template-columns: minmax(184px, var(--sidebar-width, 215px)) 5px minmax(0, 1fr); } .work-area.with-panel { grid-template-columns: minmax(0, 1fr) 5px minmax(240px, var(--panel-width, 265px)); } }
 @media (max-width: 820px) { .app-frame { grid-template-columns: 68px 0 minmax(0, 1fr); } .sidebar-resize { display: none; } .work-area.with-panel { grid-template-columns: minmax(0, 1fr); } .panel-resize, .now-panel { display: none; } .content-scroll { margin-right: 0; } }
-@media (max-width: 560px) { .home-section { padding-inline: 13px; } .folder-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .track-row, .table-head { grid-template-columns: 24px minmax(0,1fr) 70px; gap: 6px; } .track-row .track-album, .track-row .track-artist-cell, .table-head span:nth-child(3), .table-head span:nth-child(4) { display: none; } .track-actions { gap: 2px; } .track-actions .favorite-action { display: none; } .track-actions .track-duration { min-width: 28px; } .settings-page { padding: 25px 15px 40px; } .settings-title { margin-top:-25px; padding-top:25px; } .folder-setting { align-items: flex-start; padding: 10px 0; } .media-grid { padding-inline: 13px; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); } .eq-bands { grid-template-columns: repeat(5,minmax(0,1fr)); row-gap: 14px; } .eq-band input[type="range"] { height: 88px; } .equalizer-settings { padding-inline: 12px; } }
+@media (max-width: 560px) { .home-section { padding-inline: 13px; } .folder-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .track-row, .table-head { grid-template-columns: 24px minmax(0,1fr) 70px; gap: 6px; } .track-row .track-album, .track-row .track-artist-cell, .table-head span:nth-child(3), .table-head span:nth-child(4) { display: none; } .track-actions { gap: 2px; } .track-actions .favorite-action { display: none; } .track-actions .track-duration { min-width: 28px; } .settings-page { padding: 25px 15px 40px; } .settings-title { margin:-25px -15px 27px; padding:25px 15px 14px; } .folder-setting { align-items: flex-start; padding: 10px 0; } .media-grid { padding-inline: 13px; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); } .eq-bands { grid-template-columns: repeat(5,minmax(0,1fr)); row-gap: 14px; } .eq-band input[type="range"] { height: 88px; } .equalizer-settings { padding-inline: 12px; } }
 
 @media (max-width: 1100px) {
   .app-frame { grid-template-columns: minmax(184px, min(var(--sidebar-width, 248px), 26vw)) 5px minmax(0, 1fr); }
@@ -1101,9 +1101,12 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-header-actions { display:flex; align-items:center; gap:10px; }
 .mobile-icon-button { display:grid; width:38px; height:42px; place-items:center; border:0; background:transparent; color:#f4f1f5; }
 .android-app .mobile-settings-page { min-height:100%; padding:4px 18px 42px; background:#101012; }
-.mobile-settings-header { position:sticky; top:0; z-index:20; display:grid; grid-template-columns:44px minmax(0,1fr) 44px; align-items:center; min-height:66px; margin:0 -7px 2px; padding:4px 7px 2px; background:#101012; }
-.mobile-settings-header button { display:grid; width:44px; height:44px; place-items:center; border:0; border-radius:50%; background:transparent; color:#f7f4f7; }
-.mobile-settings-header h1 { margin:0; color:#f7f4f7; font-size:39px; font-weight:850; letter-spacing:-1.8px; line-height:1; }
+.mobile-settings-header { position:sticky; top:0; z-index:20; display:flex; min-height:62px; align-items:center; justify-content:space-between; gap:12px; margin:0 -18px 2px; padding:0 18px; background:#101012; }
+.mobile-settings-header .mobile-header-title { display:flex; min-width:0; align-items:center; gap:13px; }
+.mobile-settings-header .mobile-header-back { display:grid; width:38px; height:38px; flex:0 0 38px; place-items:center; border:0; border-radius:50%; background:transparent; color:#f4f1f5; }
+.mobile-settings-header .brand-mark { width:38px; height:38px; flex:0 0 38px; }
+.mobile-settings-header h1 { overflow:hidden; margin:0; color:#f7f4f7; font-size:24px; font-weight:850; letter-spacing:-.8px; line-height:1; text-overflow:ellipsis; white-space:nowrap; }
+.mobile-settings-header .mobile-header-actions { display:flex; align-items:center; gap:10px; }
 .mobile-settings-search { display:flex; min-height:58px; align-items:center; gap:12px; margin:6px 0 22px; padding:0 17px; border-radius:30px; background:#242326; color:#aca7b0; }
 .mobile-settings-search:focus-within { box-shadow:0 0 0 2px rgba(216,238,228,.24); }
 .mobile-settings-search input { width:100%; min-width:0; border:0; outline:0; background:transparent; color:#f4f1f5; font-size:16px; font-weight:700; }
@@ -1179,9 +1182,12 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 @keyframes mobile-folder-marquee { 0%, 16% { transform:translateX(0); } 76%, 100% { transform:translateX(calc(-50% - 21px)); } }
 @media (prefers-reduced-motion: reduce) { .mobile-folder-path.long .mobile-folder-path-track { animation:none; transform:none; } }
 .mobile-about-page { min-height:100%; padding:4px 18px 42px; background:#101012; }
-.mobile-about-header { position:sticky; top:0; z-index:20; display:flex; min-height:66px; align-items:center; gap:10px; margin:0 -7px 15px; padding:4px 7px 2px; background:#101012; }
-.mobile-about-header button { display:grid; width:44px; height:44px; place-items:center; border:0; border-radius:50%; background:transparent; color:#f7f4f7; }
-.mobile-about-header h1 { margin:0; color:#f7f4f7; font-size:29px; font-weight:850; letter-spacing:-1.1px; }
+.mobile-about-header { position:sticky; top:0; z-index:20; display:flex; min-height:62px; align-items:center; justify-content:space-between; gap:12px; margin:0 -18px 15px; padding:0 18px; background:#101012; }
+.mobile-about-header .mobile-header-title { display:flex; min-width:0; align-items:center; gap:13px; }
+.mobile-about-header .mobile-header-back { display:grid; width:38px; height:38px; flex:0 0 38px; place-items:center; border:0; border-radius:50%; background:transparent; color:#f4f1f5; }
+.mobile-about-header .brand-mark { width:38px; height:38px; flex:0 0 38px; }
+.mobile-about-header h1 { overflow:hidden; margin:0; color:#f7f4f7; font-size:24px; font-weight:850; letter-spacing:-.8px; line-height:1; text-overflow:ellipsis; white-space:nowrap; }
+.mobile-about-header .mobile-header-actions { display:flex; align-items:center; gap:10px; }
 .mobile-about-hero { display:grid; justify-items:center; gap:10px; padding:28px 17px 24px; border:1px solid rgba(255,255,255,.2); border-radius:23px; background:#151416; text-align:center; }
 .mobile-about-mark { display:grid; width:96px; height:96px; place-items:center; border-radius:27px; background:var(--brand-gradient); color:#211b24; box-shadow:0 10px 26px rgba(0,0,0,.24); }
 .mobile-about-hero h2 { margin:3px 0 0; color:#f7f4f7; font-size:27px; font-weight:850; letter-spacing:-.8px; }
