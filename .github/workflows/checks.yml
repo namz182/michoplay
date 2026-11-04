@@ -26,4 +26,4 @@ jobs:
           components: rustfmt
       - run: sudo apt-get update && sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libwebkit2gtk-4.1-dev libasound2-dev
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - run: cargo check --manifest-path src-tauri/Cargo.toml --lib
+      - run: TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo check --manifest-path src-tauri/Cargo.toml --lib
