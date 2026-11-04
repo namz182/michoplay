@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -7,25 +7,36 @@ import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion, onBackButtonPress } from "@tauri-apps/api/app";
 import {
-  AudioLines, Disc3, Heart, Home, ListMusic, Music2, Play, Plus, Search, Shuffle,
+  AudioLines, ArrowRight, Disc3, Heart, Home, ListMusic, Music2, Play, Plus, Search, Shuffle,
   SkipBack, SkipForward, Volume2, VolumeX, Settings2, MoreHorizontal, FolderOpen, Pause,
   Trash2, X, PanelRightClose, PanelRightOpen, ChevronLeft, ChevronRight,
-  ChevronUp, ChevronDown, GripVertical, RefreshCw, Pencil, Clock3, Youtube,
-  ListFilter, List, AlignJustify, Check, Library, Timer, Share2, Download,
+  ChevronUp, ChevronDown, GripVertical, RefreshCw, Pencil, Youtube,
+  ListFilter, List, AlignJustify, Check, Library, Timer, Download, EyeOff,
   Maximize2, Minimize2, MoreVertical, Github, Globe2, Bug,
 } from "lucide-react";
 import { api } from "../lib/api";
+import { saveStoredData, stored } from "../lib/storage";
 import type { PlayerSnapshot, Track, YoutubeDownload, YoutubeSearchResult } from "../lib/api";
+import { MobileAboutPage, MobileSettingsPage, SettingsPage } from "../screens/settings";
+import { HomeScreen } from "../screens/home";
+import { MobileDownloadsScreen } from "../screens/downloads";
+import { MobileLibraryScreen } from "../screens/library";
+import { TrackRows } from "../screens/library/TrackRows";
+import { MobileSearchScreen } from "../screens/search";
+import { SearchResultButton as GlobalSearchResultButton } from "../screens/search/GlobalSearchResultButton";
+import { Empty } from "../components/EmptyState";
+import { CollectionGrid } from "../components/library/CollectionGrid";
+import packageInfo from "../../package.json";
 import { youtubeDownloadErrorText, youtubeDownloadProgressText, youtubeResultSizeText } from "../lib/youtube-size";
 import { Cover, useArtwork } from "./Artwork";
-import packageInfo from "../../package.json";
 
-type Section = "Home" | "Songs" | "Albums" | "Artists" | "Playlists" | "Favorites" | "Recently Played" | "Settings";
+type Section = "Home" | "Songs" | "Albums" | "Artists" | "Playlists" | "Folders" | "Favorites" | "Recently Played" | "Settings";
 type Detail = { kind: "folder" | "album" | "artist" | "playlist"; key: string; title: string };
 type Page = { section: Section; detail?: Detail };
 type Playlist = { id: string; name: string; trackIds: number[] };
 type Collection = { key: string; title: string; subtitle: string; tracks: Track[] };
 type TrackMenu = { track: Track; x: number; y: number };
+type DownloadFeedback = { key: number; label: string; x: number; y: number; targetX: number; targetY: number };
 function playlistSubmenuPlacement(menuX: number) {
   const menuWidth = 228;
   const submenuWidth = 256;
@@ -38,14 +49,13 @@ function playlistSubmenuPlacement(menuX: number) {
 type ListeningRecord = { trackId: number; lastPlayedAt: number; playCount: number; positionMs: number; durationMs: number };
 type SavedPlaybackSession = { currentTrackId: number | null; queue: number[]; positionMs: number; isPlaying: boolean };
 type GlobalSearchResult = { type: "Song" | "Folder" | "Album" | "Artist" | "Playlist"; title: string; subtitle: string; artworkKey: string | null; trackId?: number; page?: Page };
-type TrackSort = "custom" | "title" | "artist" | "album" | "recentlyAdded" | "releaseDate" | "duration";
+type TrackSort = "titleAsc" | "titleDesc" | "recentlyAdded" | "durationAsc" | "durationDesc";
 const trackSortOptions: { key: TrackSort; label: string }[] = [
-  { key: "custom", label: "Custom order" }, { key: "title", label: "Title" }, { key: "artist", label: "Artist" },
-  { key: "album", label: "Album" }, { key: "recentlyAdded", label: "Recently added" },
-  { key: "releaseDate", label: "Release date" }, { key: "duration", label: "Duration" },
+  { key: "titleAsc", label: "Title A–Z" }, { key: "titleDesc", label: "Title Z–A" },
+  { key: "recentlyAdded", label: "Recently added" },
+  { key: "durationAsc", label: "Duration (short to long)" }, { key: "durationDesc", label: "Duration (long to short)" },
 ];
 const latestReleaseApiUrl = "https://api.github.com/repos/namz182/michoplay/releases/latest";
-const releasesPageUrl = "https://github.com/namz182/michoplay/releases";
 const michoplayGithubUrl = "https://github.com/namz182/michoplay";
 const michoplayIssueUrl = "https://github.com/namz182/michoplay/issues/new";
 const michoplayDeveloperUrl = "https://mainza.dev";
@@ -68,24 +78,15 @@ function isNewerVersion(candidate: string, current: string) {
   }
   return false;
 }
-const keyboardShortcuts: { action: string; keys: string[] }[] = [
-  { action: "Play or pause", keys: ["Space"] },
-  { action: "Seek back or forward 5 seconds", keys: ["←", "→"] },
-  { action: "Previous or next song", keys: ["Ctrl / ⌘", "← / →"] },
-  { action: "Toggle shuffle", keys: ["Ctrl / ⌘", "Shift", "S"] },
-  { action: "Change repeat mode", keys: ["Ctrl / ⌘", "R"] },
-  { action: "Focus music search", keys: ["Ctrl / ⌘", "K"] },
-  { action: "Zoom out, in, or reset", keys: ["Ctrl / ⌘", "− / + / 0"] },
-];
 const navigation: { label: Section; icon: typeof Home }[] = [
   { label: "Home", icon: Home }, { label: "Songs", icon: Music2 },
   { label: "Playlists", icon: ListMusic }, { label: "Favorites", icon: Heart },
 ];
-const initialPlayer: PlayerSnapshot = { currentTrackId: null, isPlaying: false, positionMs: 0, durationMs: 0, volume: 0.75, shuffle: false, repeatMode: "off", queue: [], priorityQueue: [], autoplay: true, sleepTimerRemainingMs: null, sleepTimerAtTrackEnd: false, equalizerBands: Array(6).fill(0), equalizerEnabled: false };
-const equalizerFrequencies = ["60Hz", "150Hz", "400Hz", "1KHz", "2.4KHz", "15KHz"];
-function stored<T>(key: string, fallback: T): T {
-  try { const value = localStorage.getItem(`michoplay-${key}`); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; }
+function defaultVolume() {
+  const mobile = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+  return mobile ? 1 : 0.75;
 }
+const initialPlayer: PlayerSnapshot = { currentTrackId: null, isPlaying: false, positionMs: 0, durationMs: 0, volume: defaultVolume(), shuffle: false, repeatMode: "off", queue: [], priorityQueue: [], autoplay: true, sleepTimerRemainingMs: null, sleepTimerAtTrackEnd: false, equalizerBands: Array(6).fill(0), equalizerEnabled: false };
 function storedLibraryRoots(): string[] {
   const roots = stored<unknown>("library-roots", []);
   return Array.isArray(roots)
@@ -93,6 +94,14 @@ function storedLibraryRoots(): string[] {
     : [];
 }
 function time(ms: number) { const seconds = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
+function headingTime(ms: number) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours) return `${hours}h${minutes ? ` ${minutes}min` : ""}`;
+  if (minutes) return `${minutes}min`;
+  return `${seconds}s`;
+}
 function sleepTimerLabel(ms: number) { const seconds = Math.ceil(Math.max(0, ms) / 1000); const hours = Math.floor(seconds / 3600); const minutes = Math.floor((seconds % 3600) / 60); const remainder = seconds % 60; return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}` : `${minutes}:${String(remainder).padStart(2, "0")}`; }
 function durationLabel(seconds: number) { const safeSeconds = Math.max(0, Math.floor(seconds)); return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, "0")}`; }
 function youtubeDownloadDescription(item: YoutubeDownload) {
@@ -100,6 +109,28 @@ function youtubeDownloadDescription(item: YoutubeDownload) {
   if (item.status === "completed") return youtubeDownloadProgressText(item);
   if (item.status === "failed") return youtubeDownloadErrorText(item.message, item.isPlaylist);
   return item.message;
+}
+function normalizedAudioPath(path: string) {
+  const normalized = path.replaceAll("\\", "/").replace(/^\/\/\?\//, "");
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLocaleLowerCase() : normalized;
+}
+function tracksForDownload(item: YoutubeDownload, tracks: Track[], youtubeDirectory: string) {
+  if (item.filePaths?.length) {
+    const byPath = new Map(tracks.map((track) => [normalizedAudioPath(track.path), track]));
+    const seen = new Set<number>();
+    return item.filePaths.flatMap((path) => {
+      const track = byPath.get(normalizedAudioPath(path));
+      if (!track || seen.has(track.id)) return [];
+      seen.add(track.id);
+      return [track];
+    });
+  }
+  if (item.isPlaylist) return [];
+  const candidates = tracks.filter((track) => normalizedAudioPath(track.rootPath) === normalizedAudioPath(youtubeDirectory));
+  const title = item.title.trim().toLocaleLowerCase();
+  const match = candidates.find((track) => normalizedAudioPath(track.path).split("/").pop()?.replace(/\.mp3$/i, "").trim().toLocaleLowerCase() === title)
+    ?? candidates.find((track) => track.title.trim().toLocaleLowerCase() === title);
+  return match ? [match] : [];
 }
 function isFinishedYoutubeDownload(item: YoutubeDownload) {
   return item.status === "completed" || item.status === "failed" || item.status === "cancelled";
@@ -158,13 +189,18 @@ export default function App() {
   const page = history.entries[history.index];
   const [roots, setRoots] = useState<string[]>(storedLibraryRoots);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [hiddenTrackIds, setHiddenTrackIds] = useState<number[]>(() => {
+    const saved = stored<unknown>("hidden-tracks", []);
+    return Array.isArray(saved) ? saved.filter((id): id is number => Number.isSafeInteger(id)) : [];
+  });
   const [player, setPlayer] = useState<PlayerSnapshot>(initialPlayer);
-  const lastAudibleVolume = useRef(Math.max(0.01, stored("volume", 0.75)));
+  const lastAudibleVolume = useRef(Math.max(0.01, stored("volume", defaultVolume())));
   const [fullMode, setFullMode] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [mobileAboutOpen, setMobileAboutOpen] = useState(false);
   const [appVersion, setAppVersion] = useState(packageInfo.version);
   const [availableUpdate, setAvailableUpdate] = useState<string | null>(null);
+  const [deferredUpdatePrompt, setDeferredUpdatePrompt] = useState<string | null>(null);
   const [fullPanelTab, setFullPanelTab] = useState<"queue" | "browse">("queue");
   const [fullBrowseTab, setFullBrowseTab] = useState<"playlists" | "library">("playlists");
   const [fullBrowsePlaylistId, setFullBrowsePlaylistId] = useState<string | null>(null);
@@ -195,11 +231,16 @@ export default function App() {
     return Array.isArray(saved) ? saved.filter((value): value is string => typeof value === "string").slice(0, 8) : [];
   });
   const [inlineSearch, setInlineSearch] = useState("");
+  const [playlistSearchOpen, setPlaylistSearchOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [scanNotificationDismissed, setScanNotificationDismissed] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ phase: string; processed: number; total: number } | null>(null);
   const [startupLoading, setStartupLoading] = useState(() => isTauri());
   const [startupPhase, setStartupPhase] = useState("Preparing your library…");
+  useEffect(() => {
+    if (scanning) setScanNotificationDismissed(false);
+  }, [scanning]);
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
@@ -218,21 +259,23 @@ export default function App() {
   const [playlistSubmenu, setPlaylistSubmenu] = useState(false);
   const [playlistSearch, setPlaylistSearch] = useState("");
   const [appMenu, setAppMenu] = useState(false);
+  const [playlistActionsOpen, setPlaylistActionsOpen] = useState(false);
   const [dialog, setDialog] = useState<{ target?: Track; playlist?: Playlist } | null>(null);
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; label: string; confirm: () => void } | null>(null);
   const [playlistName, setPlaylistName] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(() => Math.max(184, Math.min(360, stored<number>("sidebar-width", 248))));
   const [panelWidth, setPanelWidth] = useState(() => Math.max(250, Math.min(460, stored<number>("panel-width", 320))));
-  const [showPanel, setShowPanel] = useState(() => stored("show-now-playing", true));
+  const [showPanel, setShowPanel] = useState(() => stored("show-now-playing", false));
   const [panelView, setPanelView] = useState<"now-playing" | "downloads">("now-playing");
   const [compact, setCompact] = useState(() => stored("compact", false));
   const [sortBy, setSortBy] = useState<TrackSort>(() => {
-    const saved = stored<string>("collection-sort", "custom");
-    return trackSortOptions.some((option) => option.key === saved) ? saved as TrackSort : "custom";
+    const saved = stored<string>("collection-sort", "recentlyAdded");
+    if (saved === "title") return "titleAsc";
+    if (saved === "duration") return "durationAsc";
+    return trackSortOptions.some((option) => option.key === saved) ? saved as TrackSort : "recentlyAdded";
   });
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<"home" | "search" | "library" | "youtube" | "downloads">("home");
-  const [mobileHomeFilter, setMobileHomeFilter] = useState<"All" | "Folders" | "Albums">("All");
   const [mobileLibraryActionsOpen, setMobileLibraryActionsOpen] = useState(false);
   const [sidebarLibrarySearch, setSidebarLibrarySearch] = useState("");
   const [sidebarLibrarySort, setSidebarLibrarySort] = useState<"recent" | "az">("recent");
@@ -257,15 +300,18 @@ export default function App() {
   const [youtubeHasMore, setYoutubeHasMore] = useState(false);
   const [youtubeLoadingMore, setYoutubeLoadingMore] = useState(false);
   const [youtubeDownloads, setYoutubeDownloads] = useState<YoutubeDownload[]>([]);
+  const [unseenDownloadIds, setUnseenDownloadIds] = useState<string[]>([]);
+  const [downloadFeedback, setDownloadFeedback] = useState<DownloadFeedback | null>(null);
   const [globalYoutubeDownloadRequested, setGlobalYoutubeDownloadRequested] = useState<string[]>([]);
   const [globalYoutubeVisibleLimit, setGlobalYoutubeVisibleLimit] = useState(youtubeGlobalInitialResultLimit);
   const [globalYoutubeHasMore, setGlobalYoutubeHasMore] = useState(false);
   const [globalYoutubeLoadingMore, setGlobalYoutubeLoadingMore] = useState(false);
-  const [completedDownloadTrackIds, setCompletedDownloadTrackIds] = useState<Record<string, number[]>>({});
   const [zoomLevel, setZoomLevel] = useState(initialZoomLevel);
   const [draggedQueue, setDraggedQueue] = useState<number | null>(null);
   const [queueDrop, setQueueDrop] = useState<number | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
+  const downloadNavRef = useRef<HTMLButtonElement>(null);
+  const downloadFeedbackVersion = useRef(0);
   const lastStartedTrack = useRef<number | null>(null);
   const playbackRestoreStarted = useRef(false);
   const playbackRestoreComplete = useRef(false);
@@ -298,6 +344,8 @@ export default function App() {
     return () => window.removeEventListener("resize", closeOnResize);
   }, [menu, isAndroid]);
   const clearableYoutubeDownloads = youtubeDownloads.some(isFinishedYoutubeDownload);
+  const activeYoutubeDownloadCount = youtubeDownloads.filter((item) => item.status === "queued" || item.status === "downloading").length;
+  const mobileDownloadBadgeCount = Math.max(activeYoutubeDownloadCount, unseenDownloadIds.length);
   const selectedPlaylist = page.detail?.kind === "playlist" ? playlists.find((item) => item.id === page.detail?.key) : undefined;
   const addSongsSearchTerm = addSongsSearch.trim().toLocaleLowerCase();
   const youtubePlaylist = playlists.find((item) => item.name.trim().toLocaleLowerCase() === "youtube");
@@ -305,11 +353,11 @@ export default function App() {
 
   const navigate = useCallback((next: Page) => {
     setHistory((prior) => ({ entries: [...prior.entries.slice(0, prior.index + 1), next], index: prior.index + 1 }));
-    setInlineSearch(""); setMenu(null); setAppMenu(false); setSortMenuOpen(false); setSearchOpen(false);
+    setSearch(""); setInlineSearch(""); setMenu(null); setAppMenu(false); setSortMenuOpen(false); setSearchOpen(false);
   }, []);
   function travel(delta: number) {
     setHistory((prior) => ({ ...prior, index: Math.max(0, Math.min(prior.entries.length - 1, prior.index + delta)) }));
-    setInlineSearch(""); setMenu(null); setAppMenu(false); setSortMenuOpen(false); setSearchOpen(false);
+    setSearch(""); setInlineSearch(""); setMenu(null); setAppMenu(false); setSortMenuOpen(false); setSearchOpen(false);
   }
   const run = useCallback(async (action: () => Promise<unknown>) => {
     try { await action(); setPlayer(await api.state()); setMessage(""); }
@@ -317,7 +365,7 @@ export default function App() {
   }, []);
   useEffect(() => { if (player.volume > 0) lastAudibleVolume.current = player.volume; }, [player.volume]);
   function setVolume(volume: number) {
-    localStorage.setItem("michoplay-volume", JSON.stringify(volume));
+    saveStoredData("volume", JSON.stringify(volume));
     void run(() => api.volume(volume));
   }
   function toggleMute() {
@@ -382,7 +430,7 @@ export default function App() {
       setYoutubeFolderScanned(true);
       const newIds = scanned.filter((track) => track.rootPath === youtubeDirectory && !knownIds.has(track.id)).map((track) => track.id);
       if (newIds.length) setMessage(`Saved ${newIds.length} ${newIds.length === 1 ? "song" : "songs"} to Music/YouTube`);
-      return newIds;
+      return scanned;
     } catch (error) { setMessage(String(error)); return []; }
     finally { setScanning(false); }
   }, [youtubeDirectory, roots, tracks]);
@@ -399,6 +447,14 @@ export default function App() {
   useEffect(() => {
     void getVersion().then(setAppVersion).catch(() => {});
   }, []);
+  useEffect(() => {
+    if (!availableUpdate || deferredUpdatePrompt === availableUpdate) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDeferredUpdatePrompt(availableUpdate);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [availableUpdate, deferredUpdatePrompt]);
   useEffect(() => {
     if (!isTauri() || !appVersion) return;
     let active = true;
@@ -427,8 +483,7 @@ export default function App() {
           setAvailableUpdate(null);
           return;
         }
-        if (stored("dismissed-update-version", "") === latestVersion) setAvailableUpdate(null);
-        else setAvailableUpdate(latestVersion);
+        setAvailableUpdate(latestVersion);
       } catch {
         // Update checks are optional; stay quiet when offline or GitHub is unavailable.
       } finally {
@@ -448,7 +503,7 @@ export default function App() {
   }, [appVersion]);
   useEffect(() => {
     if (!isTauri()) return;
-    void api.volume(stored("volume", 0.75));
+    void api.volume(stored("volume", defaultVolume()));
     void api.autoplay(stored("autoplay", true));
     void api.equalizer(equalizerBands, equalizerEnabled);
     // Restore library and playback preferences once on launch.
@@ -507,6 +562,13 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [startupLoading]);
   useEffect(() => {
+    if (!downloadFeedback) return;
+    const timeout = window.setTimeout(() => {
+      setDownloadFeedback((current) => current?.key === downloadFeedback.key ? null : current);
+    }, 2200);
+    return () => window.clearTimeout(timeout);
+  }, [downloadFeedback]);
+  useEffect(() => {
     if (!isTauri()) return;
     let active = true;
     let unlisten: (() => void) | undefined;
@@ -516,10 +578,7 @@ export default function App() {
       setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => !items.some((item) => item.url === url && (item.status === "failed" || item.status === "cancelled"))));
       const newlyCompletedIds = items.filter((item) => item.status === "completed" && !completedYoutubeDownloads.current.has(item.id)).map((item) => item.id);
       items.filter((item) => item.status === "completed").forEach((item) => completedYoutubeDownloads.current.add(item.id));
-      if (newlyCompletedIds.length) void syncYoutubeLibrary().then((trackIds) => {
-        if (!trackIds.length) return;
-        setCompletedDownloadTrackIds((prior) => ({ ...prior, ...Object.fromEntries(newlyCompletedIds.map((id) => [id, trackIds])) }));
-      });
+      if (newlyCompletedIds.length) void syncYoutubeLibrary();
     };
     void api.youtubeDownloadsState().then((items) => {
       if (!active) return;
@@ -696,7 +755,7 @@ export default function App() {
     let active = true;
     const savePlaybackSession = (state: PlayerSnapshot) => {
       const queue = state.currentTrackId === null ? state.queue : [state.currentTrackId, ...state.queue];
-      localStorage.setItem("michoplay-playback-session", JSON.stringify({ currentTrackId: state.currentTrackId, queue, positionMs: state.positionMs, isPlaying: state.isPlaying } satisfies SavedPlaybackSession));
+      saveStoredData("playback-session", JSON.stringify({ currentTrackId: state.currentTrackId, queue, positionMs: state.positionMs, isPlaying: state.isPlaying } satisfies SavedPlaybackSession));
     };
     const flushPlaybackSession = () => {
       if (!playbackRestoreComplete.current || tracks.length === 0) return;
@@ -712,7 +771,7 @@ export default function App() {
         if (!playbackRestoreStarted.current && tracks.length > 0) {
           playbackRestoreStarted.current = true;
           const saved = stored<SavedPlaybackSession | null>("playback-session", null);
-          const available = new Set(tracks.map((track) => track.id));
+          const available = new Set(tracks.filter((track) => !hiddenTrackIds.includes(track.id)).map((track) => track.id));
           const queue = [...new Set((saved?.queue ?? []).filter((id) => available.has(id)))];
           if (state.currentTrackId === null && queue.length > 0 && saved) {
             const startId = saved.currentTrackId !== null && queue.includes(saved.currentTrackId) ? saved.currentTrackId : null;
@@ -747,8 +806,8 @@ export default function App() {
       window.removeEventListener("pagehide", flushPlaybackSession);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [tracks]);
-  useEffect(() => { localStorage.setItem("michoplay-library-roots", JSON.stringify(roots)); }, [roots]);
+  }, [tracks, hiddenTrackIds]);
+  useEffect(() => { saveStoredData("library-roots", JSON.stringify(roots)); }, [roots]);
   useEffect(() => {
     if (!sortMenuOpen) return;
     const onPointerDown = (event: globalThis.PointerEvent) => {
@@ -760,8 +819,8 @@ export default function App() {
     return () => { document.removeEventListener("pointerdown", onPointerDown); document.removeEventListener("keydown", onKeyDown); };
   }, [sortMenuOpen]);
   useEffect(() => {
-    localStorage.setItem("michoplay-zoom-level", JSON.stringify(zoomLevel));
-    localStorage.setItem("michoplay-zoom-level-customized", "true");
+    saveStoredData("zoom-level", JSON.stringify(zoomLevel));
+    saveStoredData("zoom-level-customized", "true");
     const applyZoom = () => {
       const scale = zoomLevel / 100;
       document.documentElement.style.setProperty("--app-zoom", String(scale));
@@ -789,10 +848,11 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isAndroid]);
-  useEffect(() => { localStorage.setItem("michoplay-favorites", JSON.stringify(favorites)); }, [favorites]);
-  useEffect(() => { localStorage.setItem("michoplay-playlists", JSON.stringify(playlists)); }, [playlists]);
-  useEffect(() => { localStorage.setItem("michoplay-listening-history", JSON.stringify(listeningHistory)); }, [listeningHistory]);
-  useEffect(() => { localStorage.setItem("michoplay-recent-searches", JSON.stringify(recentSearches)); }, [recentSearches]);
+  useEffect(() => { saveStoredData("favorites", JSON.stringify(favorites)); }, [favorites]);
+  useEffect(() => { saveStoredData("hidden-tracks", JSON.stringify(hiddenTrackIds)); }, [hiddenTrackIds]);
+  useEffect(() => { saveStoredData("playlists", JSON.stringify(playlists)); }, [playlists]);
+  useEffect(() => { saveStoredData("listening-history", JSON.stringify(listeningHistory)); }, [listeningHistory]);
+  useEffect(() => { saveStoredData("recent-searches", JSON.stringify(recentSearches)); }, [recentSearches]);
   useEffect(() => {
     if (!searchOpen) return;
     const onPointerDown = (event: globalThis.PointerEvent) => {
@@ -824,10 +884,10 @@ export default function App() {
       return prior.map((item) => item.trackId === player.currentTrackId ? { ...item, positionMs: player.positionMs, durationMs: player.durationMs || item.durationMs } : item);
     });
   }, [player.currentTrackId, player.positionMs, player.durationMs, player.isPlaying]);
-  useEffect(() => { localStorage.setItem("michoplay-sidebar-width", JSON.stringify(sidebarWidth)); }, [sidebarWidth]);
-  useEffect(() => { localStorage.setItem("michoplay-panel-width", JSON.stringify(panelWidth)); }, [panelWidth]);
-  useEffect(() => { localStorage.setItem("michoplay-show-now-playing", JSON.stringify(showPanel)); }, [showPanel]);
-  useEffect(() => { localStorage.setItem("michoplay-keep-screen-awake-in-full-mode", JSON.stringify(keepScreenAwake)); }, [keepScreenAwake]);
+  useEffect(() => { saveStoredData("sidebar-width", JSON.stringify(sidebarWidth)); }, [sidebarWidth]);
+  useEffect(() => { saveStoredData("panel-width", JSON.stringify(panelWidth)); }, [panelWidth]);
+  useEffect(() => { saveStoredData("show-now-playing", JSON.stringify(showPanel)); }, [showPanel]);
+  useEffect(() => { saveStoredData("keep-screen-awake-in-full-mode", JSON.stringify(keepScreenAwake)); }, [keepScreenAwake]);
   useEffect(() => {
     let active = true;
     type WakeLockSentinelLike = { release: () => Promise<void>; addEventListener?: (type: "release", listener: () => void) => void };
@@ -858,12 +918,12 @@ export default function App() {
       if (lock) void lock.release();
     };
   }, [fullMode, keepScreenAwake]);
-  useEffect(() => { localStorage.setItem("michoplay-compact", JSON.stringify(compact)); }, [compact]);
+  useEffect(() => { saveStoredData("compact", JSON.stringify(compact)); }, [compact]);
   useEffect(() => {
     const close = (event: globalThis.PointerEvent) => {
-      if (!(event.target as HTMLElement).closest(".action-menu, .menu-trigger")) { setMenu(null); setAppMenu(false); }
+      if (!(event.target as HTMLElement).closest(".action-menu, .menu-trigger, .playlist-actions-trigger")) { setMenu(null); setAppMenu(false); setPlaylistActionsOpen(false); }
     };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setMobileQueueOpen(false); setMenu(null); setAppMenu(false); setDialog(null); setConfirmation(null); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setMobileQueueOpen(false); setMenu(null); setAppMenu(false); setPlaylistActionsOpen(false); setDialog(null); setConfirmation(null); } };
     window.addEventListener("pointerdown", close); window.addEventListener("keydown", escape);
     return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); };
   }, []);
@@ -961,59 +1021,65 @@ export default function App() {
     const payloads = await Promise.all(supported.map(async (file) => ({ name: file.name, dataBase64: await fileToBase64(file) })));
     await importAudioPayloads(payloads);
   }
-  async function queueYoutubeDownload(selected: YoutubeSearchResult) {
+  function showMobileDownloadFeedback(source?: DOMRect, label = "Added to Downloads") {
+    const target = downloadNavRef.current?.getBoundingClientRect();
+    const x = Math.max(16, Math.min(window.innerWidth - 16, source ? source.left + source.width / 2 : window.innerWidth / 2));
+    const y = Math.max(24, Math.min(window.innerHeight - 80, source ? source.top + source.height / 2 : window.innerHeight / 2));
+    const targetX = target ? target.left + target.width / 2 : window.innerWidth * .9;
+    const targetY = target ? target.top + target.height / 2 : window.innerHeight - 44;
+    setDownloadFeedback({ key: ++downloadFeedbackVersion.current, label, x, y, targetX, targetY });
+  }
+  function openMobileDownloads() {
+    setMobileTab("downloads");
+    setUnseenDownloadIds([]);
+    setDownloadFeedback(null);
+  }
+  async function queueYoutubeDownload(selected: YoutubeSearchResult, source?: DOMRect) {
     setMessage("");
     try {
       const item = await api.youtubeDownloadEnqueue(selected.url, selected.title, selected.thumbnail, selected.isPlaylist);
       setYoutubeDownloads((prior) => prior.some((download) => download.id === item.id) ? prior : [...prior, item]);
-      if (isAndroid) setMobileTab("downloads");
+      if (isAndroid) {
+        setUnseenDownloadIds((prior) => prior.includes(item.id) ? prior : [...prior, item.id]);
+        showMobileDownloadFeedback(source);
+      }
       else { setPanelView("downloads"); setShowPanel(true); }
       return true;
     } catch (error) { setMessage(youtubeDownloadErrorText(String(error), selected.isPlaylist)); return false; }
   }
-  function requestYoutubeDownload(selected: YoutubeSearchResult, query?: string) {
+  function requestYoutubeDownload(selected: YoutubeSearchResult, query?: string, source?: DOMRect) {
     if (query) rememberSearch(query);
-    if (youtubeDownloads.some((download) => download.url === selected.url && !["failed", "cancelled"].includes(download.status))) {
-      if (isAndroid) setMobileTab("downloads");
+    const existing = youtubeDownloads.find((download) => download.url === selected.url && !["failed", "cancelled"].includes(download.status));
+    if (existing) {
+      if (isAndroid) {
+        setUnseenDownloadIds((prior) => prior.includes(existing.id) ? prior : [...prior, existing.id]);
+        showMobileDownloadFeedback(source, "Already in Downloads");
+      }
       return;
     }
     if (globalYoutubeDownloadRequested.includes(selected.url)) return;
     setGlobalYoutubeDownloadRequested((prior) => prior.includes(selected.url) ? prior : [...prior, selected.url]);
-    void queueYoutubeDownload(selected).then((queued) => {
+    void queueYoutubeDownload(selected, source).then((queued) => {
       if (!queued) setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => url !== selected.url));
     });
   }
 
   async function playYoutubeDownload(item: YoutubeDownload) {
-    const matchingIds = tracks.filter((track) => track.rootPath === youtubeDirectory && track.title.trim().toLocaleLowerCase() === item.title.trim().toLocaleLowerCase()).map((track) => track.id);
-    const trackIds = completedDownloadTrackIds[item.id] ?? matchingIds;
-    if (trackIds.length) { await run(() => api.playCollection(trackIds, trackIds[0])); return; }
-    const refreshedIds = await syncYoutubeLibrary();
-    if (refreshedIds.length) {
-      setCompletedDownloadTrackIds((prior) => ({ ...prior, [item.id]: refreshedIds }));
-      await run(() => api.playCollection(refreshedIds, refreshedIds[0]));
+    let matching = tracksForDownload(item, tracks, youtubeDirectory);
+    if (!matching.length) matching = tracksForDownload(item, await syncYoutubeLibrary(), youtubeDirectory);
+    if (matching.length) {
+      const trackIds = matching.map((track) => track.id);
+      await run(() => api.playCollection(trackIds, trackIds[0]));
     } else setMessage("The downloaded audio could not be found in Music/YouTube. Try refreshing the library.");
   }
   function openDownloadedTrackMenu(item: YoutubeDownload, event: MouseEvent) {
     event.preventDefault(); event.stopPropagation();
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const matchingIds = completedDownloadTrackIds[item.id] ?? tracks.filter((track) => track.rootPath === youtubeDirectory && track.title.trim().toLocaleLowerCase() === item.title.trim().toLocaleLowerCase()).map((track) => track.id);
-    const track = matchingIds.map((id) => trackMap.get(id)).find((candidate): candidate is Track => Boolean(candidate));
+    const track = tracksForDownload(item, tracks, youtubeDirectory)[0];
     if (track) { openTrackMenuAt(track, rect); return; }
     if (!youtubeDirectory) { setMessage("This download is still being added to your library. Try again shortly."); return; }
-    void api.refresh([...new Set([...roots, youtubeDirectory])]).then(async (scanned) => {
-      setRoots((prior) => [...new Set([...prior, youtubeDirectory])]);
-      setTracks(scanned); setPlayer(await api.state());
-      const downloaded = scanned.filter((candidate) => candidate.rootPath === youtubeDirectory);
-      const downloadedIds = downloaded.map((candidate) => candidate.id);
-      setCompletedDownloadTrackIds((prior) => ({ ...prior, [item.id]: downloadedIds }));
-      setPlaylists((prior) => {
-        const existing = prior.find((playlist) => playlist.name.trim().toLocaleLowerCase() === "youtube");
-        return existing
-          ? prior.map((playlist) => playlist.id === existing.id ? { ...playlist, trackIds: [...new Set([...playlist.trackIds, ...downloadedIds])] } : playlist)
-          : [{ id: "michoplay-youtube", name: "YouTube", trackIds: downloadedIds }, ...prior];
-      });
-      const target = downloaded.find((candidate) => candidate.title.trim().toLocaleLowerCase() === item.title.trim().toLocaleLowerCase()) ?? downloaded[0];
+    void syncYoutubeLibrary().then((scanned) => {
+      const target = tracksForDownload(item, scanned, youtubeDirectory)[0];
       if (target) openTrackMenuAt(target, rect);
       else setMessage("The downloaded song could not be found in Music/YouTube.");
     }).catch((error) => setMessage(String(error)));
@@ -1081,12 +1147,25 @@ export default function App() {
     setConfirmation({ title: "Remove music folder?", message: `“${folder}” will be removed from your library. The files on disk will stay untouched.`, label: "Remove folder", confirm: () => { void removeFolder(folder); } });
   }
   function confirmDeletePlaylist(playlist: Playlist) {
-    setConfirmation({ title: "Delete playlist?", message: `“${playlist.name}” and its song list will be removed. Your music files will stay untouched.`, label: "Delete playlist", confirm: () => { setPlaylists((prior) => prior.filter((item) => item.id !== playlist.id)); setHistory((prior) => ({ entries: [...prior.entries.slice(0, prior.index + 1), { section: "Playlists" }], index: prior.index + 1 })); setConfirmation(null); } });
+    setConfirmation({ title: "Delete playlist?", message: `“${playlist.name}” and its song list will be removed. Your music files will stay untouched.`, label: "Delete playlist", confirm: () => { setPlaylists((prior) => prior.filter((item) => item.id !== playlist.id)); setHistory((prior) => ({ entries: [...prior.entries.slice(0, prior.index + 1), { section: "Playlists" }], index: prior.index + 1 })); setConfirmation(null); setPlaylistActionsOpen(false); } });
   }
   function confirmRemovePlaylistTrack(playlist: Playlist, track: Track) {
     setConfirmation({ title: "Remove song from playlist?", message: `“${track.title}” will be removed from “${playlist.name}”.`, label: "Remove song", confirm: () => { setPlaylists((prior) => prior.map((item) => item.id === playlist.id ? { ...item, trackIds: item.trackIds.filter((id) => id !== track.id) } : item)); setConfirmation(null); setMenu(null); } });
   }
   function toggleFavorite(id: number) { setFavorites((prior) => prior.includes(id) ? prior.filter((item) => item !== id) : [...prior, id]); }
+  function hideTrack(track: Track) {
+    setHiddenTrackIds((prior) => prior.includes(track.id) ? prior : [...prior, track.id]);
+    setMenu(null);
+    void api.state().then(async (state) => {
+      const queuedIndexes = state.queue.flatMap((id, index) => id === track.id ? [index] : []).reverse();
+      for (const index of queuedIndexes) await api.queueRemove(index);
+      if (state.currentTrackId === track.id && state.isPlaying) await api.setPlaying(false);
+      setPlayer(await api.state());
+    }).catch((error) => setMessage(`Could not remove the hidden song from the queue: ${String(error)}`));
+  }
+  function restoreTrack(id: number) {
+    setHiddenTrackIds((prior) => prior.filter((trackId) => trackId !== id));
+  }
   function startResize(which: "sidebar" | "panel", event: ReactPointerEvent) {
     event.preventDefault(); const start = event.clientX; const width = which === "sidebar" ? sidebarWidth : panelWidth;
     const move = (next: globalThis.PointerEvent) => {
@@ -1098,79 +1177,91 @@ export default function App() {
   }
 
   const trackMap = useMemo(() => new Map(tracks.map((track) => [track.id, track])), [tracks]);
+  const hiddenTrackSet = useMemo(() => new Set(hiddenTrackIds), [hiddenTrackIds]);
+  const availableTracks = useMemo(() => tracks.filter((track) => !hiddenTrackSet.has(track.id)), [tracks, hiddenTrackSet]);
+  const hiddenTracks = useMemo(() => tracks.filter((track) => hiddenTrackSet.has(track.id)), [tracks, hiddenTrackSet]);
   const normalizedTrackSearch = useMemo(() => new Map(tracks.map((track) => [track.id, `${track.title} ${track.artist} ${track.album} ${track.folderName}`.toLocaleLowerCase()])), [tracks]);
   const favoriteSet = useMemo(() => new Set(favorites), [favorites]);
   const addSongsFilteredTracks = useMemo(() => {
     if (!addSongsPlaylistId) return [];
-    return tracks.filter((track) => !addSongsSearchTerm || normalizedTrackSearch.get(track.id)?.includes(addSongsSearchTerm));
-  }, [addSongsPlaylistId, tracks, addSongsSearchTerm, normalizedTrackSearch]);
+    return availableTracks.filter((track) => !addSongsSearchTerm || normalizedTrackSearch.get(track.id)?.includes(addSongsSearchTerm));
+  }, [addSongsPlaylistId, availableTracks, addSongsSearchTerm, normalizedTrackSearch]);
   const addSongsVisibleTracks = addSongsFilteredTracks.slice(0, addSongsVisibleLimit);
   const addSongsSelectedSet = useMemo(() => new Set(addSongsSelected), [addSongsSelected]);
   const addSongsAlreadyAddedSet = useMemo(() => new Set(playlists.find((item) => item.id === addSongsPlaylistId)?.trackIds ?? []), [playlists, addSongsPlaylistId]);
   const visibleQueue = queueExpanded ? player.queue : player.queue.slice(0, 80);
   const fullBrowsePlaylist = playlists.find((playlist) => playlist.id === fullBrowsePlaylistId) ?? null;
-  const fullBrowsePlaylistTracks = useMemo(() => fullBrowsePlaylist?.trackIds.flatMap((id) => trackMap.get(id) ? [trackMap.get(id)!] : []) ?? [], [fullBrowsePlaylist, trackMap]);
+  const fullBrowsePlaylistTracks = useMemo(() => fullBrowsePlaylist?.trackIds.flatMap((id) => !hiddenTrackSet.has(id) && trackMap.get(id) ? [trackMap.get(id)!] : []) ?? [], [fullBrowsePlaylist, trackMap, hiddenTrackSet]);
   const current = player.currentTrackId === null ? null : trackMap.get(player.currentTrackId) ?? null;
   const currentArtworkDataUrl = useArtwork(current?.artworkKey);
   const recentTracks = useMemo(() => listeningHistory
     .slice().sort((a, b) => b.lastPlayedAt - a.lastPlayedAt)
-    .flatMap((entry) => trackMap.has(entry.trackId) ? [trackMap.get(entry.trackId)!] : []), [listeningHistory, trackMap]);
-  const nowPlayingTrack = current ?? recentTracks[0] ?? null;
+    .flatMap((entry) => !hiddenTrackSet.has(entry.trackId) && trackMap.has(entry.trackId) ? [trackMap.get(entry.trackId)!] : []), [listeningHistory, trackMap, hiddenTrackSet]);
+  const nowPlayingTrack = current;
   const nowPlayingIsActive = current !== null && player.isPlaying;
-  const footerTrack = current ?? nowPlayingTrack;
+  const footerTrack = current ?? recentTracks[0] ?? null;
+  useEffect(() => {
+    if (current && player.isPlaying) {
+      setShowPanel(true);
+    }
+  }, [current?.id, player.isPlaying]);
   const folders = useMemo(() => {
     const groups = new Map<string, Collection>();
-    const rootsWithDirectSongs = new Set(tracks.filter((track) => track.folderPath === track.rootPath).map((track) => track.rootPath));
-    for (const track of tracks) for (const folder of track.folders) {
+    const rootsWithDirectSongs = new Set(availableTracks.filter((track) => track.folderPath === track.rootPath).map((track) => track.rootPath));
+    for (const track of availableTracks) for (const folder of track.folders) {
       // Include roots only when they have direct songs, and include every music-bearing descendant.
       if (folder.path === track.rootPath && !rootsWithDirectSongs.has(track.rootPath)) continue;
       if (!groups.has(folder.path)) groups.set(folder.path, { key: folder.path, title: folder.name, subtitle: folder.path, tracks: [] });
       groups.get(folder.path)!.tracks.push(track);
     }
     return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
-  }, [tracks]);
+  }, [availableTracks]);
   const albums = useMemo(() => {
     const groups = new Map<string, Collection>();
-    for (const track of tracks) { const key = albumKey(track); if (!groups.has(key)) groups.set(key, { key, title: track.album, subtitle: track.artist, tracks: [] }); groups.get(key)!.tracks.push(track); }
+    for (const track of availableTracks) { const key = albumKey(track); if (!groups.has(key)) groups.set(key, { key, title: track.album, subtitle: track.artist, tracks: [] }); groups.get(key)!.tracks.push(track); }
     return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
-  }, [tracks]);
+  }, [availableTracks]);
   const artists = useMemo(() => {
     const groups = new Map<string, Collection>();
-    for (const track of tracks) { if (!groups.has(track.artist)) groups.set(track.artist, { key: track.artist, title: track.artist, subtitle: "", tracks: [] }); groups.get(track.artist)!.tracks.push(track); }
+    for (const track of availableTracks) { if (!groups.has(track.artist)) groups.set(track.artist, { key: track.artist, title: track.artist, subtitle: "", tracks: [] }); groups.get(track.artist)!.tracks.push(track); }
     return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
-  }, [tracks]);
+  }, [availableTracks]);
   const sidebarPlaylistItems = useMemo(() => { const items = playlists.filter((item) => item.name.trim().toLocaleLowerCase() !== "youtube" && item.name.toLocaleLowerCase().includes(sidebarLibrarySearch.trim().toLocaleLowerCase())); if (sidebarLibrarySort === "az") items.sort((a, b) => a.name.localeCompare(b.name)); return items; }, [playlists, sidebarLibrarySearch, sidebarLibrarySort]);
   const collectionTracks = useMemo(() => {
     const detail = page.detail;
     if (page.section === "Recently Played") return recentTracks;
-    if (detail?.kind === "folder") return tracks.filter((track) => track.folders.some((folder) => folder.path === detail.key));
-    if (detail?.kind === "album") return tracks.filter((track) => albumKey(track) === detail.key);
-    if (detail?.kind === "artist") return tracks.filter((track) => track.artist === detail.key);
-    if (detail?.kind === "playlist") return (selectedPlaylist?.trackIds ?? []).flatMap((id) => trackMap.get(id) ? [trackMap.get(id)!] : []);
-    return page.section === "Favorites" ? tracks.filter((track) => favoriteSet.has(track.id)) : tracks;
-  }, [page, tracks, selectedPlaylist, trackMap, favoriteSet, recentTracks]);
+    if (detail?.kind === "folder") return availableTracks.filter((track) => track.folders.some((folder) => folder.path === detail.key));
+    if (detail?.kind === "album") return availableTracks.filter((track) => albumKey(track) === detail.key);
+    if (detail?.kind === "artist") return availableTracks.filter((track) => track.artist === detail.key);
+    if (detail?.kind === "playlist") return (selectedPlaylist?.trackIds ?? []).flatMap((id) => !hiddenTrackSet.has(id) && trackMap.get(id) ? [trackMap.get(id)!] : []);
+    return page.section === "Favorites" ? availableTracks.filter((track) => favoriteSet.has(track.id)) : availableTracks;
+  }, [page, availableTracks, selectedPlaylist, trackMap, favoriteSet, recentTracks, hiddenTrackSet]);
   const deferredInlineSearch = useDeferredValue(inlineSearch);
   const inlineSearchTerm = deferredInlineSearch.trim().toLocaleLowerCase();
   const visibleTracks = useMemo(() => collectionTracks.filter((track) => !inlineSearchTerm || normalizedTrackSearch.get(track.id)?.includes(inlineSearchTerm)), [collectionTracks, inlineSearchTerm, normalizedTrackSearch]);
+  const playlistSearchMatches = useMemo(() => inlineSearchTerm ? collectionTracks.filter((track) => normalizedTrackSearch.get(track.id)?.includes(inlineSearchTerm)).slice(0, 8) : [], [collectionTracks, inlineSearchTerm, normalizedTrackSearch]);
   const collectionDurationMs = useMemo(() => collectionTracks.reduce((sum, track) => sum + track.durationMs, 0), [collectionTracks]);
   const collectionHasCurrent = useMemo(() => collectionTracks.some((track) => track.id === player.currentTrackId), [collectionTracks, player.currentTrackId]);
   const sortedVisibleTracks = useMemo(() => {
     const sorted = [...visibleTracks];
-    if (sortBy === "title" || sortBy === "artist" || sortBy === "album") {
-      sorted.sort((a, b) => a[sortBy].localeCompare(b[sortBy], undefined, { numeric: true, sensitivity: "base" }));
-    } else if (sortBy === "recentlyAdded") sorted.sort((a, b) => b.addedAt - a.addedAt);
-    else if (sortBy === "releaseDate") sorted.sort((a, b) => (b.releaseDate || "").localeCompare(a.releaseDate || "") || a.title.localeCompare(b.title));
-    else if (sortBy === "duration") sorted.sort((a, b) => a.durationMs - b.durationMs || a.title.localeCompare(b.title));
+    const compareTitle = (a: Track, b: Track) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" });
+    if (sortBy === "titleAsc") sorted.sort(compareTitle);
+    else if (sortBy === "titleDesc") sorted.sort((a, b) => compareTitle(b, a));
+    else if (sortBy === "recentlyAdded") sorted.sort((a, b) => b.addedAt - a.addedAt || compareTitle(a, b));
+    else if (sortBy === "durationAsc") sorted.sort((a, b) => a.durationMs - b.durationMs || compareTitle(a, b));
+    else if (sortBy === "durationDesc") sorted.sort((a, b) => b.durationMs - a.durationMs || compareTitle(a, b));
     return sorted;
   }, [visibleTracks, sortBy]);
   const heading = selectedPlaylist?.name ?? page.detail?.title ?? page.section;
   const firstArt = useMemo(() => collectionTracks.find((track) => track.artworkKey)?.artworkKey, [collectionTracks]);
   const headingArt = useArtwork(firstArt);
   const listPage = Boolean(page.detail) || page.section === "Songs" || page.section === "Favorites" || page.section === "Recently Played";
+  const showAllPage = !listPage && ["Folders", "Playlists", "Albums", "Artists"].includes(page.section);
+  useEffect(() => { setPlaylistSearchOpen(false); }, [page.section, page.detail?.key]);
   const buildSearchResults = useCallback((value: string): GlobalSearchResult[] => {
     const query = value.trim().toLocaleLowerCase();
     if (!query) return [];
-    const tracksFound = tracks.filter((track) => normalizedTrackSearch.get(track.id)?.includes(query)).slice(0, 4).map((track): GlobalSearchResult => ({
+    const tracksFound = availableTracks.filter((track) => normalizedTrackSearch.get(track.id)?.includes(query)).slice(0, 4).map((track): GlobalSearchResult => ({
       type: "Song", title: track.title, subtitle: `Song · ${track.artist}`, artworkKey: track.artworkKey, trackId: track.id,
     }));
     const artistsFound = artists.filter((item) => item.title.toLocaleLowerCase().includes(query)).slice(0, 2).map((item): GlobalSearchResult => ({
@@ -1186,14 +1277,14 @@ export default function App() {
       page: { section: "Home", detail: { kind: "folder", key: item.key, title: item.title } },
     }));
     const playlistsFound = playlists.filter((playlist) => {
-      const playlistTracks = playlist.trackIds.flatMap((id) => trackMap.has(id) ? [trackMap.get(id)!] : []);
+      const playlistTracks = playlist.trackIds.flatMap((id) => !hiddenTrackSet.has(id) && trackMap.has(id) ? [trackMap.get(id)!] : []);
       return playlist.name.toLocaleLowerCase().includes(query) || playlistTracks.some((track) => normalizedTrackSearch.get(track.id)?.includes(query));
     }).slice(0, 2).map((playlist): GlobalSearchResult => {
-      const item: Collection = { key: playlist.id, title: playlist.name, subtitle: "", tracks: playlist.trackIds.flatMap((id) => trackMap.has(id) ? [trackMap.get(id)!] : []) };
+      const item: Collection = { key: playlist.id, title: playlist.name, subtitle: "", tracks: playlist.trackIds.flatMap((id) => !hiddenTrackSet.has(id) && trackMap.has(id) ? [trackMap.get(id)!] : []) };
       return { type: "Playlist", title: item.title, subtitle: `Playlist · ${item.tracks.length} ${item.tracks.length === 1 ? "song" : "songs"}`, artworkKey: item.tracks.find((track) => track.artworkKey)?.artworkKey ?? null, page: { section: "Playlists", detail: { kind: "playlist", key: item.key, title: item.title } } };
     });
     return [...tracksFound, ...artistsFound, ...albumsFound, ...foldersFound, ...playlistsFound];
-  }, [tracks, artists, albums, folders, playlists, trackMap, normalizedTrackSearch]);
+  }, [availableTracks, artists, albums, folders, playlists, trackMap, normalizedTrackSearch, hiddenTrackSet]);
   const deferredSearch = useDeferredValue(search);
   const searchResults = useMemo(() => buildSearchResults(deferredSearch), [buildSearchResults, deferredSearch]);
   const recentSearchResults = useMemo(() => recentSearches.map((query) => ({ query, result: buildSearchResults(query)[0] ?? null })), [recentSearches, buildSearchResults]);
@@ -1249,19 +1340,20 @@ export default function App() {
     return () => unlisten?.();
   }, [isAndroid, run]);
   useEffect(() => {
-    if (!isTauri()) return;
+    // Android's Rust playback loop publishes directly to the media service,
+    // including while the WebView is suspended in the background.
+    if (!isTauri() || isAndroid) return;
     let active = true;
     const update = async () => {
       if (!active) return;
       try {
         const state = await api.state();
         if (!active) return;
-        if (isAndroid && !current) await api.mediaStop();
-        else await api.mediaUpdate(current, state.isPlaying, state.durationMs, state.positionMs, currentArtworkDataUrl);
+        await api.mediaUpdate(current, state.isPlaying, state.durationMs, state.positionMs, currentArtworkDataUrl);
       } catch { /* The player can start before Android creates the service. */ }
     };
     void update();
-    const timer = window.setInterval(() => { void update(); }, isAndroid ? 4000 : 2000);
+    const timer = window.setInterval(() => { void update(); }, 2000);
     return () => { active = false; window.clearInterval(timer); };
   }, [isAndroid, current?.id, current?.title, current?.artist, currentArtworkDataUrl, player.isPlaying]);
   const playCollection = (track: Track, items = sortedVisibleTracks) => {
@@ -1286,11 +1378,6 @@ export default function App() {
   function openTrackMenuAt(track: Track, rect: DOMRect) {
     setMenu({ track, x: Math.max(8, Math.min(window.innerWidth - 235, rect.right - 225)), y: Math.max(8, Math.min(window.innerHeight - 390, rect.bottom + 5)) });
     setPlaylistSubmenu(false); setPlaylistSearch(""); setAppMenu(false);
-  }
-  function shareTrack(track: Track) {
-    const details = { title: track.title, text: `${track.title} — ${track.artist}` };
-    if (navigator.share) void navigator.share(details).catch(() => {});
-    else setMessage("Sharing isn't available on this device.");
   }
   async function shareMichoPlay() {
     const title = "MichoPlay";
@@ -1339,19 +1426,20 @@ export default function App() {
     if (!normalized) return;
     const next = [normalized, ...recentSearches.filter((item) => item.toLocaleLowerCase() !== normalized.toLocaleLowerCase())].slice(0, 8);
     setRecentSearches(next);
-    localStorage.setItem("michoplay-recent-searches", JSON.stringify(next));
+    saveStoredData("recent-searches", JSON.stringify(next));
   }
   function chooseSearchResult(result: GlobalSearchResult) {
     rememberSearch(search || result.title);
-    setSearch(""); setSearchOpen(false);
     if (result.trackId !== undefined) {
+      if (isAndroid) setSearch("");
+      setSearchOpen(!isAndroid);
       if (result.trackId === player.currentTrackId) void run(api.toggle);
       else void run(() => api.play(result.trackId!));
     }
     else if (result.page) { if (isAndroid) setMobileTab("home"); navigate(result.page); }
   }
   const playCounts = useMemo(() => new Map(listeningHistory.map((entry) => [entry.trackId, entry.playCount])), [listeningHistory]);
-  const rows = (items: Track[], emptyTitle = "No songs here") => <TrackRows items={items} player={player} favorites={favoriteSet} compact={compact} playCounts={playCounts} showPlayCount={page.section === "Recently Played"} onPlay={(track) => playCollection(track, items)} onFavorite={toggleFavorite} onMenu={openTrackMenu} emptyTitle={scanning ? "Scanning music…" : search || inlineSearch ? "No results" : emptyTitle} emptyMessage={scanning ? "Reading local audio and artwork." : search || inlineSearch ? "Try another search." : page.section === "Favorites" ? "Save songs with the heart in their action menu." : page.section === "Recently Played" ? "Songs will appear here after you play them." : page.detail?.kind === "playlist" ? "Add songs to this playlist from your library." : "Add a music folder to get started."} emptyAction={!scanning && !search && !inlineSearch && selectedPlaylist && selectedPlaylist.name.toLocaleLowerCase() !== "youtube" ? <button className="primary-button playlist-add-songs" onClick={() => { setAddSongsPlaylistId(selectedPlaylist.id); setAddSongsSelected([]); setAddSongsSearch(""); setAddSongsVisibleLimit(100); }}><Plus size={15}/>Add songs</button> : undefined} />;
+  const rows = (items: Track[], emptyTitle = "No songs here") => <TrackRows items={items} player={player} favorites={favoriteSet} compact={compact} rowHeight={isAndroid ? 64 : undefined} playCounts={playCounts} showPlayCount={page.section === "Recently Played"} onPlay={(track) => playCollection(track, items)} onFavorite={toggleFavorite} onMenu={openTrackMenu} emptyTitle={scanning ? "Scanning music…" : search || inlineSearch ? "No results" : emptyTitle} emptyMessage={scanning ? "Reading local audio and artwork." : search || inlineSearch ? "Try another search." : page.section === "Favorites" ? "Save songs with the heart in their action menu." : page.section === "Recently Played" ? "Songs will appear here after you play them." : page.detail?.kind === "playlist" ? "Add songs to this playlist from your library." : "Add a music folder to get started."} emptyAction={!scanning && !search && !inlineSearch && selectedPlaylist && selectedPlaylist.name.toLocaleLowerCase() !== "youtube" ? <button className="primary-button playlist-add-songs" onClick={() => { setAddSongsPlaylistId(selectedPlaylist.id); setAddSongsSelected([]); setAddSongsSearch(""); setAddSongsVisibleLimit(100); }}><Plus size={15}/>Add songs</button> : undefined} />;
   async function loadMoreYoutubeFolderResults() {
     const query = youtubeQuery.trim();
     if (!query || youtubeSearching || youtubeLoadingMore || !youtubeHasMore) return;
@@ -1404,11 +1492,11 @@ export default function App() {
       {globalYoutubeSearching ? Array.from({ length: 3 }, (_, index) => <div className="global-search-youtube-skeleton" key={index}><span/><i/><i/></div>) : globalYoutubeError ? <p className="global-search-status" role="status">{globalYoutubeError}</p> : globalYoutubeResults.length ? <>
         <div className="global-youtube-results-scroll" role="region" aria-label="YouTube search results">
           {globalYoutubeResults.slice(0, globalYoutubeVisibleLimit).map((result) => <div className="global-youtube-result-row" key={result.id}>
-            <button className="global-search-result global-youtube-result" role="option" aria-label={`Download ${result.title} from YouTube`} onClick={() => requestYoutubeDownload(result, search)}>
+            <button className="global-search-result global-youtube-result" role="option" aria-label={`Download ${result.title} from YouTube`} onClick={(event) => requestYoutubeDownload(result, search, event.currentTarget.getBoundingClientRect())}>
               {result.thumbnail ? <img className="cover global-search-cover" src={result.thumbnail} alt="" loading="lazy"/> : <span className="cover global-search-cover global-youtube-placeholder"><Youtube size={18}/></span>}
               <span className="search-result-copy"><strong>{result.title}</strong><small>YouTube · {result.isPlaylist ? "Playlist" : `${result.durationSeconds == null ? "Audio" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span>
             </button>
-            {!globalYoutubeDownloadRequested.includes(result.url) && !youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) && <button className="global-youtube-download" aria-label={`Download ${result.title}`} title="Download audio" onClick={() => requestYoutubeDownload(result, search)}><Download size={16}/></button>}
+            {!globalYoutubeDownloadRequested.includes(result.url) && !youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) && <button className="global-youtube-download" aria-label={`Download ${result.title}`} title="Download audio" onClick={(event) => requestYoutubeDownload(result, search, event.currentTarget.getBoundingClientRect())}><Download size={16}/></button>}
           </div>)}
         </div>
         {globalYoutubeHasMore && <button className="youtube-load-more global-youtube-load-more" disabled={globalYoutubeLoadingMore} onClick={() => void loadMoreGlobalYoutubeResults()}>{globalYoutubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}
@@ -1418,9 +1506,19 @@ export default function App() {
       const group = searchResults.filter((result) => result.type === type);
       return group.length ? <section className="global-search-group" key={type}><h2>{type === "Song" ? "Songs" : `${type}s`}</h2>{group.map((result) => <GlobalSearchResultButton key={`${result.type}-${result.title}-${result.subtitle}`} result={result} onClick={() => chooseSearchResult(result)} isPlaying={result.trackId === player.currentTrackId && player.isPlaying}/>)}</section> : null;
     }) : <div className="global-search-empty"><strong>No matches in your library for “{search}”</strong><span>Try a song, artist, album, folder, or playlist name.</span></div>}
-  </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); localStorage.removeItem("michoplay-recent-searches"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
+  </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); saveStoredData("recent-searches", "[]"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
 
   const submenuPlacement = menu && !isAndroid ? playlistSubmenuPlacement(menu.x) : "";
+  const updatePromptOpen = Boolean(availableUpdate && deferredUpdatePrompt !== availableUpdate);
+  const deferUpdatePrompt = () => { if (availableUpdate) setDeferredUpdatePrompt(availableUpdate); };
+  const openUpdateDownload = () => {
+    void openUrl(michoplayWebsiteUrl)
+      .then(deferUpdatePrompt)
+      .catch((error) => {
+        setMessage(`Could not open the MichoPlay website: ${String(error)}`);
+        deferUpdatePrompt();
+      });
+  };
   return <main ref={appFrameRef} className={`app-frame ${compact ? "compact" : ""} ${isAndroid ? "android-app" : "desktop-app"}`} style={{ "--sidebar-width": `${sidebarWidth}px`, "--panel-width": `${panelWidth}px` } as CSSProperties}>
     <svg className="mobile-svg-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="michoplay-brand-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#f5c6be"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="#d8eee4"/></linearGradient></defs></svg>
     {startupLoading && <div className="startup-loading" role="status" aria-live="polite" aria-label="Loading MichoPlay">
@@ -1440,33 +1538,25 @@ export default function App() {
       <nav className="nav-list" aria-label="Library">{navigation.map(({ label, icon: Icon }) => <Fragment key={label}><button className={`nav-item ${page.section === label && !(label === "Playlists" && isYoutubePlaylist) ? "active" : ""}`} aria-label={label} title={label} aria-current={page.section === label && !(label === "Playlists" && isYoutubePlaylist) ? "page" : undefined} onClick={() => { setSearch(""); navigate({ section: label }); }}><Icon size={18}/><span>{label}</span></button>{label === "Favorites" && !isAndroid && <button className={`nav-item ${isYoutubePlaylist ? "active" : ""}`} aria-label="YouTube" title="YouTube" aria-current={isYoutubePlaylist ? "page" : undefined} onClick={() => { const youtube = youtubePlaylist ?? { id: "michoplay-youtube", name: "YouTube", trackIds: [] }; if (!youtubePlaylist) setPlaylists((prior) => prior.some((item) => item.name.trim().toLocaleLowerCase() === "youtube") ? prior : [youtube, ...prior]); setSearch(""); navigate({ section: "Playlists", detail: { kind: "playlist", key: youtube.id, title: youtube.name } }); }}><Youtube size={18}/><span>YouTube</span></button>}</Fragment>)}</nav>
       <div className="sidebar-rule"/><div className="library-heading"><span className="side-label">Your Library</span><div className="library-heading-actions"><button className="icon-button small" aria-label="Create playlist" title="Create playlist" onClick={() => newPlaylist()}><Plus size={15}/></button><button className="icon-button small" aria-label="Open playlists" title="Open playlists" onClick={() => navigate({ section: "Playlists" })}><Maximize2 size={12}/></button></div></div>
       <div className="library-tools"><label className="library-search"><Search size={16}/><input aria-label="Search your library" placeholder="Search" value={sidebarLibrarySearch} onChange={(event) => setSidebarLibrarySearch(event.target.value)}/>{sidebarLibrarySearch && <button aria-label="Clear library search" onClick={() => setSidebarLibrarySearch("")}><X size={13}/></button>}</label><button className="library-sort" aria-label={`Sort ${sidebarLibrarySort === "recent" ? "recently added" : "alphabetically"}; click to change`} title="Change sort order" onClick={() => setSidebarLibrarySort((value) => value === "recent" ? "az" : "recent")}><span>{sidebarLibrarySort === "recent" ? "Recents" : "A–Z"}</span><List size={16}/></button></div>
-      <div className="sidebar-playlists" aria-live="polite">{sidebarPlaylistItems.map((playlist) => { const firstTrack = playlist.trackIds.map((id) => trackMap.get(id)).find((track): track is Track => Boolean(track)); const selected = selectedPlaylist?.id === playlist.id; return <button key={playlist.id} className={`library-item ${selected ? "selected" : ""}`} onClick={() => navigate({ section: "Playlists", detail: { kind: "playlist", key: playlist.id, title: playlist.name } })}>{firstTrack ? <Cover className="library-item-art" keys={[firstTrack.artworkKey]}/> : <span className="library-item-placeholder"><ListMusic size={20}/></span>}<span className="library-item-copy"><strong>{playlist.name}</strong><small className="library-item-meta"><ListMusic size={12}/><span className="library-item-kind">Playlist</span><span className="library-item-separator">·</span><span className="library-item-count">{playlist.trackIds.length} {playlist.trackIds.length === 1 ? "song" : "songs"}</span></small></span></button>})}{!sidebarPlaylistItems.length && <div className="library-empty">{sidebarLibrarySearch ? "No matching playlists" : "Create a playlist to keep songs together."}</div>}</div>
+      <div className="sidebar-playlists" aria-live="polite">{sidebarPlaylistItems.map((playlist) => { const firstTrack = playlist.trackIds.map((id) => trackMap.get(id)).find((track): track is Track => Boolean(track)); const selected = selectedPlaylist?.id === playlist.id; return <button key={playlist.id} className={`library-item ${selected ? "selected" : ""}`} onClick={() => navigate({ section: "Playlists", detail: { kind: "playlist", key: playlist.id, title: playlist.name } })}>{firstTrack ? <Cover className="library-item-art" keys={[firstTrack.artworkKey]}/> : <span className="library-item-placeholder"><ListMusic size={20}/></span>}<span className="library-item-copy"><strong>{playlist.name}</strong><small className="library-item-meta"><ListMusic size={12}/><span className="library-item-count">{playlist.trackIds.length} {playlist.trackIds.length === 1 ? "song" : "songs"}</span></small></span></button>})}{!sidebarPlaylistItems.length && <div className="library-empty">{sidebarLibrarySearch ? "No matching playlists" : "Create a playlist to keep songs together."}</div>}</div>
     </aside>
     <div className="resize-handle sidebar-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" onPointerDown={(event) => startResize("sidebar", event)}/>
     <section className="workspace">
-      {isAndroid && !mobilePlayerOpen && !listPage && page.section !== "Settings" && <header className="mobile-header">
+      {isAndroid && !mobilePlayerOpen && page.section !== "Settings" && !(listPage && (mobileTab === "home" || mobileTab === "youtube")) && <header className="mobile-header">
         <div className="mobile-header-title">
-          <span className="brand-mark"><AudioLines size={19}/></span>
+          {showAllPage ? <button className="mobile-header-back" aria-label="Back to Home" onClick={() => navigate({ section: "Home" })}><ChevronLeft size={24}/></button> : <span className="brand-mark"><AudioLines size={19}/></span>}
           <h1>{mobileTab === "downloads" ? "Downloads" : page.section === "Home" ? mobileTab === "home" ? "MichoPlay" : mobileTab === "search" ? "Search" : mobileTab === "youtube" ? "YouTube" : "Your Library" : page.section}</h1>
         </div>
         <div className="mobile-header-actions">
           {mobileTab === "home" && <button className="mobile-icon-button" aria-label="Search music" onClick={() => { setMobileTab("search"); setSearch(""); }}><Search size={24}/></button>}
           {mobileTab === "library" && <button className="mobile-icon-button" aria-label="Create playlist or import music" onClick={() => setMobileLibraryActionsOpen(true)}><Plus size={25}/></button>}
-          {mobileTab === "youtube" && <button className="mobile-icon-button" aria-label="Open downloads" onClick={() => setMobileTab("downloads")}><Download size={21}/></button>}
+          {mobileTab === "youtube" && <button className="mobile-icon-button" aria-label="Search YouTube" onClick={() => { setMobileTab("search"); setSearch(""); }}><Search size={24}/></button>}
           <button className="mobile-icon-button" aria-label="Settings" onClick={() => { setMobileTab("home"); navigate({ section: "Settings" }); }}><Settings2 size={20}/></button>
         </div>
       </header>}
       <header className="topbar"><div className="history-nav"><div className="app-menu-anchor"><button className="icon-button menu-trigger" aria-label="Application menu" aria-expanded={appMenu} onClick={() => { setAppMenu(!appMenu); setMenu(null); }}><MoreHorizontal size={22}/></button>{appMenu && <div className="action-menu app-menu"><button onClick={() => { chooseLibrarySource(); setAppMenu(false); }}><Plus size={15}/>Add music folder</button><button onClick={() => { void refresh(); setAppMenu(false); }}><RefreshCw size={15}/>Refresh library</button><button onClick={() => newPlaylist()}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><button onClick={() => navigate({ section: "Settings" })}><Settings2 size={15}/>Settings</button><button onClick={() => { setAboutOpen(true); setAppMenu(false); }}><AudioLines size={15}/>About MichoPlay</button></div>}</div><button className="icon-button" aria-label="Go back" disabled={history.index === 0} onClick={() => travel(-1)}><ChevronLeft size={24}/></button><button className="icon-button" aria-label="Go forward" disabled={history.index === history.entries.length - 1} onClick={() => travel(1)}><ChevronRight size={24}/></button></div><div className={`search-box global-search ${searchOpen ? "expanded" : ""}`} role="search"><Search size={17}/><input aria-label="Search all music" aria-expanded={searchOpen} aria-controls="global-search-results" placeholder="What do you want to play?" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { setSearch(event.target.value); setSearchOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") setSearchOpen(false); else if (event.key === "ArrowDown") { event.preventDefault(); document.querySelector<HTMLButtonElement>(".global-search-result")?.focus(); } else if (event.key === "Enter") event.preventDefault(); }}/>{search && <button className="icon-button" aria-label="Clear search" onClick={() => { setSearch(""); setSearchOpen(true); }}><X size={15}/></button>}{searchOpen && <div className="global-search-popover" id="global-search-results" role="listbox" aria-label="Search results">{globalSearchContent}</div>}</div><button className={`topbar-downloads ${showPanel && panelView === "downloads" ? "active" : ""}`} aria-label="Downloads" title="Downloads" onClick={() => { setPanelView("downloads"); setShowPanel(true); }}><Download size={18}/></button><button className={`topbar-settings ${page.section === "Settings" ? "active" : ""}`} aria-label="Settings" title="Settings" onClick={() => navigate({ section: "Settings" })}><Settings2 size={18}/></button></header>
       <div className={`work-area ${showPanel ? "with-panel" : "without-panel"}`}>
         <section className="content-scroll" aria-label={heading}>
-          {availableUpdate && <div className="update-notice" role="status">
-            <span className="update-notice-icon"><Download size={17}/></span>
-            <span className="update-notice-copy"><strong>MichoPlay {availableUpdate} is available</strong><small>Installed version {appVersion}</small></span>
-            <button className="update-download-button" onClick={() => { void openUrl(releasesPageUrl).catch((error) => setMessage(`Could not open the releases page: ${String(error)}`)); }}><Download size={14}/>Download</button>
-            <button className="icon-button update-dismiss" aria-label="Dismiss update notice" title="Remind me later" onClick={() => { localStorage.setItem("michoplay-dismissed-update-version", availableUpdate); setAvailableUpdate(null); }}><X size={15}/></button>
-          </div>}
-          {scanning && <div className="scan-banner" role="status"><span className="loading-indicator"/><span>{scanProgress?.phase ?? "Scanning music and artwork…"}{scanProgress?.phase === "Finding audio files" && scanProgress.processed ? ` · ${scanProgress.processed.toLocaleString()} found` : scanProgress?.total ? ` · ${scanProgress.processed.toLocaleString()} of ${scanProgress.total.toLocaleString()}` : ""}</span><button className="scan-cancel-button" onClick={() => void api.cancelScan().catch(() => {})}>Cancel</button></div>}
-          {message && <div className="status-message" role="status"><span>{message.includes("Refresh the folder") ? <>{message.split("Refresh the folder")[0]}<button className="inline-link" onClick={() => void refresh()}>Refresh the folder</button>{message.split("Refresh the folder")[1]}</> : message}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage("")}><X size={13}/></button></div>}
           {isAndroid && page.section === "Settings" ? mobileAboutOpen ? <MobileAboutPage version={appVersion} onBack={() => setMobileAboutOpen(false)} onOpenUrl={(url) => { void openUrl(url).catch((error) => setMessage(`Could not open the link: ${String(error)}`)); }} onShare={() => { void shareMichoPlay(); }} /> : <MobileSettingsPage
             roots={roots}
             player={player}
@@ -1476,44 +1566,62 @@ export default function App() {
             keepScreenAwake={keepScreenAwake}
             scanning={scanning}
             zoomLevel={zoomLevel}
+            hiddenTracks={hiddenTracks}
+            onRestoreTrack={restoreTrack}
             onBack={() => { setMobileTab("home"); if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}
             onKeepScreenAwake={setKeepScreenAwake}
             onEqualizer={onEqualizer => {
               setEqualizerBands(onEqualizer);
-              localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(onEqualizer));
+              saveStoredData("equalizer-bands", JSON.stringify(onEqualizer));
               return api.equalizer(onEqualizer, equalizerEnabled).catch((error) => setMessage(String(error)));
             }}
             onEqualizerPreview={(bands) => api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)))}
-            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
+            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); saveStoredData("equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
             onCompact={setCompact}
             onAdd={chooseLibrarySource}
             onRemove={confirmRemoveFolder}
             onRefresh={() => void refresh()}
-            onVolume={(volume) => { localStorage.setItem("michoplay-volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
+            onVolume={(volume) => { saveStoredData("volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
             onSleepTimer={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))}
             onZoom={setZoomLevel}
             onAbout={() => setMobileAboutOpen(true)}
-          /> : isAndroid && mobileTab === "downloads" ? <div className="mobile-downloads-page">
-            <div className="mobile-downloads-destination"><FolderOpen size={20}/><span><strong>Music / MichoPlay / YouTube</strong><small>Saved to your phone and added to Your Library</small></span></div>
-            <div className="section-title-row"><h2>Your downloads</h2><span>{youtubeDownloads.filter((item) => item.status === "downloading" || item.status === "queued").length} active</span>{clearableYoutubeDownloads && <button className="download-clear-button" onClick={() => void clearYoutubeDownloads()}><Trash2 size={14}/>Clear</button>}</div>
-            {youtubeDownloads.length ? <div className="mobile-download-list">{youtubeDownloads.map((item) => <article className={`mobile-download-row status-${item.status}`} key={item.id}>
-              <div className="mobile-download-art">{item.thumbnail && <img src={item.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/>}<Youtube size={16}/>{item.status === "completed" && <button aria-label={`Play ${item.title}`} onClick={() => void playYoutubeDownload(item)}><Play size={16} fill="currentColor"/></button>}</div>
-              <div className="mobile-download-copy"><strong>{item.title}</strong>{youtubeDownloadDescription(item) && <small>{youtubeDownloadDescription(item)}</small>}<div className="mobile-download-progress"><span style={{ width: `${item.percent ?? (item.status === "downloading" ? 5 : item.status === "completed" ? 100 : 0)}%` }}/></div>{item.status === "completed" && <small className="mobile-download-status">Completed</small>}</div>
-              <div className="mobile-download-actions">{item.status === "downloading" || item.status === "queued" ? <><button aria-label={`Pause ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "pause")}><Pause size={17}/></button><button aria-label={`Cancel ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "cancel")}><X size={17}/></button></> : item.status === "paused" || item.status === "failed" ? <><button aria-label={`${item.status === "failed" ? "Retry" : "Resume"} ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "resume")}><Play size={17}/></button><button aria-label={`Remove ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "remove")}><X size={17}/></button></> : <button className="download-menu-trigger" aria-label={`More actions for ${item.title}`} onClick={(event) => openDownloadedTrackMenu(item, event)}><MoreVertical size={19}/></button>}</div>
-            </article>)}</div> : <div className="mobile-download-empty"><Download size={30}/><strong>No downloads yet</strong><span>Find a song on YouTube and tap Download. It will appear here.</span><button className="primary-button" onClick={openYoutubePage}><Youtube size={16}/>Find music</button></div>}
-          </div> : isAndroid && mobileTab === "search" ? <div className="mobile-search-view">
-            <label className="mobile-search-input"><Search size={22}/><input aria-label="Search your library" placeholder="What do you want to listen to?" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}/>{search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={19}/></button>}</label>
-            {globalYoutubeSearchEnabled && search.trim().length >= 2 && <section className="mobile-youtube-search-results"><h2>YouTube</h2>{globalYoutubeSearching ? <div className="mobile-youtube-search-loading"><span/><span/><span/></div> : globalYoutubeResults.length ? <><div className="mobile-youtube-results-scroll" role="region" aria-label="YouTube search results">{globalYoutubeResults.slice(0, globalYoutubeVisibleLimit).map((result) => <article className="mobile-youtube-search-result" key={result.id}><button className="mobile-youtube-search-open" onClick={() => requestYoutubeDownload(result, search)}><span>{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy"/> : <Youtube size={18}/>}</span><span className="mobile-youtube-search-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · Size varies" : `${result.durationSeconds == null ? "YouTube" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span></button></article>)}</div>{globalYoutubeHasMore && <button className="youtube-load-more mobile-youtube-load-more" disabled={globalYoutubeLoadingMore} onClick={() => void loadMoreGlobalYoutubeResults()}>{globalYoutubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}</> : globalYoutubeError ? <p>{globalYoutubeError}</p> : <p>No YouTube matches.</p>}</section>}
-            {search.trim() ? searchResults.length ? <div className="mobile-search-results">{["Song", "Artist", "Album", "Folder", "Playlist"].map((type) => { const group = searchResults.filter((result) => result.type === type); return group.length ? <section className="mobile-result-group" key={type}><h2>{type === "Song" ? "Songs" : `${type}s`}</h2>{group.map((result) => <GlobalSearchResultButton key={`${result.type}-${result.title}-${result.subtitle}`} result={result} onClick={() => chooseSearchResult(result)} isPlaying={result.trackId === player.currentTrackId && player.isPlaying}/>)}</section> : null; })}</div> : <div className="mobile-search-empty"><strong>No matches for “{search}”</strong><span>Try a song, artist, album, folder, or playlist name.</span></div> : recentSearchResults.length ? <section className="mobile-result-group"><h2>Recent searches</h2>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); }} showPlayHover={false}/> : null)}</section> : <div className="mobile-search-empty"><strong>Search your music</strong><span>Find songs, artists, albums, folders, and playlists saved on this device.</span></div>}
-          </div> : isAndroid && mobileTab === "library" ? <div className="mobile-library-view">
-            <div className="mobile-library-list">
-              <button className="mobile-library-row" onClick={() => { setMobileTab("home"); navigate({ section: "Favorites" }); }}><Cover className="mobile-library-cover liked-cover" keys={favorites.flatMap((id) => trackMap.get(id)?.artworkKey ?? [])} icon={<Heart size={23} fill="currentColor"/>}/><span><strong>Liked Songs</strong><small>{favorites.length} songs · Playlist</small></span></button>
-              <button className="mobile-library-row" onClick={() => { setMobileTab("home"); navigate({ section: "Songs" }); }}><Cover className="mobile-library-cover" keys={coverKeys(tracks)} icon={<Music2 size={23}/>}/><span><strong>All Songs</strong><small>{tracks.length} {tracks.length === 1 ? "song" : "songs"} · Library</small></span></button>
-              {(() => { const youtube = youtubePlaylist ?? { id: "michoplay-youtube", name: "YouTube", trackIds: [] }; const item: Collection = { key: youtube.id, title: youtube.name, subtitle: "", tracks: youtube.trackIds.flatMap((id) => trackMap.get(id) ? [trackMap.get(id)!] : []) }; return <button className="mobile-library-row" onClick={() => { setMobileTab("home"); openDetail("Playlists", "playlist", item); }}><Cover className="mobile-library-cover" keys={coverKeys(item.tracks)} icon={<Youtube size={23}/>}/><span><strong>YouTube</strong><small>{item.tracks.length} songs · Playlist</small></span></button>; })()}
-              {playlists.filter((playlist) => playlist.name.trim().toLocaleLowerCase() !== "youtube").map((playlist) => { const item: Collection = { key: playlist.id, title: playlist.name, subtitle: "", tracks: playlist.trackIds.flatMap((id) => trackMap.get(id) ? [trackMap.get(id)!] : []) }; return <button className="mobile-library-row" key={playlist.id} onClick={() => { setMobileTab("home"); openDetail("Playlists", "playlist", item); }}><Cover className="mobile-library-cover" keys={coverKeys(item.tracks)} icon={<ListMusic size={23}/>}/><span><strong>{playlist.name}</strong><small>{item.tracks.length} songs · Playlist</small></span></button>; })}
-              {!playlists.some((playlist) => playlist.name.trim().toLocaleLowerCase() !== "youtube") && <Empty title="Your playlists will appear here" description="Create a playlist or import music using the + button."/>}
-            </div>
-          </div> : page.section === "Settings" ? <SettingsPage
+          /> : isAndroid && mobileTab === "downloads" ? <MobileDownloadsScreen
+            downloads={youtubeDownloads}
+            clearable={clearableYoutubeDownloads}
+            onClear={() => void clearYoutubeDownloads()}
+            onControl={(id, action) => void controlYoutubeDownload(id, action)}
+            onPlay={(item) => void playYoutubeDownload(item)}
+            onMenu={(item, event) => openDownloadedTrackMenu(item, event)}
+            onOpenYoutube={openYoutubePage}
+          /> : isAndroid && mobileTab === "search" ? <MobileSearchScreen
+            search={search}
+            onSearch={setSearch}
+            youtubeEnabled={globalYoutubeSearchEnabled}
+            youtubeSearching={globalYoutubeSearching}
+            youtubeResults={globalYoutubeResults}
+            youtubeLimit={globalYoutubeVisibleLimit}
+            youtubeHasMore={globalYoutubeHasMore}
+            youtubeLoadingMore={globalYoutubeLoadingMore}
+            youtubeError={globalYoutubeError}
+            onYoutubeDownload={(result, query, source) => requestYoutubeDownload(result, query, source)}
+            onLoadMoreYoutube={() => void loadMoreGlobalYoutubeResults()}
+            searchResults={searchResults}
+            recentSearchResults={recentSearchResults}
+            onChooseResult={chooseSearchResult}
+            onLoadRecentSearch={(query) => setSearch(query)}
+            currentTrackId={player.currentTrackId}
+            isPlaying={player.isPlaying}
+          /> : isAndroid && mobileTab === "library" ? <MobileLibraryScreen
+            favorites={favorites}
+            availableTracks={availableTracks}
+            playlists={playlists}
+            youtubePlaylist={youtubePlaylist}
+            trackMap={trackMap}
+            hiddenTrackSet={hiddenTrackSet}
+            onOpenFavorites={() => { setMobileTab("home"); navigate({ section: "Favorites" }); }}
+            onOpenSongs={() => { setMobileTab("home"); navigate({ section: "Songs" }); }}
+            onOpenPlaylist={(item) => { setMobileTab("home"); openDetail("Playlists", "playlist", item); }}
+          /> : page.section === "Settings" ? <SettingsPage
             roots={roots}
             player={player}
             equalizerBands={equalizerBands}
@@ -1523,36 +1631,38 @@ export default function App() {
             keepScreenAwake={keepScreenAwake}
             onKeepScreenAwake={setKeepScreenAwake}
             globalYoutubeSearchEnabled={globalYoutubeSearchEnabled}
-            onGlobalYoutubeSearch={(enabled) => { setGlobalYoutubeSearchEnabled(enabled); localStorage.setItem("michoplay-global-youtube-search-enabled", JSON.stringify(enabled)); }}
+            onGlobalYoutubeSearch={(enabled) => { setGlobalYoutubeSearchEnabled(enabled); saveStoredData("global-youtube-search-enabled", JSON.stringify(enabled)); }}
             scanning={scanning}
             mobile={isAndroid}
             zoomLevel={zoomLevel}
+            hiddenTracks={hiddenTracks}
+            onRestoreTrack={restoreTrack}
             onZoom={setZoomLevel}
             onEqualizer={(bands) => {
               setEqualizerBands(bands);
-              localStorage.setItem("michoplay-equalizer-bands", JSON.stringify(bands));
+              saveStoredData("equalizer-bands", JSON.stringify(bands));
               return api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)));
             }}
             onEqualizerPreview={(bands) => api.equalizer(bands, equalizerEnabled).catch((error) => setMessage(String(error)))}
-            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); localStorage.setItem("michoplay-equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
+            onEqualizerToggle={(enabled) => { setEqualizerEnabled(enabled); saveStoredData("equalizer-enabled", JSON.stringify(enabled)); void run(() => api.equalizer(equalizerBands, enabled)); }}
             onCompact={setCompact}
             onPanel={setShowPanel}
             onAdd={chooseLibrarySource}
             onRemove={confirmRemoveFolder}
             onRefresh={() => void refresh()}
-            onVolume={(volume) => { localStorage.setItem("michoplay-volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
-            onAutoplay={(enabled) => { localStorage.setItem("michoplay-autoplay", JSON.stringify(enabled)); void run(() => api.autoplay(enabled)); }}
+            onVolume={(volume) => { saveStoredData("volume", JSON.stringify(volume)); void run(() => api.volume(volume)); }}
+            onAutoplay={(enabled) => { saveStoredData("autoplay", JSON.stringify(enabled)); void run(() => api.autoplay(enabled)); }}
             onSleepTimer={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))}
             onDefaultPlayer={() => isAndroid ? setMessage("Open an audio file from your file manager, choose MichoPlay, then tap Always to make it the default.") : void run(() => api.setDefaultPlayer())}
           /> : <>
-            <div className={`collection-heading ${listPage ? "detail-heading" : ""} ${isYoutubePlaylist ? "youtube-detail-heading" : ""}`}>
-              {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/> }{isAndroid && listPage && <button className="mobile-detail-back" aria-label="Back" onClick={() => { if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}><ChevronLeft size={24}/></button>}<div className="heading-foreground">{listPage && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={page.detail?.kind === "folder" ? <FolderOpen size={40}/> : page.section === "Favorites" ? <Heart size={36} fill="currentColor"/> : <Music2 size={36}/>}/>}<div className="heading-copy"><h1>{heading}</h1><p>{isYoutubePlaylist ? "Download audio from YouTube by searching or pasting a link." : listPage ? `${collectionTracks.length} songs · ${time(collectionDurationMs)}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : `${playlists.length} playlists`}</p></div></div>
+            <div className={`collection-heading ${listPage ? "detail-heading" : ""}`}>
+              {headingArt && listPage && <div className="cover-backdrop" style={{ backgroundImage: `url("${headingArt}")` }}/> }{isAndroid && listPage && <button className="mobile-detail-back" aria-label="Back" onClick={() => { if (history.index > 0) travel(-1); else navigate({ section: "Home" }); }}><ChevronLeft size={24}/></button>}<div className="heading-foreground">{listPage && <Cover className="heading-cover" keys={coverKeys(collectionTracks)} icon={isYoutubePlaylist ? <Youtube size={36}/> : page.detail?.kind === "folder" ? <FolderOpen size={40}/> : page.section === "Favorites" ? <Heart size={36} fill="currentColor"/> : <Music2 size={36}/>}/>}<div className="heading-copy"><h1>{heading}</h1><p>{isYoutubePlaylist ? "Download audio from YouTube by searching or pasting a link." : listPage ? `${collectionTracks.length} ${collectionTracks.length === 1 ? "Song" : "Songs"} · ${headingTime(collectionDurationMs)}` : page.section === "Home" ? `${folders.length} music folders` : page.section === "Albums" ? `${albums.length} albums` : page.section === "Artists" ? `${artists.length} artists` : page.section === "Folders" ? `${folders.length} folders` : `${playlists.length} playlists`}</p>{page.detail?.kind === "playlist" && !isYoutubePlaylist && !isAndroid && <div className="playlist-heading-search"><label className="search-box playlist-search-control"><Search size={16}/><input aria-label={`Search ${heading}`} placeholder={`Search ${heading}`} value={inlineSearch} onFocus={() => setPlaylistSearchOpen(true)} onChange={(event) => { setInlineSearch(event.target.value); setPlaylistSearchOpen(true); }}/>{inlineSearch && <button aria-label="Clear playlist search" onClick={() => { setInlineSearch(""); setPlaylistSearchOpen(false); }}><X size={13}/></button>}</label>{playlistSearchOpen && inlineSearchTerm && <div className="playlist-heading-search-menu" role="listbox" aria-label={`Songs matching ${inlineSearch}`}>{playlistSearchMatches.map((track) => <button key={track.id} role="option" onMouseDown={(event) => event.preventDefault()} onClick={() => { void playCollection(track, collectionTracks); setPlaylistSearchOpen(false); }}><Cover keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button>)}{!playlistSearchMatches.length && <p>No songs found.</p>}</div>}</div>}</div></div>
             </div>
-          {listPage ? <>{isYoutubePlaylist && <section className="youtube-downloader youtube-downloader-featured" aria-label="Search YouTube audio">
+          {listPage ? <>{isYoutubePlaylist && <section className="youtube-downloader" aria-label="Search YouTube audio">
             <div className="youtube-search-header">
-            <form className="youtube-search-form" onSubmit={(event) => event.preventDefault()}>
-              <label className="youtube-search-input youtube-search-input-featured"><Youtube size={18}/><span className="youtube-search-input-copy"><strong>Search YouTube</strong><input type="text" aria-label="Search YouTube" placeholder="Song, artist, or paste a YouTube link" value={youtubeQuery} onChange={(event) => setYoutubeQuery(event.target.value)}/></span>{youtubeQuery && <button type="button" aria-label="Clear YouTube search" onClick={() => setYoutubeQuery("")}><X size={15}/></button>}</label>
-            </form>
+              <form className="youtube-search-form" onSubmit={(event) => event.preventDefault()}>
+                <label className="search-box youtube-global-search"><Search size={17}/><input type="text" aria-label="Search YouTube" placeholder="Song, artist, or paste a link" value={youtubeQuery} onChange={(event) => setYoutubeQuery(event.target.value)}/>{youtubeQuery && <button type="button" aria-label="Clear YouTube search" onClick={() => setYoutubeQuery("")}><X size={15}/></button>}</label>
+              </form>
             </div>
             {youtubeSearching ? <div className="youtube-search-grid" aria-label="Loading YouTube results">{Array.from({ length: 6 }, (_, index) => <div className="youtube-result-skeleton" key={index}><span/><div><i/><i/></div></div>)}</div>
               : youtubeSearchError ? <p className="youtube-search-empty" role="alert">{youtubeSearchError}</p>
@@ -1561,28 +1671,34 @@ export default function App() {
                   <span className="youtube-result-art">{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/> : <Youtube size={24}/>}<span className="youtube-result-duration">{result.durationSeconds === null ? (result.isPlaylist ? "Playlist" : "YouTube") : durationLabel(result.durationSeconds)}</span></span>
                   <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · MP3 audio" : `Video · ${youtubeResultSize(result)}`}</small></span>
                 </div>
-                <button className="youtube-result-download" aria-label={`Download ${result.title}`} onClick={() => requestYoutubeDownload(result)} disabled={globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status))}><Download size={14}/><span>{globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) ? "Queued" : "Download"}</span></button>
+                <button className="youtube-result-download" aria-label={`Download ${result.title}`} onClick={(event) => requestYoutubeDownload(result, undefined, event.currentTarget.getBoundingClientRect())} disabled={globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status))}><Download size={14}/><span>{globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) ? "Queued" : "Download"}</span></button>
               </article>)}</div></div>{youtubeHasMore && <button className="youtube-load-more" disabled={youtubeLoadingMore} onClick={() => void loadMoreYoutubeFolderResults()}>{youtubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}</>
               : youtubeQuery.trim() ? <p className="youtube-search-empty">No videos found. Try a different title or link.</p> : null}
           </section>}
-            <div className="collection-tools"><div className="play-actions"><button className={`primary-play ${collectionHasCurrent ? "is-playing" : ""}`} aria-label={collectionHasCurrent && player.isPlaying ? `Pause ${heading}` : `Play ${heading}`} disabled={!visibleTracks.length} onClick={() => { if (collectionHasCurrent) void run(api.toggle); else if (sortedVisibleTracks[0]) playCollection(sortedVisibleTracks[0]); }}>{collectionHasCurrent && player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button><button className={`round-button shuffle-control ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" disabled={!visibleTracks.length} onClick={() => void run(api.shuffle)}><Shuffle size={18}/></button>{selectedPlaylist && <><button className="text-action" onClick={() => newPlaylist(undefined, selectedPlaylist)}><Pencil size={14}/>Rename</button><button className="icon-button" aria-label="Delete playlist" onClick={() => confirmDeletePlaylist(selectedPlaylist)}><Trash2 size={16}/></button></>}</div><div className="collection-tools-right"><label className="collection-search"><Search size={15}/><input aria-label={`Search in ${heading}`} placeholder={`Search in ${heading}`} value={inlineSearch} onChange={(event) => setInlineSearch(event.target.value)}/>{inlineSearch && <button className="icon-button" aria-label="Clear collection search" onClick={() => setInlineSearch("")}><X size={14}/></button>}</label><div className="sort-control"><button className={`sort-trigger ${sortMenuOpen ? "open" : ""}`} aria-label={`Sort by ${trackSortOptions.find((option) => option.key === sortBy)?.label}`} aria-expanded={sortMenuOpen} onClick={() => setSortMenuOpen((open) => !open)}><span>{trackSortOptions.find((option) => option.key === sortBy)?.label}</span><ListFilter size={15}/></button>{sortMenuOpen && <div className="sort-menu" role="menu"><strong className="sort-menu-heading">Sort by</strong>{trackSortOptions.map((option) => <button key={option.key} role="menuitemradio" aria-checked={sortBy === option.key} className={`sort-menu-option ${sortBy === option.key ? "selected" : ""}`} onClick={() => { setSortBy(option.key); localStorage.setItem("michoplay-collection-sort", JSON.stringify(option.key)); setSortMenuOpen(false); }}><span>{option.label}</span>{sortBy === option.key && <Check size={15}/>}</button>)}<span className="sort-menu-divider"/><strong className="sort-menu-heading">View as</strong><button role="menuitemradio" aria-checked={!compact} className={`sort-menu-option view-option ${!compact ? "selected" : ""}`} onClick={() => { setCompact(false); setSortMenuOpen(false); }}><List size={15}/><span>List</span>{!compact && <Check size={15}/>}</button><button role="menuitemradio" aria-checked={compact} className={`sort-menu-option view-option ${compact ? "selected" : ""}`} onClick={() => { setCompact(true); setSortMenuOpen(false); }}><AlignJustify size={15}/><span>Compact</span>{compact && <Check size={15}/>}</button></div>}</div></div></div>{rows(sortedVisibleTracks, page.section === "Favorites" ? "No favorites yet" : page.section === "Recently Played" ? "No listening history yet" : "No songs here")}</> : page.section === "Home" ? <div className="home-section android-home">
-            {isAndroid && <div className="mobile-filter-row home-filter-row" role="tablist" aria-label="Home content filters">{(["All", "Folders", "Albums"] as const).map((filter) => <button key={filter} role="tab" aria-selected={mobileHomeFilter === filter} className={mobileHomeFilter === filter ? "selected" : ""} onClick={() => setMobileHomeFilter(filter)}>{filter}</button>)}</div>}
-            <div className="home-quick-grid home-library-links" aria-label="Library shortcuts">
-              <button className="home-quick-card" onClick={() => navigate({ section: "Albums" })}><Cover className="home-quick-art" keys={albums[0] ? coverKeys(albums[0].tracks) : []} icon={<Disc3 size={21}/>}/><span><strong>Albums</strong><small>{albums.length} {albums.length === 1 ? "album" : "albums"}</small></span></button>
-              <button className="home-quick-card" onClick={() => navigate({ section: "Artists" })}><Cover className="home-quick-art artist" keys={artists[0] ? coverKeys(artists[0].tracks) : []} icon={<AudioLines size={21}/>}/><span><strong>Artists</strong><small>{artists.length} {artists.length === 1 ? "artist" : "artists"}</small></span></button>
-              <button className="home-quick-card" onClick={() => navigate({ section: "Recently Played" })}><Cover className="home-quick-art" keys={recentTracks[0] ? [recentTracks[0].artworkKey] : []} icon={<Clock3 size={21}/>}/><span><strong>Recently Played</strong><small>{recentTracks.length} {recentTracks.length === 1 ? "song" : "songs"}</small></span></button>
-              <button className="home-quick-card" onClick={() => navigate({ section: "Playlists" })}><Cover className="home-quick-art" keys={playlists[0] ? playlists[0].trackIds.map((id) => trackMap.get(id)?.artworkKey ?? null) : []} icon={<ListMusic size={21}/>}/><span><strong>Playlists</strong><small>{playlists.length} {playlists.length === 1 ? "playlist" : "playlists"}</small></span></button>
-              <button className="home-quick-card home-youtube-link" onClick={openYoutubePage}><span className="home-quick-art"><Youtube size={22}/></span><span><strong>YouTube</strong><small>Search and download audio</small></span></button>
-            </div>
-            {mobileHomeFilter !== "Albums" && <><div className="section-title-row"><h2>Folders</h2><button className="text-action" disabled={scanning} onClick={chooseLibrarySource}><Plus size={15}/>{isAndroid ? "Import music" : "Add root folder"}</button></div><CollectionGrid collections={folders} kind="folder" onOpen={(item) => openDetail("Home", "folder", item)} onPlay={playCardCollection} isCurrentCollection={isCollectionCurrent} playingId={player.currentTrackId} isPlaying={player.isPlaying}/>{!folders.length && <Empty title={scanning ? "Scanning music…" : "Your music starts here"} description="Import audio files to build your library on this device." action={<button className="primary-button" disabled={scanning} onClick={chooseLibrarySource}><Plus size={15}/>Import audio</button>}/>}</>}
-          </div> : page.section === "Albums" ? <CollectionGrid collections={albums} kind="album" onOpen={(item) => openDetail("Albums", "album", item)}/> : page.section === "Artists" ? <CollectionGrid collections={artists} kind="artist" onOpen={(item) => openDetail("Artists", "artist", item)}/> : <div className="home-section"><div className="section-title-row"><h2>Your playlists</h2><button className="outline-button" onClick={() => newPlaylist()}><Plus size={15}/>Create playlist</button></div><CollectionGrid collections={playlists.map((item) => ({ key: item.id, title: item.name, subtitle: "", tracks: item.trackIds.flatMap((id) => trackMap.get(id) ? [trackMap.get(id)!] : []) }))} kind="playlist" onOpen={(item) => openDetail("Playlists", "playlist", item)} onPlay={playCardCollection} isCurrentCollection={isCollectionCurrent} playingId={player.currentTrackId} isPlaying={player.isPlaying}/>{!playlists.length && <Empty title="No playlists yet" description="Create a playlist and add songs from their action menu."/>}</div>}
+            <div className={`collection-tools ${playlistSearchOpen ? "mobile-collection-search-open" : ""}`}><div className="play-actions"><button className={`primary-play ${collectionHasCurrent ? "is-playing" : ""}`} aria-label={collectionHasCurrent && player.isPlaying ? `Pause ${heading}` : `Play ${heading}`} disabled={!visibleTracks.length} onClick={() => { if (collectionHasCurrent) void run(api.toggle); else if (sortedVisibleTracks[0]) playCollection(sortedVisibleTracks[0]); }}>{collectionHasCurrent && player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button><button className={`round-button shuffle-control ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" disabled={!visibleTracks.length} onClick={() => void run(api.shuffle)}><Shuffle size={18}/></button>{listPage && !isYoutubePlaylist && <button className="icon-button playlist-search-toggle" aria-label={playlistSearchOpen ? "Hide playlist search" : "Search playlist"} aria-expanded={playlistSearchOpen} onClick={() => setPlaylistSearchOpen((open) => !open)}><Search size={18}/></button>}</div><div className="collection-tools-right"><label className="collection-search"><Search size={15}/><input aria-label={`Search in ${heading}`} placeholder={`Search in ${heading}`} value={inlineSearch} onChange={(event) => setInlineSearch(event.target.value)}/>{inlineSearch && <button className="icon-button" aria-label="Clear collection search" onClick={() => setInlineSearch("")}><X size={14}/></button>}</label><div className="sort-control"><button className={`sort-trigger ${sortMenuOpen ? "open" : ""}`} aria-label={`Sort by ${trackSortOptions.find((option) => option.key === sortBy)?.label}`} aria-expanded={sortMenuOpen} onClick={() => setSortMenuOpen((open) => !open)}><span>{trackSortOptions.find((option) => option.key === sortBy)?.label}</span><ListFilter size={15}/></button>{sortMenuOpen && <div className="sort-menu" role="menu"><strong className="sort-menu-heading">Sort by</strong>{trackSortOptions.map((option) => <button key={option.key} role="menuitemradio" aria-checked={sortBy === option.key} className={`sort-menu-option ${sortBy === option.key ? "selected" : ""}`} onClick={() => { setSortBy(option.key); saveStoredData("collection-sort", JSON.stringify(option.key)); setSortMenuOpen(false); }}><span>{option.label}</span>{sortBy === option.key && <Check size={15}/>}</button>)}<span className="sort-menu-divider"/><strong className="sort-menu-heading">View as</strong><button role="menuitemradio" aria-checked={!compact} className={`sort-menu-option view-option ${!compact ? "selected" : ""}`} onClick={() => { setCompact(false); setSortMenuOpen(false); }}><List size={15}/><span>List</span>{!compact && <Check size={15}/>}</button><button role="menuitemradio" aria-checked={compact} className={`sort-menu-option view-option ${compact ? "selected" : ""}`} onClick={() => { setCompact(true); setSortMenuOpen(false); }}><AlignJustify size={15}/><span>Compact</span>{compact && <Check size={15}/>}</button></div>}</div>{selectedPlaylist && selectedPlaylist.name.toLocaleLowerCase() !== "youtube" && <div className="playlist-actions-wrap"><button className="icon-button playlist-actions-trigger" aria-label="Playlist actions" aria-expanded={playlistActionsOpen} onClick={() => setPlaylistActionsOpen((open) => !open)}><MoreVertical size={20}/></button>{playlistActionsOpen && <div className="action-menu playlist-actions-menu" role="menu"><button role="menuitem" onClick={() => { setPlaylistActionsOpen(false); setAddSongsPlaylistId(selectedPlaylist.id); setAddSongsSelected([]); setAddSongsSearch(""); setAddSongsVisibleLimit(100); }}><Plus size={15}/>Add songs</button><button role="menuitem" onClick={() => { setPlaylistActionsOpen(false); newPlaylist(undefined, selectedPlaylist); }}><Pencil size={15}/>Rename playlist</button><div className="menu-separator"/><button role="menuitem" onClick={() => { setPlaylistActionsOpen(false); confirmDeletePlaylist(selectedPlaylist); }}><Trash2 size={15}/>Delete playlist</button></div>}</div>}</div></div>{rows(sortedVisibleTracks, page.section === "Favorites" ? "No favorites yet" : page.section === "Recently Played" ? "No listening history yet" : "No songs here")}</> : page.section === "Home" ? <HomeScreen
+              albums={albums}
+              artists={artists}
+              availableTracks={availableTracks}
+              folders={folders}
+              isScanning={scanning}
+              navigate={(section) => navigate({ section })}
+              openYoutube={openYoutubePage}
+              chooseLibrarySource={chooseLibrarySource}
+              openFolder={(item) => openDetail("Home", "folder", item)}
+              openAlbum={(item) => openDetail("Albums", "album", item)}
+              openArtist={(item) => openDetail("Artists", "artist", item)}
+            /> : page.section === "Albums" ? <CollectionGrid collections={albums} kind="album" onOpen={(item) => openDetail("Albums", "album", item)}/> : page.section === "Artists" ? <CollectionGrid collections={artists} kind="artist" onOpen={(item) => openDetail("Artists", "artist", item)}/> : page.section === "Folders" ? <div className="home-section"><div className="section-title-row"><h2>Folders</h2><button className="outline-button" disabled={scanning} onClick={chooseLibrarySource}><Plus size={15}/>Add folder</button></div><CollectionGrid collections={folders} kind="folder" onOpen={(item) => openDetail("Home", "folder", item)} onPlay={playCardCollection} isCurrentCollection={isCollectionCurrent} playingId={player.currentTrackId} isPlaying={player.isPlaying}/>{!folders.length && <Empty title={scanning ? "Scanning music…" : "No folders yet"} description="Add a music folder to browse its songs."/>}</div> : <div className="home-section"><div className="section-title-row"><h2>Your playlists</h2><button className="outline-button" onClick={() => newPlaylist()}><Plus size={15}/>Create playlist</button></div><CollectionGrid collections={playlists.map((item) => ({ key: item.id, title: item.name, subtitle: "", tracks: item.trackIds.flatMap((id) => !hiddenTrackSet.has(id) && trackMap.get(id) ? [trackMap.get(id)!] : []) }))} kind="playlist" onOpen={(item) => openDetail("Playlists", "playlist", item)} onPlay={playCardCollection} isCurrentCollection={isCollectionCurrent} playingId={player.currentTrackId} isPlaying={player.isPlaying}/>{!playlists.length && <Empty title="No playlists yet" description="Create a playlist and add songs from their action menu."/>}</div>}
           </>}
         </section>
         {showPanel && <><div className="resize-handle panel-resize" role="separator" aria-orientation="vertical" aria-label="Resize side panel" onPointerDown={(event) => startResize("panel", event)}/><aside className="now-panel" aria-label={panelView === "downloads" ? "Downloads" : "Now playing and queue"}>
           <div className="now-panel-head"><button className="icon-button now-panel-close" aria-label="Hide side panel" title="Hide side panel" onClick={() => setShowPanel(false)}><PanelRightClose size={16}/></button><div className="side-panel-tabs" role="tablist" aria-label="Side panel"><button role="tab" aria-selected={panelView === "now-playing"} className={panelView === "now-playing" ? "selected" : ""} onClick={() => setPanelView("now-playing")}>Now playing</button><button role="tab" aria-selected={panelView === "downloads"} className={panelView === "downloads" ? "selected" : ""} onClick={() => setPanelView("downloads")}>Downloads{youtubeDownloads.some((item) => item.status === "downloading" || item.status === "queued") && <span className="download-tab-count">{youtubeDownloads.filter((item) => item.status === "downloading" || item.status === "queued").length}</span>}</button></div><div className="now-panel-tools">{panelView === "now-playing" ? <button className="icon-button" aria-label="More options for current song" title="More options" disabled={!nowPlayingTrack} onClick={(event) => { if (nowPlayingTrack) openTrackMenu(nowPlayingTrack, event); }}><MoreHorizontal size={18}/></button> : null}</div></div>
-          {panelView === "downloads" ? <div className="download-manager" aria-live="polite"><div className="download-manager-heading"><strong>Your downloads</strong><span>{youtubeDownloads.filter((item) => item.status === "downloading" || item.status === "queued").length} active</span>{clearableYoutubeDownloads && <button className="download-clear-button" onClick={() => void clearYoutubeDownloads()}><Trash2 size={13}/>Clear</button>}</div>{youtubeDownloads.length ? youtubeDownloads.map((item) => <article className={`download-item status-${item.status}`} key={item.id}><div className="download-item-main"><div className="download-item-art">{item.thumbnail && <img src={item.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/>}<Youtube size={17}/>{item.status === "completed" && <button className="download-art-play" aria-label={`Play ${item.title}`} title="Play downloaded audio" onClick={() => void playYoutubeDownload(item)}><Play size={15} fill="currentColor"/></button>}</div><div className="download-item-copy"><strong>{item.title}</strong>{youtubeDownloadDescription(item) && <small>{youtubeDownloadDescription(item)}</small>}</div></div><div className="download-item-progress"><span style={{ width: `${item.percent ?? (item.status === "downloading" ? 5 : 0)}%` }}/></div><div className="download-item-actions"><span className={`download-status-label ${item.status}`}>{item.status === "completed" ? "Completed" : item.status}</span>{item.status === "completed" ? <button className="icon-button download-menu-trigger" aria-label={`More actions for ${item.title}`} title={`More actions for ${item.title}`} onClick={(event) => openDownloadedTrackMenu(item, event)}><MoreVertical size={16}/></button> : <>{item.status === "downloading" || item.status === "queued" ? <button className="icon-button" aria-label={`Pause ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "pause")}><Pause size={14}/></button> : item.status === "paused" || item.status === "failed" ? <button className="icon-button" aria-label={`${item.status === "failed" ? "Retry" : "Resume"} ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "resume")}><Play size={14}/></button> : null}{["queued", "downloading", "paused"].includes(item.status) ? <button className="icon-button" aria-label={`Cancel ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "cancel")}><X size={14}/></button> : <button className="icon-button" aria-label={`Remove ${item.title} from downloads`} onClick={() => void controlYoutubeDownload(item.id, "remove")}><X size={14}/></button>}</>}</div></article>) : <div className="download-manager-empty"><Download size={27}/><strong>No downloads yet</strong><span>Choose a video from YouTube search to add it here.</span></div>}</div> : <>{nowPlayingTrack ? <div className={`now-track ${nowPlayingIsActive ? "is-active" : ""}`}><Cover className="now-cover" keys={[nowPlayingTrack.artworkKey]}/><div className="now-title"><div className="now-track-copy"><strong>{nowPlayingTrack.title}</strong><span>{nowPlayingTrack.artist}</span></div><button className={`row-action visible ${favorites.includes(nowPlayingTrack.id) ? "selected" : ""}`} aria-label="Toggle favorite" onClick={() => toggleFavorite(nowPlayingTrack.id)}><Heart size={17} fill={favorites.includes(nowPlayingTrack.id) ? "currentColor" : "none"}/></button></div></div> : <div className="now-empty"><strong>Nothing playing</strong><span>Choose a song from your library.</span></div>}<div className="queue-hint"><ListMusic size={16}/><span>Up next</span><span className="queue-empty">{player.queue.length} songs</span></div><div className="queue-list">{visibleQueue.map((id, index) => { const track = trackMap.get(id); return track ? <div key={id} draggable className={`queue-row ${draggedQueue === index ? "dragging" : ""} ${queueDrop === index ? "drop-target" : ""} ${player.priorityQueue.includes(id) ? "priority" : ""}`} onDragStart={(event) => { setDraggedQueue(index); event.dataTransfer.setData("application/michoplay-queue", String(index)); event.dataTransfer.effectAllowed = "move"; }} onDragOver={(event) => { if (draggedQueue !== null) { event.preventDefault(); setQueueDrop(index); } }} onDrop={(event) => { event.preventDefault(); if (draggedQueue !== null && draggedQueue !== index) void run(() => api.queueMove(draggedQueue, index)); setDraggedQueue(null); setQueueDrop(null); }} onDragEnd={() => { setDraggedQueue(null); setQueueDrop(null); }}><GripVertical className="queue-grip" size={13}/><button className="queue-song" onClick={() => void run(() => api.play(id))}><Cover className="queue-cover" keys={[track.artworkKey]}/><span><b>{track.title}</b><small>{track.artist}</small></span></button><div className="queue-actions"><button className="icon-button" aria-label={`Move ${track.title} up`} disabled={index === 0} onClick={() => void run(() => api.queueMove(index, index - 1))}><ChevronUp size={13}/></button><button className="icon-button" aria-label={`Move ${track.title} down`} disabled={index === player.queue.length - 1} onClick={() => void run(() => api.queueMove(index, index + 1))}><ChevronDown size={13}/></button><button className="icon-button" aria-label={`Remove ${track.title} from queue`} onClick={() => void run(() => api.queueRemove(index))}><X size={13}/></button></div></div> : null; })}</div>{!queueExpanded && player.queue.length > visibleQueue.length && <button className="queue-expand-button" onClick={() => setQueueExpanded(true)}>Show all {player.queue.length} queued songs</button>}{queueExpanded && player.queue.length > 80 && <button className="queue-expand-button" onClick={() => setQueueExpanded(false)}>Show fewer queued songs</button>}{!player.queue.length && <p className="queue-notice">Add songs to the queue from their action menu.</p>}</>}</aside></>}
+          {panelView === "downloads" ? <div className="download-manager" aria-live="polite"><div className="download-manager-heading"><strong>Your downloads</strong><span>{youtubeDownloads.filter((item) => item.status === "downloading" || item.status === "queued").length} active</span>{clearableYoutubeDownloads && <button className="download-clear-button" onClick={() => void clearYoutubeDownloads()}><Trash2 size={13}/>Clear</button>}</div>{youtubeDownloads.length ? youtubeDownloads.map((item) => <article className={`download-item status-${item.status}`} key={item.id}><div className="download-item-main"><div className="download-item-art">{item.thumbnail && <img src={item.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/>}<Youtube size={17}/>{item.status === "completed" && <button className="download-art-play" aria-label={`Play ${item.title}`} title="Play downloaded audio" onClick={() => void playYoutubeDownload(item)}><Play size={15} fill="currentColor"/></button>}</div><div className="download-item-copy"><strong>{item.title}</strong>{youtubeDownloadDescription(item) && <small>{youtubeDownloadDescription(item)}</small>}</div></div><div className="download-item-progress"><span style={{ width: `${item.percent ?? (item.status === "downloading" ? 5 : 0)}%` }}/></div><div className="download-item-actions"><span className={`download-status-label ${item.status}`}>{item.status === "completed" ? "Completed" : item.status}</span>{item.status === "completed" ? <button className="icon-button download-menu-trigger" aria-label={`More actions for ${item.title}`} title={`More actions for ${item.title}`} onClick={(event) => openDownloadedTrackMenu(item, event)}><MoreVertical size={16}/></button> : <>{item.status === "downloading" || item.status === "queued" ? <button className="icon-button" aria-label={`Pause ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "pause")}><Pause size={14}/></button> : item.status === "paused" || item.status === "failed" ? <button className="icon-button" aria-label={`${item.status === "failed" ? "Retry" : "Resume"} ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "resume")}><Play size={14}/></button> : null}{["queued", "downloading", "paused"].includes(item.status) ? <button className="icon-button" aria-label={`Cancel ${item.title}`} onClick={() => void controlYoutubeDownload(item.id, "cancel")}><X size={14}/></button> : <button className="icon-button" aria-label={`Remove ${item.title} from downloads`} onClick={() => void controlYoutubeDownload(item.id, "remove")}><X size={14}/></button>}</>}</div></article>) : <div className="download-manager-empty"><Download size={27}/><strong>No downloads yet</strong><span>Choose a video from YouTube search to add it here.</span></div>}</div> : <>{nowPlayingTrack ? <div className={`now-track ${nowPlayingIsActive ? "is-active" : ""}`}><Cover className="now-cover" keys={[nowPlayingTrack.artworkKey]}/><div className="now-title"><div className="now-track-copy"><strong>{nowPlayingTrack.title}</strong><span>{nowPlayingTrack.artist}</span></div><button className={`row-action visible ${favorites.includes(nowPlayingTrack.id) ? "selected" : ""}`} aria-label="Toggle favorite" onClick={() => toggleFavorite(nowPlayingTrack.id)}><Heart size={17} fill={favorites.includes(nowPlayingTrack.id) ? "currentColor" : "none"}/></button></div></div> : <div className="now-empty"><span className="now-empty-icon"><AudioLines size={23}/></span><div className="now-empty-copy"><strong>Ready when you are</strong><span>Pick a song from your library to start listening.</span></div><button className="now-empty-action" onClick={() => navigate({ section: "Songs" })}><Music2 size={14}/>Browse songs<ArrowRight size={14}/></button></div>}<div className="queue-hint"><ListMusic size={16}/><span>Up next</span><span className="queue-empty">{player.queue.length} songs</span></div><div className="queue-list">{visibleQueue.map((id, index) => { const track = trackMap.get(id); return track ? <div key={id} draggable className={`queue-row ${draggedQueue === index ? "dragging" : ""} ${queueDrop === index ? "drop-target" : ""} ${player.priorityQueue.includes(id) ? "priority" : ""}`} onDragStart={(event) => { setDraggedQueue(index); event.dataTransfer.setData("application/michoplay-queue", String(index)); event.dataTransfer.effectAllowed = "move"; }} onDragOver={(event) => { if (draggedQueue !== null) { event.preventDefault(); setQueueDrop(index); } }} onDrop={(event) => { event.preventDefault(); if (draggedQueue !== null && draggedQueue !== index) void run(() => api.queueMove(draggedQueue, index)); setDraggedQueue(null); setQueueDrop(null); }} onDragEnd={() => { setDraggedQueue(null); setQueueDrop(null); }}><GripVertical className="queue-grip" size={13}/><button className="queue-song" onClick={() => void run(() => api.play(id))}><Cover className="queue-cover" keys={[track.artworkKey]}/><span className="queue-song-copy"><span className="queue-label queue-label-title">{track.title}</span><span className="queue-label queue-label-artist">{track.artist}</span></span></button><div className="queue-actions"><button className="icon-button" aria-label={`Move ${track.title} up`} disabled={index === 0} onClick={() => void run(() => api.queueMove(index, index - 1))}><ChevronUp size={13}/></button><button className="icon-button" aria-label={`Move ${track.title} down`} disabled={index === player.queue.length - 1} onClick={() => void run(() => api.queueMove(index, index + 1))}><ChevronDown size={13}/></button><button className="icon-button" aria-label={`Remove ${track.title} from queue`} onClick={() => void run(() => api.queueRemove(index))}><X size={13}/></button></div></div> : null; })}</div>{!queueExpanded && player.queue.length > visibleQueue.length && <button className="queue-expand-button" onClick={() => setQueueExpanded(true)}>Show all {player.queue.length} queued songs</button>}{queueExpanded && player.queue.length > 80 && <button className="queue-expand-button" onClick={() => setQueueExpanded(false)}>Show fewer queued songs</button>}{!player.queue.length && <p className="queue-notice">Add songs to the queue from their action menu.</p>}</>}</aside></>}
       </div>
         <footer className="player-bar" aria-label="Playback controls"><div className="now-playing-mini">{footerTrack && <Cover className="mini-cover" keys={[footerTrack.artworkKey]}/>}<div className="track-copy"><span className="track-title">{footerTrack?.title ?? "Nothing playing"}</span><span className="track-artist">{footerTrack?.artist ?? ""}</span></div>{footerTrack && <button className={`row-action visible ${favorites.includes(footerTrack.id) ? "selected" : ""}`} aria-label="Toggle favorite" onClick={() => toggleFavorite(footerTrack.id)}><Heart size={15} fill={favorites.includes(footerTrack.id) ? "currentColor" : "none"}/></button>}</div><div className="transport"><div className="transport-buttons"><button className={`transport-button shuffle-control ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" disabled={!tracks.length} onClick={() => void run(api.shuffle)}><Shuffle size={15}/></button><button className="transport-button" aria-label="Previous track" disabled={!tracks.length} onClick={() => void run(api.previous)}><SkipBack size={17} fill="currentColor"/></button><button className={`play-button ${player.isPlaying ? "is-playing" : ""}`} aria-label={player.isPlaying ? "Pause" : "Play"} disabled={!tracks.length} onClick={() => void run(current ? api.toggle : footerTrack ? () => api.play(footerTrack.id) : api.toggle)}>{player.isPlaying ? <Pause size={16} fill="currentColor"/> : <Play size={15} fill="currentColor"/>}</button><button className="transport-button" aria-label="Next track" disabled={!tracks.length} onClick={() => void run(api.next)}><SkipForward size={17} fill="currentColor"/></button><button className={`transport-button repeat-button repeat-control ${player.repeatMode !== "off" ? "active" : ""}`} aria-label={`Repeat ${player.repeatMode}`} disabled={!tracks.length} onClick={() => void run(api.repeat)}>↻{player.repeatMode === "one" && <small>1</small>}</button></div><div className="seek-row"><span>{time(seekPreviewMs ?? player.positionMs)}</span><input type="range" min="0" max={Math.max(1, player.durationMs)} value={Math.min(seekPreviewMs ?? player.positionMs, player.durationMs)} style={{ "--range-value": `${Math.min(100, player.durationMs ? (seekPreviewMs ?? player.positionMs) / player.durationMs * 100 : 0)}%` } as CSSProperties} aria-label="Seek" disabled={!current} onChange={(event) => previewSeek(Number(event.target.value))} onPointerUp={(event) => void commitSeek(Number(event.currentTarget.value))} onKeyUp={(event) => void commitSeek(Number(event.currentTarget.value))}/><span>{time(player.durationMs)}</span></div></div><div className="player-options"><SleepTimerControl player={player} onSet={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))} placement="bar"/><button className="icon-button" aria-label={showPanel ? "Hide now playing panel" : "Show now playing panel"} onClick={() => setShowPanel(!showPanel)}>{showPanel ? <PanelRightClose size={17}/> : <PanelRightOpen size={17}/>}</button><button className="volume-mute-button" aria-label={player.volume === 0 ? "Unmute" : "Mute"} title={player.volume === 0 ? "Unmute" : "Mute"} onClick={toggleMute}>{player.volume === 0 ? <VolumeX size={17}/> : <Volume2 size={17}/>}</button><input type="range" min="0" max="1" step="0.01" value={player.volume} style={{ "--range-value": `${player.volume * 100}%` } as CSSProperties} aria-label="Volume" onChange={(event) => setVolume(Number(event.target.value))}/><button className={`transport-button full-mode-trigger ${fullMode ? "active" : ""}`} aria-label={fullMode ? "Exit full mode" : "Open full mode"} title={fullMode ? "Exit full mode" : "Full mode"} onClick={toggleFullMode}>{fullMode ? <Minimize2 size={17}/> : <Maximize2 size={17}/>}</button></div></footer>
+      {((scanning && !scanNotificationDismissed) || message) && <div className="app-notification-stack" aria-live="polite">
+        {scanning && !scanNotificationDismissed && <div className="app-notification-badge scanning" role="status"><span className="app-notification-spinner loading-indicator"/><span className="app-notification-copy">{scanProgress?.phase ?? "Scanning music and artwork…"}{scanProgress?.phase === "Finding audio files" && scanProgress.processed ? ` · ${scanProgress.processed.toLocaleString()} found` : scanProgress?.total ? ` · ${scanProgress.processed.toLocaleString()} of ${scanProgress.total.toLocaleString()}` : ""}</span><button className="app-notification-action" onClick={() => void api.cancelScan().catch(() => {})}>Cancel</button><button className="app-notification-dismiss" aria-label="Dismiss scan notification" onClick={() => setScanNotificationDismissed(true)}><X size={15}/></button></div>}
+        {message && <div className="app-notification-badge" role="status"><span className="app-notification-copy">{message.includes("Refresh the folder") ? <>{message.split("Refresh the folder")[0]}<button className="inline-link" onClick={() => void refresh()}>Refresh the folder</button>{message.split("Refresh the folder")[1]}</> : message}</span><button className="app-notification-dismiss" aria-label="Dismiss notification" onClick={() => setMessage("")}><X size={15}/></button></div>}
+      </div>}
       {fullMode && <section className="full-player-mode" aria-label="Full mode player">
         <div className="full-mode-backdrop">{footerTrack && <Cover className="full-mode-blur" keys={[footerTrack.artworkKey]}/>}</div>
         <header className="full-mode-top"><span><AudioLines size={18}/> MichoPlay</span><div className="full-mode-top-actions"><SleepTimerControl player={player} onSet={(minutes, atTrackEnd) => void run(() => api.sleepTimer(minutes, atTrackEnd))} placement="full-mode"/><button className="full-mode-exit" onClick={toggleFullMode}><Minimize2 size={17}/>Exit full mode</button></div></header>
@@ -1600,7 +1716,7 @@ export default function App() {
             <div className="full-mode-seek"><span>{time(seekPreviewMs ?? player.positionMs)}</span><input type="range" min="0" max={Math.max(1, player.durationMs)} value={Math.min(seekPreviewMs ?? player.positionMs, player.durationMs)} style={{ "--range-value": `${Math.min(100, player.durationMs ? (seekPreviewMs ?? player.positionMs) / player.durationMs * 100 : 0)}%` } as CSSProperties} aria-label="Seek" disabled={!current} onChange={(event) => previewSeek(Number(event.target.value))} onPointerUp={(event) => void commitSeek(Number(event.currentTarget.value))} onKeyUp={(event) => void commitSeek(Number(event.currentTarget.value))}/><span>{time(player.durationMs)}</span></div>
             <div className="full-mode-volume"><button className="volume-mute-button" aria-label={player.volume === 0 ? "Unmute" : "Mute"} title={player.volume === 0 ? "Unmute" : "Mute"} onClick={toggleMute}>{player.volume === 0 ? <VolumeX size={17}/> : <Volume2 size={17}/>}</button><input type="range" min="0" max="1" step="0.01" value={player.volume} aria-label="Volume" onChange={(event) => setVolume(Number(event.target.value))}/></div></div>
           </div>
-          <aside className="full-mode-side"><div className="full-mode-tabs" role="tablist" aria-label="Full mode side panel"><button role="tab" aria-selected={fullPanelTab === "queue"} className={fullPanelTab === "queue" ? "active" : ""} onClick={() => setFullPanelTab("queue")}>Queue</button><button role="tab" aria-selected={fullPanelTab === "browse"} className={fullPanelTab === "browse" ? "active" : ""} onClick={() => setFullPanelTab("browse")}>Browse</button></div>{fullPanelTab === "queue" ? <div className="full-mode-list"><h2>Now playing</h2>{footerTrack && <button className="full-mode-track current" onClick={() => { if (current) void run(api.toggle); }}><Cover className="full-mode-track-cover" keys={[footerTrack.artworkKey]}/><span><strong>{footerTrack.title}</strong><small>{footerTrack.artist}</small></span></button>}<h2>Up next</h2>{visibleQueue.map((id) => { const track = trackMap.get(id); return track ? <button className="full-mode-track" key={id} onClick={() => void run(() => api.play(id))}><Cover className="full-mode-track-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button> : null; })}{!player.queue.length && <p className="full-mode-empty">Nothing queued</p>}</div> : <div className="full-mode-list full-mode-browse">{fullBrowsePlaylistId ? <><button className="full-mode-back" onClick={() => setFullBrowsePlaylistId(null)}><ChevronLeft size={14}/><span>{fullBrowsePlaylist?.name ?? "Playlists"}</span></button>{fullBrowsePlaylistTracks.slice(0, fullBrowseVisibleLimit).map((track) => <button className="full-mode-track" key={track.id} onClick={() => void run(() => api.playCollection(fullBrowsePlaylistTracks.map((item) => item.id), track.id))}><Cover className="full-mode-track-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button>)}{fullBrowsePlaylistTracks.length > fullBrowseVisibleLimit && <button className="queue-expand-button" onClick={() => setFullBrowseVisibleLimit((prior) => prior + 100)}>Show more songs ({fullBrowsePlaylistTracks.length - fullBrowseVisibleLimit} remaining)</button>}{!fullBrowsePlaylistTracks.length && <p className="full-mode-empty">This playlist has no songs yet.</p>}</> : <><div className="full-mode-browse-tabs" role="tablist" aria-label="Browse your music"><button role="tab" aria-selected={fullBrowseTab === "playlists"} className={fullBrowseTab === "playlists" ? "active" : ""} onClick={() => setFullBrowseTab("playlists")}>Playlists</button><button role="tab" aria-selected={fullBrowseTab === "library"} className={fullBrowseTab === "library" ? "active" : ""} onClick={() => setFullBrowseTab("library")}>Library</button></div>{fullBrowseTab === "playlists" ? <><h2>Your playlists</h2>{playlists.map((playlist) => { const playlistTracks = playlist.trackIds.flatMap((id) => trackMap.get(id) ? [trackMap.get(id)!] : []); return <button className="full-mode-track full-mode-playlist" key={playlist.id} onClick={() => setFullBrowsePlaylistId(playlist.id)}><Cover className="full-mode-track-cover" keys={coverKeys(playlistTracks)} icon={<ListMusic size={18}/>}/><span><strong>{playlist.name}</strong><small>{playlistTracks.length} {playlistTracks.length === 1 ? "song" : "songs"}</small></span><ChevronRight className="full-mode-playlist-chevron" size={15}/></button>; })}{!playlists.length && <p className="full-mode-empty">Your playlists will appear here.</p>}</> : <><h2>All songs</h2>{tracks.slice(0, fullBrowseVisibleLimit).map((track) => <button className="full-mode-track" key={track.id} onClick={() => void run(() => api.playCollection(tracks.map((item) => item.id), track.id))}><Cover className="full-mode-track-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button>)}{tracks.length > fullBrowseVisibleLimit && <button className="queue-expand-button" onClick={() => setFullBrowseVisibleLimit((prior) => prior + 100)}>Show more songs ({tracks.length - fullBrowseVisibleLimit} remaining)</button>}{!tracks.length && <p className="full-mode-empty">Import songs to browse your library.</p>}</>}</>}</div>}</aside>
+          <aside className="full-mode-side"><div className="full-mode-tabs" role="tablist" aria-label="Full mode side panel"><button role="tab" aria-selected={fullPanelTab === "queue"} className={fullPanelTab === "queue" ? "active" : ""} onClick={() => setFullPanelTab("queue")}>Queue</button><button role="tab" aria-selected={fullPanelTab === "browse"} className={fullPanelTab === "browse" ? "active" : ""} onClick={() => setFullPanelTab("browse")}>Browse</button></div>{fullPanelTab === "queue" ? <div className="full-mode-list"><h2>Now playing</h2>{footerTrack && <button className="full-mode-track current" onClick={() => { if (current) void run(api.toggle); }}><Cover className="full-mode-track-cover" keys={[footerTrack.artworkKey]}/><span><strong>{footerTrack.title}</strong><small>{footerTrack.artist}</small></span></button>}<h2>Up next</h2>{visibleQueue.map((id) => { const track = trackMap.get(id); return track ? <button className="full-mode-track" key={id} onClick={() => void run(() => api.play(id))}><Cover className="full-mode-track-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button> : null; })}{!player.queue.length && <p className="full-mode-empty">Nothing queued</p>}</div> : <div className="full-mode-list full-mode-browse">{fullBrowsePlaylistId ? <><button className="full-mode-back" onClick={() => setFullBrowsePlaylistId(null)}><ChevronLeft size={14}/><span>{fullBrowsePlaylist?.name ?? "Playlists"}</span></button>{fullBrowsePlaylistTracks.slice(0, fullBrowseVisibleLimit).map((track) => <button className="full-mode-track" key={track.id} onClick={() => void run(() => api.playCollection(fullBrowsePlaylistTracks.map((item) => item.id), track.id))}><Cover className="full-mode-track-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button>)}{fullBrowsePlaylistTracks.length > fullBrowseVisibleLimit && <button className="queue-expand-button" onClick={() => setFullBrowseVisibleLimit((prior) => prior + 100)}>Show more songs ({fullBrowsePlaylistTracks.length - fullBrowseVisibleLimit} remaining)</button>}{!fullBrowsePlaylistTracks.length && <p className="full-mode-empty">This playlist has no songs yet.</p>}</> : <><div className="full-mode-browse-tabs" role="tablist" aria-label="Browse your music"><button role="tab" aria-selected={fullBrowseTab === "playlists"} className={fullBrowseTab === "playlists" ? "active" : ""} onClick={() => setFullBrowseTab("playlists")}>Playlists</button><button role="tab" aria-selected={fullBrowseTab === "library"} className={fullBrowseTab === "library" ? "active" : ""} onClick={() => setFullBrowseTab("library")}>Library</button></div>{fullBrowseTab === "playlists" ? <><h2>Your playlists</h2>{playlists.map((playlist) => { const playlistTracks = playlist.trackIds.flatMap((id) => !hiddenTrackSet.has(id) && trackMap.get(id) ? [trackMap.get(id)!] : []); return <button className="full-mode-track full-mode-playlist" key={playlist.id} onClick={() => setFullBrowsePlaylistId(playlist.id)}><Cover className="full-mode-track-cover" keys={coverKeys(playlistTracks)} icon={<ListMusic size={18}/>}/><span><strong>{playlist.name}</strong><small>{playlistTracks.length} {playlistTracks.length === 1 ? "song" : "songs"}</small></span><ChevronRight className="full-mode-playlist-chevron" size={15}/></button>; })}{!playlists.length && <p className="full-mode-empty">Your playlists will appear here.</p>}</> : <><h2>All songs</h2>{availableTracks.slice(0, fullBrowseVisibleLimit).map((track) => <button className="full-mode-track" key={track.id} onClick={() => void run(() => api.playCollection(availableTracks.map((item) => item.id), track.id))}><Cover className="full-mode-track-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button>)}{availableTracks.length > fullBrowseVisibleLimit && <button className="queue-expand-button" onClick={() => setFullBrowseVisibleLimit((prior) => prior + 100)}>Show more songs ({availableTracks.length - fullBrowseVisibleLimit} remaining)</button>}{!availableTracks.length && <p className="full-mode-empty">Import songs to browse your library.</p>}</>}</>}</div>}</aside>
         </div>
       </section>}
     </section>
@@ -1613,10 +1729,11 @@ export default function App() {
       <nav className={`mobile-bottom-nav ${page.section === "Settings" ? "settings-open" : ""}`} aria-label="Main navigation">
         <button className={mobileTab === "home" && page.section !== "Settings" ? "active" : ""} onClick={() => { setMobileTab("home"); if (page.section !== "Home" || page.detail) navigate({ section: "Home" }); }}><Home size={22}/><span>Home</span></button>
         <button className={mobileTab === "search" ? "active" : ""} onClick={() => { setMobileTab("search"); setSearch(""); }}><Search size={22}/><span>Search</span></button>
-        <button className={mobileTab === "library" ? "active" : ""} onClick={() => setMobileTab("library")}><Library size={22}/><span>Your Library</span></button>
+        <button className={mobileTab === "library" ? "active" : ""} onClick={() => { setMobileTab("library"); if (page.section !== "Home" || page.detail) navigate({ section: "Home" }); }}><Library size={22}/><span>Your Library</span></button>
         <button className={mobileTab === "youtube" ? "active" : ""} onClick={openYoutubePage}><Youtube size={22}/><span>YouTube</span></button>
-        <button className={mobileTab === "downloads" ? "active" : ""} onClick={() => setMobileTab("downloads")}><Download size={22}/><span>Downloads</span></button>
+        <button ref={downloadNavRef} className={`mobile-downloads-nav ${mobileTab === "downloads" ? "active" : ""}`} aria-label={mobileDownloadBadgeCount ? `Downloads, ${mobileDownloadBadgeCount} active or new` : "Downloads"} onClick={openMobileDownloads}><Download size={22}/>{mobileDownloadBadgeCount > 0 && <span className="mobile-download-badge" aria-hidden="true">{mobileDownloadBadgeCount > 99 ? "99+" : mobileDownloadBadgeCount}</span>}<span>Downloads</span></button>
       </nav>
+      {downloadFeedback && <><span key={`flight-${downloadFeedback.key}`} className="mobile-download-flight" aria-hidden="true" style={{ left:downloadFeedback.x, top:downloadFeedback.y, "--flight-end-x": `${downloadFeedback.targetX}px`, "--flight-end-y": `${downloadFeedback.targetY}px` } as CSSProperties}><Download size={18}/></span><div key={`notice-${downloadFeedback.key}`} className="mobile-download-confirmation" role="status"><Download size={16}/><span>{downloadFeedback.label}</span></div></>}
     </>}
     {isAndroid && mobilePlayerOpen && <section className="mobile-player-screen" aria-label="Now playing">
       <header className="mobile-player-top"><button aria-label="Close player" onClick={() => setMobilePlayerOpen(false)}><ChevronDown size={27}/></button><div><span className="brand-mark mobile-player-brand-mark"><AudioLines size={15}/></span><small>Playing from {page.detail?.kind === "playlist" ? "Playlist" : page.detail?.kind ?? "Your library"}</small><strong>{page.detail?.title ?? "Now playing"}</strong></div><button aria-label="Track options" onClick={(event) => footerTrack && openTrackMenu(footerTrack, event)}><MoreVertical size={23}/></button></header>
@@ -1628,7 +1745,7 @@ export default function App() {
         <div className="mobile-player-actions"><button aria-label="Show queue" onClick={() => setMobileQueueOpen(true)}><ListMusic size={22}/></button></div>
       </> : <div className="mobile-player-empty"><Music2 size={36}/><strong>Nothing playing</strong><span>Choose a song from your library.</span><button onClick={() => { setMobilePlayerOpen(false); setMobileTab("library"); }}>Open library</button></div>}
     </section>}
-    {isAndroid && mobileLibraryActionsOpen && <div className="mobile-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileLibraryActionsOpen(false); }}><section className="mobile-library-action-sheet" role="dialog" aria-modal="true" aria-label="Add to your library"><div className="mobile-sheet-handle"/><h2>Add to your library</h2><button onClick={() => { setMobileLibraryActionsOpen(false); newPlaylist(); }}><ListMusic size={20}/><span><strong>Create playlist</strong><small>Make a playlist and add songs from their menu.</small></span></button><button onClick={() => { setMobileLibraryActionsOpen(false); chooseLibrarySource(); }}><FolderOpen size={20}/><span><strong>Add music folder</strong><small>Use songs in their original folder.</small></span></button><button onClick={() => { setMobileLibraryActionsOpen(false); void chooseAndroidAudioFiles(); }}><Music2 size={20}/><span><strong>Add songs</strong><small>Choose files to scan their folders without copying audio.</small></span></button></section></div>}
+    {isAndroid && mobileLibraryActionsOpen && <div className="mobile-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileLibraryActionsOpen(false); }}><section className="mobile-library-action-sheet" role="dialog" aria-modal="true" aria-label="Add to your library"><div className="mobile-sheet-handle"/><h2>Add to your library</h2><button onClick={() => { setMobileLibraryActionsOpen(false); newPlaylist(); }}><ListMusic size={21}/><strong>Create playlist</strong><ChevronRight size={18}/></button><button onClick={() => { setMobileLibraryActionsOpen(false); void chooseAndroidAudioFiles(); }}><FolderOpen size={21}/><strong>Import music</strong><ChevronRight size={18}/></button></section></div>}
     {isAndroid && mobileQueueOpen && <div className="mobile-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileQueueOpen(false); }}>
       <section className="mobile-queue-sheet" role="dialog" aria-modal="true" aria-label="Playback queue">
         <div className="mobile-sheet-handle" role="presentation" onPointerDown={beginMobileSheetDrag} onPointerUp={(event) => finishMobileSheetDrag(event, () => setMobileQueueOpen(false))} onPointerCancel={() => { mobileSheetDragStartY.current = null; }}/><div className="mobile-queue-heading"><div><h2>Queue</h2><p>Playing {page.detail?.title ?? "from your library"}</p></div><div className="mobile-queue-heading-actions"><button className="mobile-edit-queue" onClick={() => setMobileQueueEditing((editing) => !editing)}>{mobileQueueEditing ? "Done" : "Edit"}</button><button className="mobile-close-sheet" aria-label="Close queue" onClick={() => setMobileQueueOpen(false)}><X size={20}/></button></div></div>
@@ -1639,8 +1756,14 @@ export default function App() {
     {isAndroid && mobileSleepTimerOpen && <div className="mobile-sheet-layer sleep-timer-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileSleepTimerOpen(false); }}><section className="mobile-sleep-timer-sheet" role="dialog" aria-modal="true" aria-label="Sleep timer"><div className="mobile-sheet-handle"/><h2>Sleep timer</h2>{[[5, "5 minutes"], [10, "10 minutes"], [15, "15 minutes"], [30, "30 minutes"], [45, "45 minutes"], [60, "1 hour"]].map(([minutes, label]) => <button key={minutes} onClick={() => { void run(() => api.sleepTimer(Number(minutes), false)); setMobileSleepTimerOpen(false); }}>{label}</button>)}<button onClick={() => { void run(() => api.sleepTimer(null, true)); setMobileSleepTimerOpen(false); }}>End of track</button>{(player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd) && <button className="sleep-timer-cancel" onClick={() => { void run(() => api.sleepTimer(null, false)); setMobileSleepTimerOpen(false); }}>Turn off timer</button>}</section></div>}
     {menu && createPortal(<>{isAndroid && <button className="mobile-sheet-backdrop" aria-label="Close song actions" onClick={() => setMenu(null)}/>}<div ref={trackMenuRef} className={`action-menu track-menu ${isAndroid ? "mobile-action-sheet" : ""} ${submenuPlacement === "submenu-inline" ? "submenu-inline" : ""}`} role="menu" style={{ left: menu.x, top: menu.y }}>
       {isAndroid && <div className="mobile-action-heading"><div className="mobile-sheet-handle" role="presentation" onPointerDown={beginMobileSheetDrag} onPointerUp={(event) => finishMobileSheetDrag(event, () => setMenu(null))} onPointerCancel={() => { mobileSheetDragStartY.current = null; }}/><div className="mobile-action-track"><Cover className="mobile-queue-cover" keys={[menu.track.artworkKey]}/><span><strong>{menu.track.title}</strong><small>{menu.track.artist}</small></span></div></div>}
-      <div className="playlist-menu-wrap" onMouseEnter={() => setPlaylistSubmenu(true)}><button role="menuitem" aria-expanded={playlistSubmenu} onClick={() => setPlaylistSubmenu(!playlistSubmenu)}><Plus size={15}/>Add to playlist<ChevronRight size={14} className="menu-arrow"/></button>{playlistSubmenu && <div ref={playlistSubmenuRef} className={`playlist-submenu ${submenuPlacement}`}><label className="playlist-find"><Search size={15}/><input autoFocus placeholder="Find a playlist" aria-label="Find a playlist" value={playlistSearch} onChange={(event) => setPlaylistSearch(event.target.value)}/></label><button onClick={() => newPlaylist(menu.track)}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><div className="playlist-options">{playlists.filter((item) => item.name.toLocaleLowerCase().includes(playlistSearch.toLocaleLowerCase())).map((item) => <button key={item.id} onClick={() => addToPlaylist(item, menu.track)}><ListMusic size={15}/>{item.name}</button>)}</div>{!playlists.length && <p>Create your first playlist above.</p>}</div>}</div>{!isAndroid && <button role="menuitem" onClick={() => { shareTrack(menu.track); setMenu(null); }}><Share2 size={15}/>Share</button>}{selectedPlaylist && <button role="menuitem" onClick={() => confirmRemovePlaylistTrack(selectedPlaylist, menu.track)}><Trash2 size={15}/>Remove from playlist</button>}<button role="menuitem" onClick={() => { toggleFavorite(menu.track.id); setMenu(null); }}><Heart size={15}/>{favorites.includes(menu.track.id) ? "Remove from favorites" : "Save to favorites"}</button><button role="menuitem" onClick={() => { void run(() => api.queueAdd(menu.track.id)); setMenu(null); }}><ListMusic size={15}/>Add to queue</button><button role="menuitem" onClick={() => { playCollection(menu.track); setMenu(null); }}><Play size={15}/>Play now</button><div className="menu-separator"/><button role="menuitem" onClick={() => navigate({ section: "Artists", detail: { kind: "artist", key: menu.track.artist, title: menu.track.artist } })}><AudioLines size={15}/>Go to artist</button><button role="menuitem" onClick={() => navigate({ section: "Albums", detail: { kind: "album", key: albumKey(menu.track), title: menu.track.album } })}><Disc3 size={15}/>Go to album</button>
+      <div className="playlist-menu-wrap" onMouseEnter={() => setPlaylistSubmenu(true)}><button role="menuitem" aria-expanded={playlistSubmenu} onClick={() => setPlaylistSubmenu(!playlistSubmenu)}><Plus size={15}/>Add to playlist<ChevronRight size={14} className="menu-arrow"/></button>{playlistSubmenu && <div ref={playlistSubmenuRef} className={`playlist-submenu ${submenuPlacement}`}><label className="playlist-find"><Search size={15}/><input autoFocus placeholder="Find a playlist" aria-label="Find a playlist" value={playlistSearch} onChange={(event) => setPlaylistSearch(event.target.value)}/></label><button onClick={() => newPlaylist(menu.track)}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><div className="playlist-options">{playlists.filter((item) => item.name.toLocaleLowerCase().includes(playlistSearch.toLocaleLowerCase())).map((item) => <button key={item.id} onClick={() => addToPlaylist(item, menu.track)}><ListMusic size={15}/>{item.name}</button>)}</div>{!playlists.length && <p>Create your first playlist above.</p>}</div>}</div>{selectedPlaylist && <button role="menuitem" onClick={() => confirmRemovePlaylistTrack(selectedPlaylist, menu.track)}><Trash2 size={15}/>Remove from playlist</button>}<button role="menuitem" onClick={() => { toggleFavorite(menu.track.id); setMenu(null); }}><Heart size={15}/>{favorites.includes(menu.track.id) ? "Remove from favorites" : "Save to favorites"}</button><button role="menuitem" onClick={() => { void run(() => api.queueAdd(menu.track.id)); setMenu(null); }}><ListMusic size={15}/>Add to queue</button><button role="menuitem" onClick={() => { playCollection(menu.track); setMenu(null); }}><Play size={15}/>Play now</button><button role="menuitem" onClick={() => hideTrack(menu.track)}><EyeOff size={15}/>Hide song</button><div className="menu-separator"/><button role="menuitem" onClick={() => navigate({ section: "Artists", detail: { kind: "artist", key: menu.track.artist, title: menu.track.artist } })}><AudioLines size={15}/>Go to artist</button><button role="menuitem" onClick={() => navigate({ section: "Albums", detail: { kind: "album", key: albumKey(menu.track), title: menu.track.album } })}><Disc3 size={15}/>Go to album</button>
     </div></>, isAndroid ? appFrameRef.current ?? document.body : document.body)}
+    {updatePromptOpen && availableUpdate && <div className="update-dialog-overlay"><section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" aria-describedby="update-dialog-description">
+      <header className="update-dialog-heading"><span className="update-dialog-title-copy"><h2 id="update-dialog-title">Update Available</h2><p id="update-dialog-description">A new version is ready</p></span></header>
+      <div className="update-version-comparison" aria-label={`Current version ${appVersion}; new version ${availableUpdate}`}><div className="update-version-item"><span>Current</span><strong>v{appVersion}</strong></div><ArrowRight size={20} aria-hidden="true"/><div className="update-version-item"><span>New</span><strong>v{availableUpdate}</strong></div></div>
+      <button className="update-install-button" onClick={openUpdateDownload}><Download size={17}/>Download</button>
+      <button className="update-later-button" onClick={deferUpdatePrompt}>Later</button>
+    </section></div>}
     {aboutOpen && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><div className="about-dialog-head"><span className="about-dialog-kicker">About</span><button className="icon-button" aria-label="Close About" title="Close" onClick={() => setAboutOpen(false)}><X size={19}/></button></div><div className="about-dialog-hero"><span className="about-mark"><AudioLines size={46}/></span><h2 id="about-title">MichoPlay</h2><span className="about-version-pill">Version {appVersion}</span><div className="about-dialog-actions"><button onClick={() => openAboutUrl(michoplayGithubUrl)}><Github size={16}/>GitHub</button><button onClick={() => openAboutUrl(michoplayIssueUrl)}><Bug size={16}/>Report issue</button></div></div><section className="about-dialog-section"><h3>Links</h3><div className="about-dialog-links"><button onClick={() => openAboutUrl(michoplayDeveloperUrl)}><Globe2 size={18}/><span>Developer</span><ChevronRight size={17}/></button><button onClick={() => openAboutUrl(michoplayWebsiteUrl)}><AudioLines size={18}/><span>Website</span><ChevronRight size={17}/></button></div></section></section></div>}
     {dialog && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setDialog(null); }}><form className="playlist-dialog" role="dialog" aria-modal="true" aria-labelledby="playlist-dialog-title" onSubmit={(event) => { event.preventDefault(); savePlaylist(); }}><div className="dialog-title"><h2 id="playlist-dialog-title">{dialog.playlist ? "Rename playlist" : "Create playlist"}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={() => setDialog(null)}><X size={18}/></button></div><label>Playlist name<input autoFocus required maxLength={120} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)}/></label>{dialog.target && <p>“{dialog.target.title}” will be added.</p>}<button className="primary-button" type="submit" disabled={!playlistName.trim()}>{dialog.playlist ? "Save" : "Create playlist"}</button></form></div>}
     {addSongsPlaylistId && <div className="dialog-overlay add-songs-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAddSongsPlaylistId(null); }}>
@@ -1665,293 +1788,4 @@ export default function App() {
     </div>}
     {confirmation && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setConfirmation(null); }}><section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message"><div className="dialog-title"><h2 id="confirm-title">{confirmation.title}</h2><button className="icon-button" aria-label="Cancel" onClick={() => setConfirmation(null)}><X size={18}/></button></div><p id="confirm-message">{confirmation.message}</p><div className="confirm-actions"><button className="outline-button" onClick={() => setConfirmation(null)}>Cancel</button><button className="danger-button" onClick={confirmation.confirm}>{confirmation.label}</button></div></section></div>}
   </main>;
-}
-
-function EqualizerSettings({ bands, enabled, mobile = false, onChange, onPreview, onToggle }: { bands: number[]; enabled: boolean; mobile?: boolean; onChange: (bands: number[]) => void | Promise<unknown>; onPreview: (bands: number[]) => void | Promise<unknown>; onToggle: (enabled: boolean) => void }) {
-  const presets = [
-    { name: "Flat", bands: [0, 0, 0, 0, 0, 0] },
-    { name: "Bass boost", bands: [6, 5, 3, 0, -1, 0] },
-    { name: "Vocal", bands: [-3, -1, 2, 4, 2, -1] },
-    { name: "Treble", bands: [-2, -1, 0, 1, 4, 5] },
-    { name: "Rock", bands: [4, 3, -1, 1, 3, 4] },
-  ];
-  const [savedPresets, setSavedPresets] = useState<{ name: string; bands: number[] }[]>(() => stored("equalizer-presets", []));
-  const [saving, setSaving] = useState(false);
-  const [presetName, setPresetName] = useState("");
-  const dragIndex = useRef<number | null>(null);
-  const dragSvg = useRef<SVGSVGElement | null>(null);
-  const dragPointerId = useRef<number | null>(null);
-  const dragBounds = useRef<{ top: number; height: number } | null>(null);
-  const latestBands = useRef<number[] | null>(null);
-  const dragChanged = useRef(false);
-  const previewTimer = useRef<number | null>(null);
-  const pendingPreview = useRef<number[] | null>(null);
-  const previewInFlight = useRef(false);
-  const previewRequest = useRef<Promise<unknown> | null>(null);
-  const lastPreviewAt = useRef(0);
-  const chartLine = useRef<SVGPathElement | null>(null);
-  const chartFill = useRef<SVGPathElement | null>(null);
-  const chartHitTargets = useRef<(SVGCircleElement | null)[]>([]);
-  const chartPoints = useRef<(SVGCircleElement | null)[]>([]);
-  const onPreviewRef = useRef(onPreview);
-  useEffect(() => { onPreviewRef.current = onPreview; }, [onPreview]);
-  const visibleBands = latestBands.current ?? bands;
-  const allPresets = [...presets, ...savedPresets];
-  const activePreset = allPresets.find((preset) => preset.bands.every((gain, index) => gain === visibleBands[index]))?.name;
-  const builtInName = (name: string) => presets.some((preset) => preset.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase());
-  const updateBand = (index: number, value: number) => {
-    const next = [...visibleBands]; next[index] = Math.max(-12, Math.min(12, value)); onChange(next);
-  };
-  const savePreset = () => {
-    const name = presetName.trim();
-    if (!name || builtInName(name)) return;
-    const next = [...savedPresets.filter((preset) => preset.name.toLocaleLowerCase() !== name.toLocaleLowerCase()), { name, bands: [...visibleBands] }];
-    setSavedPresets(next); localStorage.setItem("michoplay-equalizer-presets", JSON.stringify(next));
-    setPresetName(""); setSaving(false);
-  };
-  const chartX = (index: number) => mobile ? 65 + index * 127 : 120 + index * 116;
-  const chartY = (gain: number) => 25 + (12 - gain) * (175 / 24);
-  const curveFor = (values: number[]) => values.map((gain, index) => [chartX(index), chartY(gain)] as [number, number]);
-  const smoothPathFor = (points: [number, number][]) => points.slice(1).reduce((path, [x, y], index) => {
-    const [previousX, previousY] = points[index]; const dx = (x - previousX) / 3;
-    return path + " C " + (previousX + dx) + " " + previousY + " " + (x - dx) + " " + y + " " + x + " " + y;
-  }, "M " + points[0][0] + " " + points[0][1]);
-  const fillPathFor = (points: [number, number][], path: string) => "M " + points[0][0] + " 112 L " + points[0][0] + " " + points[0][1] + path.slice(path.indexOf(" C")) + " L " + points[points.length - 1][0] + " 112 Z";
-  const curve = curveFor(visibleBands);
-  const smoothPath = smoothPathFor(curve);
-  const fillPath = fillPathFor(curve, smoothPath);
-  const updateChartPreview = (values: number[]) => {
-    const points = curveFor(values);
-    const path = smoothPathFor(points);
-    chartLine.current?.setAttribute("d", path);
-    chartFill.current?.setAttribute("d", fillPathFor(points, path));
-    points.forEach(([, y], index) => {
-      chartHitTargets.current[index]?.setAttribute("cy", String(y));
-      chartPoints.current[index]?.setAttribute("cy", String(y));
-      chartPoints.current[index]?.setAttribute("aria-valuenow", String(values[index]));
-    });
-  };
-  const queueAudioPreview = (next: number[]) => {
-    pendingPreview.current = next;
-    if (previewTimer.current !== null || previewInFlight.current) return;
-    const flush = () => {
-      previewTimer.current = null;
-      if (previewInFlight.current) return;
-      const pending = pendingPreview.current;
-      pendingPreview.current = null;
-      if (!pending) return;
-      const delay = Math.max(0, 60 - (performance.now() - lastPreviewAt.current));
-      if (delay > 0) {
-        pendingPreview.current = pending;
-        previewTimer.current = window.setTimeout(flush, delay);
-        return;
-      }
-      lastPreviewAt.current = performance.now();
-      previewInFlight.current = true;
-      const request = (async () => {
-        try { await onPreviewRef.current(pending); }
-        catch { /* The final value is still applied when the drag ends. */ }
-        finally {
-          previewInFlight.current = false;
-          previewRequest.current = null;
-          if (dragIndex.current !== null && pendingPreview.current) queueAudioPreview(pendingPreview.current);
-        }
-      })();
-      previewRequest.current = request;
-      void request;
-    };
-    flush();
-  };
-  const updateFromPointer = (clientY: number, index: number) => {
-    const bounds = dragBounds.current;
-    if (!bounds || bounds.height <= 0) return;
-    const svgY = (clientY - bounds.top) * 250 / bounds.height;
-    const value = Math.max(-12, Math.min(12, Math.round(12 - (svgY - 25) * 24 / 175)));
-    const next = [...(latestBands.current ?? visibleBands)];
-    if (next[index] === value) return;
-    next[index] = value;
-    latestBands.current = next;
-    dragChanged.current = true;
-    updateChartPreview(next);
-    queueAudioPreview(next);
-  };
-  const finishDrag = (event?: ReactPointerEvent<SVGSVGElement>) => {
-    if (dragIndex.current === null) return;
-    if (event && dragPointerId.current !== event.pointerId) return;
-    const svg = dragSvg.current;
-    const pointerId = dragPointerId.current;
-    dragIndex.current = null;
-    dragSvg.current = null;
-    dragPointerId.current = null;
-    dragBounds.current = null;
-    if (svg && pointerId !== null && svg.hasPointerCapture(pointerId)) svg.releasePointerCapture(pointerId);
-    if (previewTimer.current !== null) {
-      window.clearTimeout(previewTimer.current);
-      previewTimer.current = null;
-    }
-    pendingPreview.current = null;
-    const finalBands = latestBands.current;
-    if (dragChanged.current && finalBands) {
-      const committedBands = [...finalBands];
-      const commit = () => { void onChange(committedBands); };
-      if (previewRequest.current) void previewRequest.current.finally(commit);
-      else commit();
-    }
-    latestBands.current = null;
-    dragChanged.current = false;
-  };
-  useEffect(() => () => {
-    if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
-    pendingPreview.current = null;
-  }, []);
-  return <section className={`eq-section ${mobile ? "mobile-equalizer-editor" : ""}`}>
-    <header className="eq-header"><h2>Equalizer</h2><button className={`switch ${enabled ? "on" : ""}`} role="switch" aria-label="Equalizer" aria-checked={enabled} onClick={() => onToggle(!enabled)}><span/></button></header>
-    <div className={`equalizer-settings ${enabled ? "" : "disabled"}`}>
-      <div className="eq-toolbar"><label className="eq-select-wrap"><span className="sr-only">Equalizer preset</span><select aria-label="Equalizer preset" value={activePreset ?? "manual"} onChange={(event) => { const preset = allPresets.find((item) => item.name === event.target.value); if (preset) onChange([...preset.bands]); }}><option value="manual">Manual</option>{presets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}{savedPresets.length > 0 && <optgroup label="My presets">{savedPresets.map((preset) => <option key={`saved-${preset.name}`} value={preset.name}>{preset.name}</option>)}</optgroup>}</select></label>
-        {saving ? <form className="eq-save-form" onSubmit={(event) => { event.preventDefault(); savePreset(); }}><input autoFocus maxLength={40} value={presetName} aria-label="Preset name" placeholder="Preset name" onChange={(event) => setPresetName(event.target.value)}/><button type="submit" disabled={!presetName.trim() || builtInName(presetName)}>Save</button><button type="button" onClick={() => { setSaving(false); setPresetName(""); }}>Cancel</button></form> : <button className="eq-save-button" onClick={() => setSaving(true)}>Save preset</button>}
-      </div>
-      <div className="eq-chart-wrap"><svg className="eq-chart" viewBox="0 0 760 250" preserveAspectRatio="none" role="group" aria-label="Equalizer controls" onPointerMove={(event) => { if (dragPointerId.current === event.pointerId && dragIndex.current !== null) updateFromPointer(event.clientY, dragIndex.current); }} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}>
-        <defs>
-          <linearGradient id="eq-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--blush)" stopOpacity=".42"/><stop offset="64%" stopColor="var(--brand-highlight)" stopOpacity=".24"/><stop offset="100%" stopColor="var(--accent)" stopOpacity=".05"/></linearGradient>
-          <linearGradient id="eq-line" x1="0" x2="1" y1="0" y2="0"><stop offset="0%" stopColor="var(--blush)"/><stop offset="64%" stopColor="#f5eee8"/><stop offset="100%" stopColor="var(--accent)"/></linearGradient>
-        </defs>
-        <text className="eq-db-label" x="0" y="30">+12dB</text><text className="eq-db-label" x="0" y="117">0dB</text><text className="eq-db-label" x="0" y="205">−12dB</text>
-        {curve.map(([x], index) => <line className="eq-gridline" key={`grid-${index}`} x1={x} x2={x} y1="25" y2="200"/>)}<line className="eq-zero-line" x1="65" x2="700" y1="112" y2="112"/>
-        <path ref={chartFill} className="eq-fill" d={fillPath}/><path ref={chartLine} className="eq-line" d={smoothPath}/>
-        {curve.map(([x, y], index) => <g key={equalizerFrequencies[index]}><circle ref={(node) => { chartHitTargets.current[index] = node; }} className="eq-hit-target" cx={x} cy={y} r="17" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); const svg = event.currentTarget.ownerSVGElement; const bounds = svg?.getBoundingClientRect(); if (!svg || !bounds || bounds.height <= 0) return; try { svg.setPointerCapture(event.pointerId); } catch { return; } dragIndex.current = index; dragSvg.current = svg; dragPointerId.current = event.pointerId; dragBounds.current = { top: bounds.top, height: bounds.height }; latestBands.current = [...visibleBands]; dragChanged.current = false; updateFromPointer(event.clientY, index); }}/><circle ref={(node) => { chartPoints.current[index] = node; }} className="eq-point" cx={x} cy={y} r="4" role="slider" tabIndex={0} aria-label={equalizerFrequencies[index]} aria-valuemin={-12} aria-valuemax={12} aria-valuenow={visibleBands[index]} aria-valuetext={`${visibleBands[index]} dB`} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault(); updateBand(index, visibleBands[index] + 1); } else if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault(); updateBand(index, visibleBands[index] - 1); } }}/><text className="eq-frequency-label" x={x} y="232" textAnchor="middle">{equalizerFrequencies[index]}</text></g>)}
-      </svg></div>
-      <div className="eq-card-footer"><button className="outline-button eq-reset" onClick={() => onChange([0, 0, 0, 0, 0, 0])}>Reset</button></div>
-    </div>
-  </section>;
-}
-
-function MobileSettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, keepScreenAwake, scanning, zoomLevel, onBack, onKeepScreenAwake, onEqualizer, onEqualizerPreview, onEqualizerToggle, onCompact, onAdd, onRemove, onRefresh, onVolume, onSleepTimer, onZoom, onAbout }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; keepScreenAwake: boolean; scanning: boolean; zoomLevel: number; onBack: () => void; onKeepScreenAwake: (value: boolean) => void; onEqualizer: (bands: number[]) => void; onEqualizerPreview: (bands: number[]) => void | Promise<unknown>; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onZoom: (value: number) => void; onAbout: () => void }) {
-  const [query, setQuery] = useState("");
-  const [equalizerOpen, setEqualizerOpen] = useState(false);
-  const [foldersOpen, setFoldersOpen] = useState(false);
-  const [zoomOpen, setZoomOpen] = useState(false);
-  useEffect(() => {
-    document.querySelector<HTMLElement>(".content-scroll")?.scrollTo({ top: 0, behavior: "auto" });
-  }, []);
-  const timerValue = player.sleepTimerAtTrackEnd ? "track" : player.sleepTimerRemainingMs ? String(Math.max(1, Math.ceil(player.sleepTimerRemainingMs / 60_000 / 15) * 15)) : "off";
-  const matches = (value: string) => !query.trim() || value.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
-  const toggle = (label: string, value: boolean, change: (next: boolean) => void) => <button className={`mobile-settings-switch ${value ? "on" : ""}`} role="switch" aria-label={label} aria-checked={value} onClick={(event) => { event.stopPropagation(); change(!value); }}><span/></button>;
-  const row = (icon: React.ReactNode, title: string, description: string, trailing: React.ReactNode, onClick?: () => void, className = "") => <div className={`mobile-settings-row ${onClick ? "action" : ""} ${className}`}>{onClick ? <button className="mobile-settings-row-button" onClick={onClick}>{icon}<span><strong>{title}</strong><small>{description}</small></span><span className="mobile-settings-row-trailing">{trailing}</span></button> : <>{icon}<span><strong>{title}</strong><small>{description}</small></span><span className="mobile-settings-row-trailing">{trailing}</span></>}</div>;
-  const section = (title: string, children: React.ReactNode, visible: boolean) => visible ? <section className="mobile-settings-section"><h2>{title}</h2><div className="mobile-settings-card">{children}</div></section> : null;
-  const eqMatches = matches("equalizer audio sound bass treble");
-  const sleepMatches = matches("sleep timer playback");
-  const volumeMatches = matches("volume audio playback");
-  const libraryMatches = matches("music folders library songs original files");
-  const refreshMatches = matches("refresh library scan");
-  const downloadsMatches = matches("downloads music folder youtube");
-  const appearanceMatches = matches("screen awake display compact song list");
-  const zoomMatches = matches("zoom level scale size text dense spacious");
-  const aboutMatches = matches("about michoplay version");
-  const playbackVisible = eqMatches || sleepMatches || volumeMatches;
-  const libraryVisible = libraryMatches || refreshMatches || downloadsMatches;
-  const appearanceVisible = appearanceMatches || zoomMatches;
-  const aboutVisible = aboutMatches;
-  return <div className="mobile-settings-page">
-    <header className="mobile-settings-header"><button aria-label="Back to music" onClick={onBack}><ChevronLeft size={27}/></button><h1>Settings</h1><span/></header>
-    <label className="mobile-settings-search"><Search size={21}/><input aria-label="Find a setting" placeholder="Find a setting" value={query} onChange={(event) => setQuery(event.target.value)}/>{query && <button aria-label="Clear settings search" onClick={() => setQuery("")}><X size={18}/></button>}</label>
-    {section("Playback", <>
-      {eqMatches && <div className={`mobile-settings-row mobile-settings-eq ${equalizerOpen ? "expanded" : ""}`}><button className="mobile-settings-row-button" aria-expanded={equalizerOpen} onClick={() => setEqualizerOpen((open) => !open)}><ListFilter size={21}/><span><strong>Equalizer</strong></span><span className="mobile-settings-row-trailing"><span className="mobile-settings-value">{equalizerEnabled ? "On" : "Off"}</span>{equalizerOpen ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}</span></button>{equalizerOpen && <div className="mobile-eq-panel"><div className="mobile-eq-toggle"><span>Enable equalizer</span>{toggle("Enable equalizer", equalizerEnabled, onEqualizerToggle)}</div><EqualizerSettings bands={equalizerBands} enabled={equalizerEnabled} mobile onChange={onEqualizer} onPreview={onEqualizerPreview} onToggle={onEqualizerToggle}/></div>}</div>}
-      {sleepMatches && row(<Timer size={21}/>, "Sleep timer", player.sleepTimerAtTrackEnd ? "Stops at the end of this song." : player.sleepTimerRemainingMs ? `Stops in ${sleepTimerLabel(player.sleepTimerRemainingMs)}.` : "Stop playback after a set time.", <select className="mobile-settings-select" aria-label="Sleep timer" value={timerValue} onChange={(event) => { const value = event.target.value; onSleepTimer(value === "off" || value === "track" ? null : Number(value), value === "track"); }} onClick={(event) => event.stopPropagation()}><option value="off">Off</option><option value="15">15 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">1 hour</option><option value="track" disabled={!player.currentTrackId}>Track end</option></select>)}
-      {volumeMatches && row(<Volume2 size={21}/>, "Volume", "Audio output level.", <span className="mobile-settings-volume"><input type="range" min="0" max="1" step="0.01" value={player.volume} aria-label="Volume" style={{ "--range-value": `${player.volume * 100}%` } as CSSProperties} onChange={(event) => onVolume(Number(event.target.value))}/><output>{Math.round(player.volume * 100)}%</output></span>)}
-    </>, playbackVisible)}
-    {section("Library & storage", <>
-      {libraryMatches && <div className={`mobile-settings-row mobile-settings-folders ${foldersOpen ? "expanded" : ""}`}><button className="mobile-settings-row-button" aria-expanded={foldersOpen} onClick={() => setFoldersOpen((open) => !open)}><FolderOpen size={21}/><span><strong>Music folders</strong><small>{roots.length ? `${roots.length} folder${roots.length === 1 ? "" : "s"}` : "Add a folder to find music on your phone."}</small></span><span className="mobile-settings-row-trailing">{foldersOpen ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}</span></button>{foldersOpen && <div className="mobile-folder-manager">{roots.length ? roots.map((root) => <div className="mobile-folder-row" key={root}><FolderOpen size={16}/><span className={`mobile-folder-path ${root.length > 34 ? "long" : ""}`} title={root}><span className="mobile-folder-path-track"><span>{root}</span>{root.length > 34 && <span aria-hidden="true">{root}</span>}</span></span><button aria-label={`Remove ${root} from library`} disabled={scanning} onClick={(event) => { event.stopPropagation(); onRemove(root); }}><Trash2 size={16}/></button></div>) : <p className="mobile-folder-empty">No music folders added yet.</p>}<button className="mobile-folder-add" disabled={scanning} onClick={onAdd}><Plus size={15}/>{scanning ? "Scanning…" : "Add music folder"}</button></div>}</div>}
-      {refreshMatches && row(<RefreshCw size={21}/>, "Refresh library", scanning ? "Scanning your music…" : "Look for new songs and artwork.", scanning ? <span className="mobile-settings-spinner"/> : <ChevronRight size={18}/>, scanning ? undefined : onRefresh)}
-      {downloadsMatches && row(<Download size={21}/>, "Download location", "Music / MichoPlay / YouTube", <span className="mobile-settings-value">Phone</span>)}
-    </>, libraryVisible)}
-    {section("Look & feel", <>
-      {appearanceMatches && row(<Settings2 size={21}/>, "Keep screen awake", "Keep the display on while you listen.", toggle("Keep screen awake", keepScreenAwake, onKeepScreenAwake))}
-      {appearanceMatches && row(<List size={21}/>, "Compact song list", "Fit more songs on the library screen.", toggle("Compact song list", compact, onCompact))}
-      {zoomMatches && <div className={`mobile-settings-row mobile-settings-zoom ${zoomOpen ? "expanded" : ""}`}><button className="mobile-settings-row-button" aria-expanded={zoomOpen} onClick={() => setZoomOpen((open) => !open)}><Maximize2 size={21}/><span><strong>Zoom level</strong><small>{zoomLevel}% · Adjust the size of the app interface.</small></span><span className="mobile-settings-row-trailing"><span className="mobile-settings-value">{zoomLevel}%</span>{zoomOpen ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}</span></button>{zoomOpen && <div className="mobile-zoom-panel"><div className="mobile-zoom-presets"><button className={zoomLevel === 70 ? "selected" : ""} onClick={() => onZoom(70)}>Dense</button><button className={zoomLevel === 120 ? "selected" : ""} onClick={() => onZoom(120)}>Default</button><button className={zoomLevel === 130 ? "selected" : ""} onClick={() => onZoom(130)}>Spacious</button></div><input className="mobile-zoom-range" type="range" min="70" max="130" step="10" value={zoomLevel} aria-label="Zoom level" style={{ "--zoom-progress": `${(zoomLevel - 70) / 60 * 100}%` } as CSSProperties} onChange={(event) => onZoom(Number(event.target.value))}/><div className="mobile-zoom-ticks" aria-hidden="true">{[70, 80, 90, 100, 110, 120, 130].map((value) => <span key={value} className={zoomLevel === value ? "active" : ""}>{value}%</span>)}</div><button className="mobile-zoom-reset" onClick={() => onZoom(120)}>Reset to default</button></div>}</div>}
-    </>, appearanceVisible)}
-    {section("About", <>{aboutMatches && row(<AudioLines size={21}/>, "About MichoPlay", `Version ${packageInfo.version}`, <ChevronRight size={18}/>, onAbout)}</>, aboutVisible)}
-    {query.trim() && !playbackVisible && !libraryVisible && !appearanceVisible && !aboutVisible && <div className="mobile-settings-empty"><Search size={25}/><strong>No settings found</strong><span>Try a different word.</span></div>}
-  </div>;
-}
-
-function MobileAboutPage({ version, onBack, onOpenUrl, onShare }: { version: string; onBack: () => void; onOpenUrl: (url: string) => void; onShare: () => void }) {
-  return <div className="mobile-about-page">
-    <header className="mobile-about-header"><button aria-label="Back to settings" onClick={onBack}><ChevronLeft size={27}/></button><h1>About</h1></header>
-    <section className="mobile-about-hero">
-      <div className="mobile-about-mark"><AudioLines size={46}/></div>
-      <h2>MichoPlay</h2>
-      <span className="mobile-about-version">Version {version}</span>
-      <div className="mobile-about-actions"><button onClick={() => onOpenUrl(michoplayGithubUrl)}><Github size={18}/>GitHub</button><button onClick={() => onOpenUrl(michoplayIssueUrl)}><Bug size={18}/>Report issue</button></div>
-    </section>
-    <section className="mobile-about-section"><h2>Links</h2><div className="mobile-about-links"><button onClick={() => onOpenUrl(michoplayDeveloperUrl)}><Globe2 size={19}/><span><strong>Developer</strong></span><ChevronRight size={18}/></button><button onClick={() => onOpenUrl(michoplayWebsiteUrl)}><AudioLines size={19}/><span><strong>Website</strong></span><ChevronRight size={18}/></button><button onClick={onShare}><Share2 size={19}/><span><strong>Share App</strong></span><ChevronRight size={18}/></button></div></section>
-   
-  </div>;
-}
-
-function Empty({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
-  return <div className="empty-library"><h2>{title}</h2><p>{description}</p>{action}</div>;
-}
-function GlobalSearchResultButton({ result, onClick, isPlaying = false, showPlayHover = true }: { result: GlobalSearchResult; onClick: () => void; isPlaying?: boolean; showPlayHover?: boolean }) {
-  const icon = result.type === "Song" ? <Music2 size={18}/> : result.type === "Artist" ? <AudioLines size={18}/> : result.type === "Folder" ? <FolderOpen size={18}/> : result.type === "Playlist" ? <ListMusic size={18}/> : <Disc3 size={18}/>;
-  const hasPlaybackHover = showPlayHover && result.type === "Song";
-  return <button className={`global-search-result ${hasPlaybackHover ? "has-playback-hover" : ""}`} role="option" aria-selected={false} aria-label={`${isPlaying ? "Pause" : "Play"} ${result.title}`} onClick={onClick}><Cover className={`global-search-cover ${result.type === "Artist" ? "artist-art" : ""}`} keys={[result.artworkKey]} icon={icon}/><span className="search-result-copy"><strong>{result.title}</strong><small>{result.subtitle}</small></span>{hasPlaybackHover && <span className="search-result-play" aria-hidden="true">{isPlaying ? <Pause size={15} fill="currentColor"/> : <Play size={15} fill="currentColor"/>}</span>}</button>;
-}
-function CollectionGrid({ collections, kind, onOpen, onPlay, isCurrentCollection, playingId, isPlaying = false }: { collections: Collection[]; kind: Detail["kind"]; onOpen: (collection: Collection) => void; onPlay?: (collection: Collection) => void; isCurrentCollection?: (collection: Collection) => boolean; playingId?: number | null; isPlaying?: boolean }) {
-  const icon = kind === "folder" ? <FolderOpen size={30}/> : kind === "artist" ? <AudioLines size={30}/> : kind === "playlist" ? <ListMusic size={30}/> : <Disc3 size={30}/>;
-  return <div className={`media-grid collection-grid ${kind}-grid`}>{collections.map((item) => {
-    const active = isCurrentCollection ? isCurrentCollection(item) : item.tracks.some((track) => track.id === playingId);
-    return <article className={`media-card ${kind}-card ${active ? "playing" : ""}`} key={item.key}>
-      <button className="collection-open" onClick={() => onOpen(item)} aria-label={`Open ${item.title}`}><Cover className="card-cover" keys={coverKeys(item.tracks)} icon={icon}/><strong title={item.title}>{item.title}</strong><small>{item.subtitle && kind === "album" ? `${item.subtitle} · ` : ""}{item.tracks.length} songs</small></button>
-      {onPlay && item.tracks.length > 0 && <button className={`collection-play-button ${active && isPlaying ? "active" : ""}`} aria-label={`${active && isPlaying ? "Pause" : "Play"} ${item.title}`} title={active && isPlaying ? "Pause" : "Play"} onClick={() => onPlay(item)}>{active && isPlaying ? <Pause size={18} fill="currentColor"/> : <Play size={18} fill="currentColor"/>}</button>}
-    </article>;
-  })}</div>;
-}
-const TrackRows = memo(function TrackRows({ items, player, favorites, compact, playCounts, showPlayCount = false, onPlay, onFavorite, onMenu, emptyTitle, emptyMessage, emptyAction }: { items: Track[]; player: PlayerSnapshot; favorites: Set<number>; compact: boolean; playCounts?: Map<number, number>; showPlayCount?: boolean; onPlay: (track: Track) => void; onFavorite: (id: number) => void; onMenu: (track: Track, event: MouseEvent) => void; emptyTitle: string; emptyMessage: string; emptyAction?: React.ReactNode }) {
-  const [dismissedPlayControl, setDismissedPlayControl] = useState<number | null>(null);
-  const [range, setRange] = useState({ start: 0, end: 80 });
-  const listRef = useRef<HTMLDivElement>(null);
-  const rowHeight = compact ? 43 : 54;
-  useEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
-    const root = list.closest<HTMLElement>(".content-scroll");
-    const update = () => {
-      const rect = list.getBoundingClientRect();
-      const top = root ? rect.top - root.getBoundingClientRect().top + root.scrollTop : rect.top + window.scrollY;
-      const scrollTop = root ? root.scrollTop : window.scrollY;
-      const height = root ? root.clientHeight : window.innerHeight;
-      const relativeTop = scrollTop - top;
-      const firstVisible = Math.max(0, Math.floor(relativeTop / rowHeight));
-      const lastVisible = Math.min(items.length, Math.ceil((relativeTop + height) / rowHeight));
-      const next = {
-        start: Math.max(0, firstVisible - 8),
-        end: Math.min(items.length, Math.max(firstVisible, lastVisible) + 8),
-      };
-      setRange((prior) => prior.start === next.start && prior.end === next.end ? prior : next);
-    };
-    update();
-    const scrollTarget: HTMLElement | Window = root ?? window;
-    scrollTarget.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update, { passive: true });
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
-    if (root) observer?.observe(root);
-    observer?.observe(list);
-    return () => {
-      scrollTarget.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
-      observer?.disconnect();
-    };
-  }, [items, rowHeight]);
-  const visibleItems = items.slice(range.start, range.end);
-  return <div className="track-table" role="table" aria-label="Songs"><div className="table-head" role="row"><span role="columnheader">#</span><span role="columnheader">Title</span><span role="columnheader">Album</span><span role="columnheader">Artist</span><span role="columnheader"><Clock3 size={13}/></span></div>{items.length ? <div ref={listRef} className="track-list virtual-track-list" role="rowgroup" style={{ height: items.length * rowHeight, position: "relative" }}>{visibleItems.map((track, offset) => { const index = range.start + offset; const active = player.currentTrackId === track.id && player.isPlaying; const playCount = playCounts?.get(track.id) ?? 0; const playControlDismissed = dismissedPlayControl === track.id; const playTrack = () => { setDismissedPlayControl(track.id); onPlay(track); }; const favorite = favorites.has(track.id); return <div role="row" key={track.id} className={`track-row ${player.currentTrackId === track.id ? "playing" : ""} ${playControlDismissed ? "suppress-row-play" : ""}`} style={{ position: "absolute", top: index * rowHeight, left: 0, right: 0, height: rowHeight }} onMouseLeave={() => { if (playControlDismissed) setDismissedPlayControl(null); }} onContextMenu={(event) => onMenu(track, event)}><button className="track-number" aria-label={`${active ? "Pause" : "Play"} ${track.title}`} onClick={playTrack}>{active ? <span className="playing-animation" aria-label="Playing"><i/><i/><i/></span> : <span className="row-index">{index + 1}</span>}{active ? <Pause className="row-play" size={15} fill="currentColor"/> : <Play className="row-play" size={15} fill="currentColor"/>}</button><div className="track-title-cell" role="cell"><Cover className="row-cover" keys={[track.artworkKey]}/><button className="track-name" onClick={playTrack}><strong>{track.title}</strong><small>{track.artist}{showPlayCount && playCount > 0 && <span className="track-play-count"> · {playCount} {playCount === 1 ? "play" : "plays"}</span>}</small></button></div><span className="track-album" role="cell">{track.album}</span><span className="track-artist-cell" role="cell">{track.artist}</span><span className="track-actions" role="cell"><button className={`row-action favorite-action ${favorite ? "selected" : ""}`} aria-label={favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => onFavorite(track.id)}><Heart size={15} fill={favorite ? "currentColor" : "none"}/></button><span className="track-duration">{time(track.durationMs)}</span><button className="row-action menu-trigger" aria-label={`Actions for ${track.title}`} onClick={(event) => onMenu(track, event)}><MoreHorizontal size={17}/></button></span></div>;})}</div> : <Empty title={emptyTitle} description={emptyMessage} action={emptyAction}/>}</div>;
-});
-function SettingsPage({ roots, player, equalizerBands, equalizerEnabled, compact, showPanel, keepScreenAwake, onKeepScreenAwake, globalYoutubeSearchEnabled, onGlobalYoutubeSearch, scanning, mobile, zoomLevel, onZoom, onEqualizer, onEqualizerPreview, onEqualizerToggle, onCompact, onPanel, onAdd, onRemove, onRefresh, onVolume, onAutoplay, onSleepTimer, onDefaultPlayer }: { roots: string[]; player: PlayerSnapshot; equalizerBands: number[]; equalizerEnabled: boolean; compact: boolean; showPanel: boolean; keepScreenAwake: boolean; onKeepScreenAwake: (value: boolean) => void; globalYoutubeSearchEnabled: boolean; onGlobalYoutubeSearch: (value: boolean) => void; scanning: boolean; mobile: boolean; zoomLevel: number; onZoom: (value: number) => void; onEqualizer: (bands: number[]) => void; onEqualizerPreview: (bands: number[]) => void | Promise<unknown>; onEqualizerToggle: (enabled: boolean) => void; onCompact: (value: boolean) => void; onPanel: (value: boolean) => void; onAdd: () => void; onRemove: (root: string) => void; onRefresh: () => void; onVolume: (value: number) => void; onAutoplay: (value: boolean) => void; onSleepTimer: (minutes: number | null, atTrackEnd: boolean) => void; onDefaultPlayer: () => void }) {
-  const timerValue = player.sleepTimerAtTrackEnd ? "track" : player.sleepTimerRemainingMs ? String(Math.max(1, Math.ceil(player.sleepTimerRemainingMs / 60_000 / 15) * 15)) : "off";
-  const remaining = player.sleepTimerRemainingMs == null ? "" : `${Math.floor(player.sleepTimerRemainingMs / 60_000)}:${String(Math.floor((player.sleepTimerRemainingMs % 60_000) / 1000)).padStart(2, "0")}`;
-  const toggle = (title: string, description: string, value: boolean, change: (value: boolean) => void) => <div className="setting-row"><div><strong>{title}</strong><small>{description}</small></div><button className={`switch ${value ? "on" : ""}`} role="switch" aria-label={title} aria-checked={value} onClick={() => change(!value)}><span/></button></div>;
-  return <div className="settings-page"><div className="settings-title"><h1>Settings</h1></div><section className="settings-group"><h2>Playback</h2>{toggle("Autoplay", "Continue with the next song when playback ends.", player.autoplay, onAutoplay)}{!mobile && toggle("YouTube in global search", "Include online YouTube matches alongside songs in your library.", globalYoutubeSearchEnabled, onGlobalYoutubeSearch)}
-    <EqualizerSettings bands={equalizerBands} enabled={equalizerEnabled} onChange={onEqualizer} onPreview={onEqualizerPreview} onToggle={onEqualizerToggle}/><div className="setting-row sleep-timer-row"><div><strong>Sleep timer</strong><small>{player.sleepTimerAtTrackEnd ? "Playback will stop at the end of this song." : remaining ? `Playback stops in ${remaining}.` : "Stop playback after a set time or at the end of a song."}</small></div><select className="sleep-timer-select" aria-label="Sleep timer" value={timerValue} onChange={(event) => { const value = event.target.value; onSleepTimer(value === "off" || value === "track" ? null : Number(value), value === "track"); }}><option value="off">Off</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option><option value="90">1.5 hours</option><option value="120">2 hours</option><option value="track" disabled={!player.currentTrackId}>End of current song</option></select></div>
-    {mobile && <div className="setting-row"><div><strong>Background playback</strong><small>Keep playing with lock-screen and notification controls.</small></div><span className="setting-value">On</span></div>}<div className="setting-row"><div><strong>Volume</strong><small>Audio output level</small></div><div className="settings-volume"><input type="range" min="0" max="1" step="0.01" value={player.volume} style={{ "--range-value": `${player.volume * 100}%` } as CSSProperties} aria-label="Playback volume" onChange={(event) => onVolume(Number(event.target.value))}/><span className="setting-value">{Math.round(player.volume * 100)}%</span></div></div></section>
-    <section className="settings-group zoom-settings"><h2>Zoom level</h2><p className="zoom-description">Adjusting the zoom level can help you make the most of MichoPlay and adapt it to your preferences or needs.</p><p className="zoom-shortcuts">Keyboard controls are listed below.</p><div className="zoom-control"><div className="zoom-landmarks"><button className="zoom-landmark" onClick={() => onZoom(70)} aria-label="Set zoom to 70 percent"><span className="zoom-preview dense" aria-hidden="true">{Array.from({ length: 12 }, (_, i) => <i key={i}/>)}</span><span>Dense</span></button><button className="zoom-landmark" onClick={() => onZoom(mobile ? 120 : 100)} aria-label={`Set zoom to ${mobile ? 120 : 100} percent`}><span className="zoom-preview default" aria-hidden="true">{Array.from({ length: 9 }, (_, i) => <i key={i}/>)}</span><span>Default</span></button><button className="zoom-landmark" onClick={() => onZoom(130)} aria-label="Set zoom to 130 percent"><span className="zoom-preview spacious" aria-hidden="true">{Array.from({ length: 6 }, (_, i) => <i key={i}/>)}</span><span>Spacious</span></button></div><input className="zoom-range" type="range" min="70" max="130" step="10" value={zoomLevel} style={{ "--zoom-progress": `${(zoomLevel - 70) / 60 * 100}%` } as CSSProperties} aria-label="Zoom level" aria-valuetext={`${zoomLevel}%`} onChange={(event) => onZoom(Number(event.target.value))}/><div className="zoom-ticks" aria-hidden="true">{[70, 80, 90, 100, 110, 120, 130].map((value) => <span key={value} className={zoomLevel === value ? "active" : ""}>{value}%</span>)}</div><div className="zoom-reset-row"><button className="outline-button" onClick={() => onZoom(mobile ? 120 : 100)}>Reset</button></div></div></section>
-    <section className="settings-group shortcuts-settings"><h2>Keyboard shortcuts</h2><div className="shortcut-list">{keyboardShortcuts.map(({ action, keys }) => <div className="shortcut-row" key={action}><span>{action}</span><span className="shortcut-keys">{keys.map((key, index) => <kbd key={`${key}-${index}`}>{key}</kbd>)}</span></div>)}</div></section><section className="settings-group"><h2>Your library</h2><div className="setting-row"><div><strong>Music folders</strong><small>{mobile ? "MichoPlay reads songs from their original folders. Only metadata and artwork are cached." : "Music is scanned recursively inside each root."}</small></div><button className="outline-button" disabled={scanning} onClick={onAdd}><Plus size={15}/>Add folder</button></div>{roots.map((root) => <div className="root-row" key={root}><FolderOpen size={17}/><span title={root}>{root}</span><button className="icon-button" disabled={scanning} aria-label={`Remove ${root} from library`} onClick={() => onRemove(root)}><Trash2 size={15}/></button></div>)}{!roots.length && <p className="no-roots">No music folders added.</p>}<button className="outline-button refresh-button" disabled={scanning || !roots.length} onClick={onRefresh}><RefreshCw size={14}/>{scanning ? "Refreshing…" : "Refresh library"}</button></section><section className="settings-group"><h2>System integration</h2><div className="setting-row"><div><strong>Default music player</strong><small>{mobile ? "Choose MichoPlay from Android’s Open with menu, then select Always to make it the default." : "MichoPlay can open audio files from your file manager. Installed desktop builds register common audio formats."}</small></div><button className="outline-button" onClick={onDefaultPlayer}>{mobile ? "How to set default" : "Set as default"}</button></div></section><section className="settings-group"><h2>Display</h2>{toggle("Now playing panel", "Show artwork and the adjustable playback queue.", showPanel, onPanel)}{toggle("Keep screen awake in full mode", "Prevent the display from sleeping while the full player is open. Off by default.", keepScreenAwake, onKeepScreenAwake)}{toggle("Compact song list", "Fit more songs in the library view.", compact, onCompact)}</section></div>;
 }

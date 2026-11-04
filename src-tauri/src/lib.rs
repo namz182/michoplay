@@ -1,8 +1,10 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use lofty::{
+    config::WriteOptions,
     file::{AudioFile, TaggedFileExt},
+    picture::{MimeType, Picture, PictureType},
     probe::Probe,
-    tag::ItemKey,
+    tag::{ItemKey, Tag, TagExt, TagType},
 };
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rodio::{
@@ -31,6 +33,9 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
+
+mod app_data;
+use app_data::{app_data_load, app_data_migrate, app_data_save};
 
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
 static LIBRARY_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -199,6 +204,8 @@ impl<S: Source> Source for EqualizerSource<S> {
 #[serde(rename_all = "camelCase")]
 struct Track {
     id: u64,
+    #[serde(default)]
+    path: String,
     title: String,
     artist: String,
     album: String,
@@ -271,6 +278,11 @@ struct PlayerCore {
     sink: Option<Sink>,
     output_failed: Arc<AtomicBool>,
     is_playing: bool,
+    resume_after_interruption: bool,
+    #[cfg(any(target_os = "android", test))]
+    audio_focus_generation: u64,
+    #[cfg(target_os = "android")]
+    android_media: Option<tauri::plugin::PluginHandle<tauri::Wry>>,
     volume: f32,
     shuffle: bool,
     repeat_mode: String,
@@ -320,56 +332,55 @@ fn android_media_plugin(
         .ok_or_else(|| "Android media services are still starting. Try again shortly.".to_owned())
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn apply_android_media_action(core: &mut PlayerCore, action: &str) -> Result<(), String> {
+    let (action, generation) = match action.split_once(':') {
+        Some((
+            kind @ ("focus-loss"
+            | "focus-loss-transient"
+            | "focus-gain"
+            | "becoming-noisy"
+            | "service-stopped"),
+            generation,
+        )) => (
+            kind,
+            Some(
+                generation
+                    .parse::<u64>()
+                    .map_err(|_| "Invalid audio focus generation.".to_owned())?,
+            ),
+        ),
+        _ => (action, None),
+    };
+    // A queued interruption from an earlier focus request must not pause a new
+    // song the user explicitly started while the event was in flight.
+    if generation.is_some_and(|generation| generation != core.audio_focus_generation) {
+        return Ok(());
+    }
     match action {
-        "play" | "toggle" => {
-            core.discard_failed_output();
-            if core.current_queue_index.is_none() {
-                let first = core
-                    .queue
-                    .first()
-                    .copied()
-                    .ok_or_else(|| "Add a music folder first.".to_owned())?;
-                core.play_track(first)
-            } else if core.sink.as_ref().map_or(true, Sink::empty) {
-                core.play_queue_index(core.current_queue_index.unwrap_or(0))
-            } else if let Some(sink) = &core.sink {
-                if action == "toggle" && core.is_playing {
-                    sink.pause();
-                    core.is_playing = false;
-                } else {
-                    sink.play();
-                    core.is_playing = true;
-                }
-                Ok(())
-            } else {
-                Ok(())
-            }
+        "play" => core.set_playing(true),
+        "toggle" => core.set_playing(!core.is_playing),
+        "pause" | "focus-loss" | "becoming-noisy" | "service-stopped" => core.set_playing(false),
+        "focus-loss-transient" => {
+            let resume = core.is_playing || core.resume_after_interruption;
+            core.set_playing(false)?;
+            core.resume_after_interruption = resume;
+            Ok(())
         }
-        "pause" => {
-            if let Some(sink) = &core.sink {
-                sink.pause();
+        "focus-gain" => {
+            if core.resume_after_interruption {
+                // Only resume a song interrupted by Android. A user's pause
+                // clears this flag, even while focus is temporarily held away.
+                core.resume_after_interruption = false;
+                core.set_playing(true)?;
             }
-            core.is_playing = false;
             Ok(())
         }
         "next" => {
             if core.queue.is_empty() {
                 return Err("Add a music folder first.".to_owned());
             }
-            if let Some(next) = core
-                .current_queue_index
-                .and_then(|index| core.next_index(index))
-            {
-                core.play_queue_index(next)
-            } else {
-                core.is_playing = false;
-                if let Some(sink) = &core.sink {
-                    sink.stop();
-                }
-                Ok(())
-            }
+            core.play_next_available()
         }
         "previous" => {
             if core.queue.is_empty() {
@@ -468,9 +479,7 @@ fn take_pending_audio_opens(state: State<'_, PendingAudioOpens>) -> Result<Vec<S
 }
 
 #[tauri::command]
-fn media_take_opened_audio(
-    state: State<'_, MediaBridge>,
-) -> Result<Vec<String>, String> {
+fn media_take_opened_audio(state: State<'_, MediaBridge>) -> Result<Vec<String>, String> {
     #[cfg(target_os = "android")]
     {
         let bridge = state
@@ -632,28 +641,6 @@ fn media_update(
     state: State<'_, MediaBridge>,
     desktop: State<'_, DesktopMediaBridge>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        let bridge = state
-            .0
-            .lock()
-            .map_err(|_| "Media controls are unavailable.".to_owned())?;
-        if let Some(handle) = bridge.as_ref() {
-            handle
-                .run_mobile_plugin::<()>(
-                    "update",
-                    serde_json::json!({
-                        "title": title.unwrap_or_default(),
-                        "artist": artist.unwrap_or_default(),
-                        "isPlaying": is_playing,
-                        "durationMs": duration_ms,
-                        "positionMs": position_ms,
-                        "artworkDataUrl": artwork_data_url,
-                    }),
-                )
-                .map_err(|error| error.to_string())?;
-        }
-    }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let mut controls = desktop
@@ -688,7 +675,7 @@ fn media_update(
         }
         let _ = &state;
     }
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = (
         title,
         artist,
@@ -772,7 +759,7 @@ fn supported_audio(path: &Path) -> bool {
 }
 
 fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) -> LibraryTrack {
-    let mut artwork = sidecar;
+    let mut artwork = read_track_art(path).or(sidecar);
     let fallback_title = path
         .file_stem()
         .and_then(|name| name.to_str())
@@ -792,7 +779,10 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
                 if picture.data().len() <= 8 * 1024 * 1024 {
                     if let Some(mime) = picture.mime_type() {
                         let mime = mime.to_string();
-                        if matches!(mime.as_str(), "image/jpeg" | "image/png" | "image/webp") {
+                        if matches!(
+                            mime.as_str(),
+                            "image/jpeg" | "image/png" | "image/webp" | "image/avif"
+                        ) {
                             artwork = Some(Arc::new(Artwork {
                                 mime,
                                 data: picture.data().to_vec(),
@@ -864,6 +854,7 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
     LibraryTrack {
         track: Track {
             id,
+            path: path.to_string_lossy().into_owned(),
             title,
             artist,
             album,
@@ -885,6 +876,35 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
     }
 }
 
+fn read_track_art(path: &Path) -> Option<Arc<Artwork>> {
+    let parent = path.parent()?;
+    let stem = path.file_stem()?.to_str()?;
+    for extension in ["jpg", "jpeg", "png", "webp", "avif"] {
+        let artwork_path = parent.join(format!("{stem}.{extension}"));
+        let Ok(metadata) = std::fs::metadata(&artwork_path) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 8 * 1024 * 1024 {
+            continue;
+        }
+        let Ok(data) = std::fs::read(artwork_path) else {
+            continue;
+        };
+        let mime = match extension {
+            "png" => "image/png",
+            "webp" => "image/webp",
+            "avif" => "image/avif",
+            "jpeg" | "jpg" => "image/jpeg",
+            _ => continue,
+        };
+        return Some(Arc::new(Artwork {
+            mime: mime.to_owned(),
+            data,
+        }));
+    }
+    None
+}
+
 fn read_folder_art(folder: &Path) -> Option<Arc<Artwork>> {
     let mut images = std::fs::read_dir(folder)
         .ok()?
@@ -896,7 +916,7 @@ fn read_folder_art(folder: &Path) -> Option<Arc<Artwork>> {
                 .is_some_and(|ext| {
                     matches!(
                         ext.to_ascii_lowercase().as_str(),
-                        "jpg" | "jpeg" | "png" | "webp"
+                        "jpg" | "jpeg" | "png" | "webp" | "avif"
                     )
                 })
         })
@@ -919,23 +939,99 @@ fn read_folder_art(folder: &Path) -> Option<Arc<Artwork>> {
             path.clone(),
         )
     });
-    for path in images {
-        if std::fs::metadata(&path).ok()?.len() > 8 * 1024 * 1024 {
-            continue;
-        }
-        let mime = match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-            "png" => "image/png",
-            "webp" => "image/webp",
-            _ => "image/jpeg",
-        };
-        if let Ok(data) = std::fs::read(path) {
-            return Some(Arc::new(Artwork {
-                mime: mime.to_owned(),
-                data,
-            }));
-        }
+    let preferred = images.iter().position(|path| {
+        path.file_stem()
+            .and_then(|name| name.to_str())
+            .is_some_and(|stem| {
+                matches!(
+                    stem.to_ascii_lowercase().as_str(),
+                    "cover" | "folder" | "front" | "album" | "artwork"
+                )
+            })
+    });
+    let path = preferred
+        .map(|index| images.remove(index))
+        .or_else(|| (images.len() == 1).then(|| images.remove(0)))?;
+    if std::fs::metadata(&path).ok()?.len() > 8 * 1024 * 1024 {
+        return None;
     }
-    None
+    let mime = match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        _ => "image/jpeg",
+    };
+    let data = std::fs::read(path).ok()?;
+    Some(Arc::new(Artwork {
+        mime: mime.to_owned(),
+        data,
+    }))
+}
+
+#[cfg(not(target_os = "android"))]
+fn thumbnail_for_audio(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    let stem = path.file_stem()?.to_str()?;
+    std::fs::read_dir(parent)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|candidate| {
+            candidate.file_stem().and_then(|name| name.to_str()) == Some(stem)
+                && candidate
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        matches!(
+                            ext.to_ascii_lowercase().as_str(),
+                            "jpg" | "jpeg" | "png" | "webp" | "avif"
+                        )
+                    })
+                && candidate.is_file()
+        })
+}
+
+#[cfg(not(target_os = "android"))]
+fn embed_thumbnail_in_mp3(audio_path: &Path, thumbnail_path: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(thumbnail_path)
+        .map_err(|_| "The YouTube thumbnail could not be read.".to_owned())?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 8 * 1024 * 1024 {
+        return Err("The YouTube thumbnail is empty or too large to embed.".to_owned());
+    }
+    let extension = thumbnail_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        _ => return Err("The YouTube thumbnail format is not supported.".to_owned()),
+    };
+    let picture = Picture::unchecked(
+        std::fs::read(thumbnail_path)
+            .map_err(|_| "The YouTube thumbnail could not be read.".to_owned())?,
+    )
+    .pic_type(PictureType::CoverFront)
+    .mime_type(MimeType::from_str(mime))
+    .description("Cover art")
+    .build();
+    let mut tagged = Probe::open(audio_path)
+        .map_err(|error| format!("Could not read downloaded MP3 tags: {error}"))?
+        .read()
+        .map_err(|error| format!("Could not read downloaded MP3 tags: {error}"))?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::Id3v2));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .ok_or_else(|| "Could not prepare MP3 artwork metadata.".to_owned())?;
+    tag.remove_picture_type(PictureType::CoverFront);
+    tag.push_picture(picture);
+    tag.save_to_path(audio_path, WriteOptions::default())
+        .map_err(|error| format!("Could not save MP3 artwork: {error}"))
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1016,7 +1112,13 @@ fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
             let legacy_path = storage_dir.join("library-index.json");
             if let Ok(bytes) = fs::read(legacy_path) {
                 if let Ok(entries) = serde_json::from_slice::<Vec<CachedTrack>>(&bytes) {
-                    let _ = write_library_cache(storage_dir, &entries);
+                    let roots = entries
+                        .iter()
+                        .map(|entry| PathBuf::from(&entry.root_path))
+                        .collect::<HashSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    let _ = write_library_cache(storage_dir, &entries, &roots);
                 }
             }
         }
@@ -1041,7 +1143,10 @@ fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
     rows.flatten()
         .filter_map(
             |(path, root_path, file_size, modified_at, track_json, artwork_mime)| {
-                let track = serde_json::from_str(&track_json).ok()?;
+                let mut track: Track = serde_json::from_str(&track_json).ok()?;
+                if track.path.is_empty() {
+                    track.path = path.clone();
+                }
                 Some((
                     path.clone(),
                     CachedTrack {
@@ -1058,7 +1163,11 @@ fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
         .collect()
 }
 
-fn write_library_cache(storage_dir: &Path, entries: &[CachedTrack]) -> rusqlite::Result<()> {
+fn write_library_cache(
+    storage_dir: &Path,
+    entries: &[CachedTrack],
+    scanned_roots: &[PathBuf],
+) -> rusqlite::Result<()> {
     let mut connection = open_library_cache(storage_dir)?;
     let transaction = connection.transaction()?;
     transaction.execute_batch(
@@ -1127,10 +1236,18 @@ fn write_library_cache(storage_dir: &Path, entries: &[CachedTrack]) -> rusqlite:
             ])?;
         }
     }
-    transaction.execute(
-        "DELETE FROM tracks WHERE NOT EXISTS (SELECT 1 FROM scan_paths WHERE scan_paths.path = tracks.path)",
-        [],
-    )?;
+    // Only reconcile roots that were successfully scanned. A disconnected drive
+    // or an unreadable folder must not evict its cached tracks.
+    {
+        let mut delete_missing = transaction.prepare(
+            "DELETE FROM tracks
+             WHERE root_path = ?1
+               AND NOT EXISTS (SELECT 1 FROM scan_paths WHERE scan_paths.path = tracks.path)",
+        )?;
+        for root in scanned_roots {
+            delete_missing.execute([root.to_string_lossy().as_ref()])?;
+        }
+    }
     transaction.commit()
 }
 
@@ -1332,10 +1449,20 @@ where
     let mut paths = Vec::new();
     let mut visited = 0usize;
     for root in &canonical_roots {
-        for entry in WalkDir::new(root).follow_links(false).into_iter().flatten() {
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| !is_protected_android_storage_dir(entry.path()))
+        {
             if LIBRARY_SCAN_CANCELLED.load(Ordering::Relaxed) {
                 return Err("Library scan cancelled.".to_owned());
             }
+            let entry = entry.map_err(|_| {
+                format!(
+                    "MichoPlay couldn’t finish scanning “{}”. The previous index was kept.",
+                    root.display()
+                )
+            })?;
             visited += 1;
             if entry.file_type().is_file() && supported_audio(entry.path()) {
                 if let Ok(path) = entry.path().canonicalize() {
@@ -1505,10 +1632,21 @@ where
         let Ok(_cache_write) = LIBRARY_CACHE_WRITE_LOCK.lock() else {
             return Ok(result);
         };
-        let _ = write_library_cache(storage_dir, &index_entries);
+        let _ = write_library_cache(storage_dir, &index_entries, &canonical_roots);
         prune_artwork_cache(&storage_dir.join("artwork"), &live_artwork);
     }
     Ok(result)
+}
+
+fn is_protected_android_storage_dir(path: &Path) -> bool {
+    let components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    components.windows(2).any(|pair| {
+        pair[0].eq_ignore_ascii_case("Android")
+            && (pair[1].eq_ignore_ascii_case("data") || pair[1].eq_ignore_ascii_case("obb"))
+    })
 }
 
 fn prune_artwork_cache(directory: &Path, live_keys: &HashSet<String>) {
@@ -1545,9 +1683,83 @@ fn prune_artwork_cache(directory: &Path, live_keys: &HashSet<String>) {
 }
 
 impl PlayerCore {
+    #[cfg(target_os = "android")]
+    fn android_media_revision(&self) -> (Option<u64>, bool, bool, u64) {
+        (
+            self.current_queue_index
+                .and_then(|index| self.queue.get(index))
+                .copied(),
+            self.is_playing,
+            self.resume_after_interruption,
+            self.audio_focus_generation,
+        )
+    }
+
+    // On Android, commands that lock PlayerCore run on Tauri's worker pool:
+    // the main thread must remain available to grant focus while this lock is held.
+    fn ensure_playback_focus(&mut self) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Deserialize)]
+            struct FocusResponse {
+                granted: bool,
+                generation: u64,
+            }
+            let plugin = self.android_media.as_ref().ok_or_else(|| {
+                "Android media services are still starting. Try again shortly.".to_owned()
+            })?;
+            let response = match plugin.run_mobile_plugin::<FocusResponse>("requestAudioFocus", ())
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    self.set_playing(false)?;
+                    return Err(format!("Android could not start playback: {error}"));
+                }
+            };
+            self.audio_focus_generation = response.generation;
+            if !response.granted {
+                self.set_playing(false)?;
+                return Err(
+                    "Another app is using audio. Try playing again when it finishes.".to_owned(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn set_playing(&mut self, playing: bool) -> Result<(), String> {
+        self.discard_failed_output();
+        self.resume_after_interruption = false;
+        if !playing {
+            if let Some(sink) = &self.sink {
+                sink.pause();
+            }
+            self.is_playing = false;
+            return Ok(());
+        }
+        let Some(index) = self.current_queue_index else {
+            let first = self
+                .queue
+                .first()
+                .copied()
+                .ok_or_else(|| "Add a music folder first.".to_owned())?;
+            return self.play_track(first);
+        };
+        if self.sink.as_ref().map_or(true, Sink::empty) {
+            return self.play_queue_index(index);
+        }
+        self.ensure_playback_focus()?;
+        if let Some(sink) = &self.sink {
+            sink.play();
+        }
+        self.is_playing = true;
+        Ok(())
+    }
+
     fn discard_failed_output(&mut self) {
         if self.output_failed.swap(false, Ordering::AcqRel) {
             self.is_playing = false;
+            self.resume_after_interruption = false;
             self.sink = None;
             self.output = None;
         }
@@ -1659,6 +1871,7 @@ impl PlayerCore {
             }
         }
         if self.current_queue_index.is_none() {
+            self.resume_after_interruption = false;
             self.is_playing = false;
             if let Some(sink) = &self.sink {
                 sink.stop();
@@ -1714,6 +1927,54 @@ impl PlayerCore {
         }
     }
 
+    fn remove_unplayable_queue_item(&mut self, index: usize) {
+        if let Some(id) = self.queue.get(index).copied() {
+            self.queue.remove(index);
+            self.priority_queue.retain(|queued| *queued != id);
+            if let Some(current) = self.current_queue_index {
+                if index < current {
+                    self.current_queue_index = Some(current - 1);
+                } else if index == current {
+                    self.current_queue_index = None;
+                }
+            }
+        }
+    }
+
+    fn play_next_available(&mut self) -> Result<(), String> {
+        let mut remaining_attempts = self.queue.len();
+        while remaining_attempts > 0 {
+            remaining_attempts -= 1;
+            let next = match self.current_queue_index {
+                Some(current) => self.next_index(current),
+                None if !self.queue.is_empty() => Some(0),
+                None => None,
+            };
+            let Some(next) = next else {
+                self.is_playing = false;
+                if let Some(sink) = &self.sink {
+                    sink.stop();
+                }
+                return Ok(());
+            };
+            match self.play_queue_index(next) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if error == "This music file can’t be opened."
+                        || error == "This audio format could not be decoded." =>
+                {
+                    self.remove_unplayable_queue_item(next);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.is_playing = false;
+        if let Some(sink) = &self.sink {
+            sink.stop();
+        }
+        Ok(())
+    }
+
     fn find_track_index(&self, id: u64) -> Result<usize, String> {
         self.track_indices.get(&id).copied().ok_or_else(|| {
             "That song is no longer in the library. Refresh the folder and try again.".to_owned()
@@ -1738,6 +1999,7 @@ impl PlayerCore {
                 .unwrap_or(0);
         }
 
+        self.ensure_playback_focus()?;
         if self.output.is_none() {
             let output_failed = self.output_failed.clone();
             self.output = Some(
@@ -1767,6 +2029,7 @@ impl PlayerCore {
             self.equalizer_enabled.clone(),
         ));
         sink.play();
+        self.resume_after_interruption = false;
         self.current_queue_index = Some(queue_index);
         let upcoming = self
             .queue
@@ -1785,7 +2048,13 @@ impl PlayerCore {
             self.play_queue_index(index)
         } else {
             self.queue.push(id);
-            self.play_queue_index(self.queue.len() - 1)
+            match self.play_queue_index(self.queue.len() - 1) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    self.queue.pop();
+                    Err(error)
+                }
+            }
         }
     }
 
@@ -1800,16 +2069,21 @@ impl PlayerCore {
                 sink.pause();
             }
             self.is_playing = false;
+            self.resume_after_interruption = false;
             self.sleep_timer_deadline = None;
             self.sleep_timer_at_track_end = false;
         } else if track_ended {
             let current = self.current_queue_index.unwrap_or(0);
             if self.repeat_mode == "one" && self.priority_queue.is_empty() {
-                let _ = self.play_queue_index(current);
+                if self.play_queue_index(current).is_err() {
+                    self.is_playing = false;
+                }
             } else {
                 if self.autoplay || !self.priority_queue.is_empty() {
-                    if let Some(next) = self.next_index(current) {
-                        let _ = self.play_queue_index(next);
+                    if self.next_index(current).is_some() {
+                        if self.play_next_available().is_err() {
+                            self.is_playing = false;
+                        }
                     } else {
                         self.is_playing = false;
                     }
@@ -1918,7 +2192,8 @@ fn library_import_audio_files(
         .map_err(|_| "The app couldn’t create its music storage folder.".to_owned())?;
 
     let mut total_bytes = 0usize;
-    for (index, file) in files.into_iter().enumerate() {
+    let mut prepared = Vec::with_capacity(files.len());
+    for file in files {
         let name = file
             .name
             .rsplit(|character| character == '/' || character == '\\')
@@ -1952,14 +2227,44 @@ fn library_import_audio_files(
             return Err("The selected audio files exceed the import size limit.".to_owned());
         }
         total_bytes += bytes.len();
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let destination = data_dir.join(format!("{stamp}-{index}-{name}"));
-        std::fs::write(destination, bytes)
-            .map_err(|_| format!("“{name}” couldn’t be saved to app storage."))?;
+        prepared.push((name, bytes));
     }
+
+    // Validate the complete batch before touching the music directory, then
+    // stage all files and roll back if any write or rename fails.
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let staging_dir = data_dir.join(format!(".import-{stamp}"));
+    std::fs::create_dir(&staging_dir)
+        .map_err(|_| "The selected audio files couldn’t be staged.".to_owned())?;
+    let result = (|| {
+        let mut staged = Vec::with_capacity(prepared.len());
+        for (index, (name, bytes)) in prepared.into_iter().enumerate() {
+            let staged_path = staging_dir.join(format!("{index}.audio"));
+            std::fs::write(&staged_path, bytes)
+                .map_err(|_| format!("“{name}” couldn’t be saved to app storage."))?;
+            staged.push((
+                staged_path,
+                data_dir.join(format!("{stamp}-{index}-{name}")),
+                name,
+            ));
+        }
+        let mut committed = Vec::with_capacity(staged.len());
+        for (staged_path, destination, name) in staged {
+            if let Err(_) = std::fs::rename(&staged_path, &destination) {
+                for path in committed {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(format!("“{name}” couldn’t be saved to app storage."));
+            }
+            committed.push(destination);
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    result?;
     Ok(data_dir.to_string_lossy().into_owned())
 }
 
@@ -2086,6 +2391,8 @@ struct YoutubeDownloadItem {
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
     message: String,
+    #[serde(default)]
+    file_paths: Vec<String>,
 }
 
 struct YoutubeDownloadTask {
@@ -2188,24 +2495,51 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) -> bool {
 }
 
 #[cfg(not(target_os = "android"))]
-fn bundled_desktop_tool(name: &str) -> Result<std::path::PathBuf, String> {
-    let executable = std::env::current_exe()
-        .map_err(|_| "MichoPlay couldn’t locate its bundled audio tools.".to_owned())?;
-    let directory = executable
-        .parent()
-        .ok_or_else(|| "MichoPlay couldn’t locate its bundled audio tools.".to_owned())?;
+fn bundled_desktop_tool(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
     let filename = if cfg!(target_os = "windows") {
         format!("michoplay-{name}.exe")
     } else {
         format!("michoplay-{name}")
     };
-    let path = directory.join(filename);
-    if !path.is_file() {
-        return Err(format!(
-            "MichoPlay’s bundled {name} tool is missing. Reinstall the desktop app."
-        ));
+    let mut directories = Vec::new();
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            directories.push(directory.to_path_buf());
+            directories.push(directory.join("binaries"));
+        }
     }
-    Ok(path)
+    if let Ok(resources) = app.path().resource_dir() {
+        directories.push(resources.clone());
+        directories.push(resources.join("binaries"));
+    }
+
+    for directory in directories {
+        let direct_path = directory.join(&filename);
+        if direct_path.is_file() {
+            return Ok(direct_path);
+        }
+
+        // Tauri keeps the target triple on externalBin filenames in the bundle.
+        // Look for that packaged name as well as the unsuffixed development name.
+        if let Ok(entries) = std::fs::read_dir(&directory) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(candidate) = path.file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if candidate.starts_with(&format!("michoplay-{name}-"))
+                    && (candidate.ends_with(".exe") == cfg!(target_os = "windows"))
+                    && path.is_file()
+                {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "MichoPlay’s bundled {name} tool is missing. Reinstall the desktop app."
+    ))
 }
 
 #[cfg(not(target_os = "android"))]
@@ -2216,27 +2550,32 @@ fn ffmpeg_supports_mp3(path: &Path) -> bool {
     let Ok(output) = output else {
         return false;
     };
+    if !output.status.success() {
+        return false;
+    }
     let report = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    report.lines().any(|line| {
-        line.split_whitespace()
-            .any(|field| matches!(field, "mp3" | "libmp3lame" | "libshine"))
-    })
+    report
+        .lines()
+        .any(|line| line.split_whitespace().any(|field| field == "libmp3lame"))
 }
 
 #[cfg(not(target_os = "android"))]
-fn desktop_mp3_ffmpeg() -> Result<PathBuf, String> {
-    // The current redistributable bundle is LGPL-only and may not include an MP3 encoder.
-    // Prefer it when capable, then use a system encoder so MP3 downloads still work.
-    if let Ok(bundled) = bundled_desktop_tool("ffmpeg") {
+fn desktop_mp3_ffmpeg(app: &AppHandle) -> Result<PathBuf, String> {
+    // yt-dlp uses libmp3lame for MP3 extraction, so the encoder must be available.
+    if let Ok(bundled) = bundled_desktop_tool(app, "ffmpeg") {
         if ffmpeg_supports_mp3(&bundled) {
             return Ok(bundled);
         }
     }
-    let executable = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let executable = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
     if let Some(system) = std::env::var_os("PATH")
         .into_iter()
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
@@ -2306,9 +2645,7 @@ async fn media_share_text(
 }
 
 #[tauri::command]
-async fn library_pick_audio_files(
-    bridge: State<'_, MediaBridge>,
-) -> Result<Vec<String>, String> {
+async fn library_pick_audio_files(bridge: State<'_, MediaBridge>) -> Result<Vec<String>, String> {
     #[cfg(target_os = "android")]
     {
         let plugin = android_media_plugin(&bridge)?;
@@ -2327,12 +2664,14 @@ async fn youtube_search(
     limit: Option<usize>,
     offset: Option<usize>,
     bridge: State<'_, MediaBridge>,
+    app: AppHandle,
 ) -> Result<Vec<YoutubeSearchResult>, String> {
     let limit = limit.unwrap_or(15).clamp(1, 30);
     let offset = offset.unwrap_or(0).min(50);
     let search_end = offset.saturating_add(limit).min(50);
     #[cfg(target_os = "android")]
     {
+        let _ = app;
         let plugin = android_media_plugin(&bridge)?;
         call_android_media(
             plugin,
@@ -2345,6 +2684,7 @@ async fn youtube_search(
     #[cfg(not(target_os = "android"))]
     {
         let _ = bridge;
+        let yt_dlp = bundled_desktop_tool(&app, "yt-dlp")?;
         let query = query.trim().to_owned();
         if query.is_empty() || query.chars().count() > 200 {
             return Err("Enter a search or YouTube link (up to 200 characters).".to_owned());
@@ -2357,7 +2697,6 @@ async fn youtube_search(
             && url::Url::parse(&query)
                 .ok()
                 .is_some_and(|url| url.query_pairs().any(|(key, _)| key == "list"));
-        let yt_dlp = bundled_desktop_tool("yt-dlp")?;
         tauri::async_runtime::spawn_blocking(move || {
             let search = if is_url {
                 query
@@ -2573,6 +2912,7 @@ async fn youtube_download_enqueue(
                 downloaded_bytes: None,
                 total_bytes: None,
                 message: "Waiting to download".to_owned(),
+                file_paths: Vec::new(),
             };
             manager.tasks.push(YoutubeDownloadTask {
                 item: item.clone(),
@@ -2823,9 +3163,10 @@ fn youtube_download_worker(app: AppHandle) {
                     task.process_id = None;
                     if task.item.status == "downloading" {
                         match result {
-                            Ok(final_bytes) => {
+                            Ok((final_bytes, file_paths)) => {
                                 task.item.status = "completed".to_owned();
                                 task.item.percent = Some(100.0);
+                                task.item.file_paths = file_paths;
                                 if let Some(bytes) = final_bytes {
                                     task.item.downloaded_bytes = Some(bytes);
                                     task.item.total_bytes = Some(bytes);
@@ -2851,7 +3192,7 @@ fn run_youtube_download(
     id: &str,
     url: &str,
     is_playlist: bool,
-) -> Result<Option<u64>, String> {
+) -> Result<(Option<u64>, Vec<String>), String> {
     let directory = app
         .path()
         .audio_dir()
@@ -2859,13 +3200,12 @@ fn run_youtube_download(
         .join("YouTube");
     std::fs::create_dir_all(&directory)
         .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
-    let yt_dlp = bundled_desktop_tool("yt-dlp")?;
-    let ffmpeg = desktop_mp3_ffmpeg()?;
-    let deno = bundled_desktop_tool("deno")?;
+    let yt_dlp = bundled_desktop_tool(app, "yt-dlp")?;
+    let ffmpeg = desktop_mp3_ffmpeg(app)?;
+    let deno = bundled_desktop_tool(app, "deno")?;
     let output_template = directory.join("%(title).180B.%(ext)s");
     let mut child = hidden_command(yt_dlp)
         .arg("--ignore-config")
-        .arg("--no-warnings")
         .arg("--newline")
         .arg("--progress")
         .arg("--continue")
@@ -2881,14 +3221,12 @@ fn run_youtube_download(
         .arg("mp3")
         .arg("--audio-quality")
         .arg("0")
+        .arg("--write-thumbnail")
         .arg("--ffmpeg-location")
         .arg(ffmpeg)
         .arg("--js-runtimes")
         .arg(format!("deno:{}", deno.to_string_lossy()))
         .arg("--embed-metadata")
-        .arg("--embed-thumbnail")
-        .arg("--convert-thumbnails")
-        .arg("jpg")
         .arg("--print")
         .arg("after_move:__MICHOPLAY_FILE__%(filepath)s")
         .arg("--output")
@@ -2956,15 +3294,36 @@ fn run_youtube_download(
         .map_err(|_| "yt-dlp stopped before the download finished.".to_owned())?;
     let _ = stderr_reader.join();
     if status.success() {
-        let sizes = output_paths
-            .iter()
-            .map(std::fs::metadata)
-            .collect::<Result<Vec<_>, _>>();
-        let final_bytes = sizes
-            .ok()
-            .filter(|_| !output_paths.is_empty())
-            .map(|files| files.iter().map(std::fs::Metadata::len).sum());
-        return Ok(final_bytes);
+        if output_paths.is_empty() {
+            return Err("The downloader finished without reporting an MP3 file.".to_owned());
+        }
+        let mut final_bytes = 0_u64;
+        for path in &output_paths {
+            if !path
+                .extension()
+                .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("mp3"))
+            {
+                return Err("The downloader did not produce an MP3 file.".to_owned());
+            }
+            if let Some(thumbnail) = thumbnail_for_audio(path) {
+                if embed_thumbnail_in_mp3(path, &thumbnail).is_ok() {
+                    let _ = std::fs::remove_file(thumbnail);
+                }
+            }
+            let metadata = std::fs::metadata(path)
+                .map_err(|_| "The downloaded MP3 file could not be found.".to_owned())?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err("The downloaded MP3 file is empty or unavailable.".to_owned());
+            }
+            final_bytes = final_bytes.saturating_add(metadata.len());
+        }
+        return Ok((
+            Some(final_bytes),
+            output_paths
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
+        ));
     }
     let current_status = app
         .state::<YoutubeDownloadState>()
@@ -2980,7 +3339,7 @@ fn run_youtube_download(
         })
         .unwrap_or_default();
     if current_status == "paused" || current_status == "cancelled" {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
     let details = stderr_tail
         .lock()
@@ -3105,7 +3464,8 @@ async fn library_refresh(
     Ok(core.replace_library(roots, tracks))
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn library_saved_roots(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let core = state
         .0
@@ -3114,11 +3474,18 @@ fn library_saved_roots(state: State<'_, AppState>) -> Result<Vec<String>, String
     Ok(core
         .roots
         .iter()
+        .filter(|root| {
+            !root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Android"))
+        })
         .map(|root| root.to_string_lossy().into_owned())
         .collect())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
     let storage_dir = state
         .0
@@ -3129,8 +3496,23 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
     if !storage_dir.join("library.sqlite").exists() {
         if let Ok(bytes) = fs::read(storage_dir.join("library-index.json")) {
             if let Ok(entries) = serde_json::from_slice::<Vec<CachedTrack>>(&bytes) {
-                let _ = write_library_cache(&storage_dir, &entries);
-                return Ok(entries.into_iter().map(|entry| entry.track).collect());
+                let roots = entries
+                    .iter()
+                    .map(|entry| PathBuf::from(&entry.root_path))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let _ = write_library_cache(&storage_dir, &entries, &roots);
+                return Ok(entries
+                    .into_iter()
+                    .map(|entry| {
+                        let mut track = entry.track;
+                        if track.path.is_empty() {
+                            track.path = entry.path;
+                        }
+                        track
+                    })
+                    .collect());
             }
         }
         return Ok(Vec::new());
@@ -3138,23 +3520,30 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
     let connection = Connection::open(storage_dir.join("library.sqlite"))
         .map_err(|_| "MichoPlay’s saved library index could not be opened.".to_owned())?;
     let mut statement = connection
-        .prepare("SELECT track_json FROM tracks ORDER BY path")
+        .prepare("SELECT path, track_json FROM tracks ORDER BY path")
         .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
     let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())?;
     rows.map(|row| {
         row.map_err(|_| "MichoPlay’s saved library index could not be read.".to_owned())
-            .and_then(|json| {
-                serde_json::from_str(&json).map_err(|_| {
+            .and_then(|(path, json)| {
+                let mut track: Track = serde_json::from_str(&json).map_err(|_| {
                     "MichoPlay’s saved library index contains invalid data.".to_owned()
-                })
+                })?;
+                if track.path.is_empty() {
+                    track.path = path;
+                }
+                Ok(track)
             })
     })
     .collect()
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_play_track(track_id: u64, state: State<'_, AppState>) -> Result<(), String> {
     state
         .0
@@ -3163,7 +3552,8 @@ fn player_play_track(track_id: u64, state: State<'_, AppState>) -> Result<(), St
         .play_track(track_id)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_queue_add(track_id: u64, state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3172,7 +3562,8 @@ fn player_queue_add(track_id: u64, state: State<'_, AppState>) -> Result<(), Str
     core.queue_add(track_id)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn library_artwork(
     artwork_key: String,
     state: State<'_, AppState>,
@@ -3187,7 +3578,8 @@ fn library_artwork(
     Ok(art.map(|art| format!("data:{};base64,{}", art.mime, STANDARD.encode(&art.data))))
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_play_collection(
     track_ids: Vec<u64>,
     start_id: u64,
@@ -3211,16 +3603,21 @@ fn player_play_collection(
         .iter()
         .position(|id| *id == start_id)
         .ok_or_else(|| "Choose a song in this collection.".to_owned())?;
-    core.queue = track_ids;
-    core.priority_queue.clear();
-    core.play_queue_index(start)?;
+    let previous_queue = std::mem::replace(&mut core.queue, track_ids);
+    let previous_priority_queue = std::mem::take(&mut core.priority_queue);
+    if let Err(error) = core.play_queue_index(start) {
+        core.queue = previous_queue;
+        core.priority_queue = previous_priority_queue;
+        return Err(error);
+    }
     if core.shuffle {
         core.shuffle_upcoming();
     }
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_queue_move(
     from_index: usize,
     to_index: usize,
@@ -3233,7 +3630,8 @@ fn player_queue_move(
     core.queue_move(from_index, to_index)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_queue_remove(index: usize, state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3242,7 +3640,8 @@ fn player_queue_remove(index: usize, state: State<'_, AppState>) -> Result<(), S
     core.queue_remove(index)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_autoplay(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
     state
         .0
@@ -3252,7 +3651,8 @@ fn player_set_autoplay(enabled: bool, state: State<'_, AppState>) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_sleep_timer(
     duration_minutes: Option<u32>,
     at_track_end: bool,
@@ -3279,74 +3679,29 @@ fn player_set_sleep_timer(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_toggle(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
         .lock()
         .map_err(|_| "The player is unavailable.".to_owned())?;
-    if core.current_queue_index.is_none() {
-        let first = core
-            .queue
-            .first()
-            .copied()
-            .ok_or_else(|| "Add a music folder first.".to_owned())?;
-        return core.play_track(first);
-    }
-    core.discard_failed_output();
-    if core.sink.is_none() {
-        let index = core
-            .current_queue_index
-            .ok_or_else(|| "No song is loaded.".to_owned())?;
-        return core.play_queue_index(index);
-    }
-    let sink = core.sink.as_ref().expect("sink checked above");
-    if core.is_playing {
-        sink.pause();
-        core.is_playing = false;
-    } else if sink.empty() {
-        let index = core.current_queue_index.unwrap_or(0);
-        core.play_queue_index(index)?;
-    } else {
-        sink.play();
-        core.is_playing = true;
-    }
-    Ok(())
+    let playing = !core.is_playing;
+    core.set_playing(playing)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_playing(is_playing: bool, state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
         .lock()
         .map_err(|_| "The player is unavailable.".to_owned())?;
-    core.discard_failed_output();
-    if !is_playing {
-        if let Some(sink) = &core.sink {
-            sink.pause();
-        }
-        core.is_playing = false;
-        return Ok(());
-    }
-    if core.current_queue_index.is_none() {
-        let first = core
-            .queue
-            .first()
-            .copied()
-            .ok_or_else(|| "Add a music folder first.".to_owned())?;
-        return core.play_track(first);
-    }
-    if core.sink.as_ref().map_or(true, Sink::empty) {
-        let index = core.current_queue_index.unwrap_or(0);
-        core.play_queue_index(index)?;
-    } else if let Some(sink) = &core.sink {
-        sink.play();
-        core.is_playing = true;
-    }
-    Ok(())
+    core.set_playing(is_playing)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_next(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3355,22 +3710,11 @@ fn player_next(state: State<'_, AppState>) -> Result<(), String> {
     if core.queue.is_empty() {
         return Err("Add a music folder first.".to_owned());
     }
-    if core.current_queue_index.is_none() {
-        return core.play_queue_index(0);
-    }
-    let index = core.current_queue_index.unwrap_or(0);
-    if let Some(next) = core.next_index(index) {
-        core.play_queue_index(next)
-    } else {
-        core.is_playing = false;
-        if let Some(sink) = &core.sink {
-            sink.stop();
-        }
-        Ok(())
-    }
+    core.play_next_available()
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_previous(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3411,7 +3755,8 @@ fn player_previous(state: State<'_, AppState>) -> Result<(), String> {
     core.play_queue_index(previous)
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_toggle_shuffle(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3424,7 +3769,8 @@ fn player_toggle_shuffle(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_toggle_repeat(state: State<'_, AppState>) -> Result<(), String> {
     let mut core = state
         .0
@@ -3438,7 +3784,8 @@ fn player_toggle_repeat(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_seek(position_ms: u64, state: State<'_, AppState>) -> Result<(), String> {
     let core = state
         .0
@@ -3452,7 +3799,8 @@ fn player_seek(position_ms: u64, state: State<'_, AppState>) -> Result<(), Strin
         .map_err(|_| "This audio format can’t seek.".to_owned())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_volume(volume: f32, state: State<'_, AppState>) -> Result<(), String> {
     if !volume.is_finite() {
         return Err("Volume must be a number between 0 and 100.".to_owned());
@@ -3468,7 +3816,8 @@ fn player_set_volume(volume: f32, state: State<'_, AppState>) -> Result<(), Stri
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_set_equalizer_bands(
     bands: Vec<f32>,
     enabled: bool,
@@ -3488,7 +3837,8 @@ fn player_set_equalizer_bands(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_state(state: State<'_, AppState>) -> Result<PlayerSnapshot, String> {
     Ok(state
         .0
@@ -3571,6 +3921,8 @@ pub fn run() {
                     {
                         let handle =
                             api.register_android_plugin("app.michoplay.desktop", "MediaPlugin")?;
+                        app.state::<AppState>().0.lock()
+                            .map_err(|_| "The player is unavailable.")?.android_media = Some(handle.clone());
                         *app.state::<MediaBridge>()
                             .0
                             .lock()
@@ -3616,7 +3968,8 @@ pub fn run() {
                     }
                     let previous_artwork = previous_storage.join("artwork");
                     if previous_artwork.is_dir() {
-                        let _ = copy_directory_missing(&previous_artwork, &storage_dir.join("artwork"));
+                        let _ =
+                            copy_directory_missing(&previous_artwork, &storage_dir.join("artwork"));
                     }
                 }
             }
@@ -3712,94 +4065,102 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn_blocking::<_, ()>(move || {
                     let mut last_media_signature = None;
+                    let mut last_media_update = std::time::Instant::now();
+                    let mut retry_after = None;
                     loop {
-                        std::thread::sleep(Duration::from_millis(400));
-                        let plugin = handle
-                            .state::<MediaBridge>()
-                            .0
-                            .lock()
-                            .ok()
+                        std::thread::sleep(Duration::from_millis(250));
+                        let plugin = handle.state::<MediaBridge>().0.lock().ok()
                             .and_then(|bridge| bridge.clone());
                         let Some(plugin) = plugin else { continue };
-
-                        let actions = plugin
-                            .run_mobile_plugin::<PendingMediaActions>("takePendingActions", ())
-                            .map(|response| response.actions)
-                            .unwrap_or_default();
-                        let mut received_action = false;
+                        let actions = match plugin.run_mobile_plugin::<PendingMediaActions>("takePendingActions", ()) {
+                            Ok(response) => response.actions,
+                            Err(error) => {
+                                eprintln!("Android media action delivery failed: {error}");
+                                continue;
+                            }
+                        };
+                        let received_action = !actions.is_empty();
                         for action in actions {
-                            let handled = handle
-                                .state::<AppState>()
-                                .0
-                                .lock()
-                                .map(|mut core| {
-                                    apply_android_media_action(&mut core, &action).is_ok()
-                                })
-                                .unwrap_or(false);
-                            if handled {
-                                received_action = true;
-                                let _ = handle.emit("android-player-state", ());
+                            if let Ok(mut core) = handle.state::<AppState>().0.lock() {
+                                if let Err(error) = apply_android_media_action(&mut core, &action) {
+                                    eprintln!("Android media action {action} failed: {error}");
+                                }
                             }
                         }
-
-                        let (signature, media) = {
+                        let (revision, media) = {
                             let state = handle.state::<AppState>();
-                            let Ok(mut core) = state.0.lock() else {
-                                continue;
-                            };
+                            let Ok(mut core) = state.0.lock() else { continue };
                             let snapshot = core.snapshot();
                             let media = snapshot.current_track_id.and_then(|id| {
-                                core.tracks
-                                    .iter()
-                                    .find(|track| track.track.id == id)
+                                core.track_indices.get(&id).and_then(|index| core.tracks.get(*index))
                                     .map(|track| {
-                                        let artwork_data_url =
-                                            track.artwork.as_ref().map(|artwork| {
-                                                format!(
-                                                    "data:{};base64,{}",
-                                                    artwork.mime,
-                                                    STANDARD.encode(&artwork.data)
-                                                )
-                                            });
-                                        (
-                                            track.track.title.clone(),
-                                            track.track.artist.clone(),
-                                            snapshot.duration_ms,
-                                            snapshot.position_ms,
-                                            snapshot.is_playing,
-                                            artwork_data_url,
-                                        )
+                                        let artwork = track.track.artwork_key.as_ref()
+                                            .zip(track.artwork.as_ref())
+                                            .map(|(key, art)| (artwork_cache_path(&core.storage_dir, key, &art.mime), art.clone()));
+                                        let payload = serde_json::json!({
+                                            "title": track.track.title,
+                                            "artist": track.track.artist,
+                                            "isPlaying": snapshot.is_playing,
+                                            "interrupted": core.resume_after_interruption,
+                                            "focusGeneration": core.audio_focus_generation,
+                                            "durationMs": snapshot.duration_ms,
+                                            "positionMs": snapshot.position_ms,
+                                            "artworkPath": artwork.as_ref().map(|(path, _)| path.to_string_lossy()),
+                                        });
+                                        (payload, artwork)
                                     })
                             });
-                            ((snapshot.current_track_id, snapshot.is_playing), media)
+                            (core.android_media_revision(), media)
                         };
-
-                        if received_action || last_media_signature != Some(signature) {
-                            if let Some((
-                                title,
-                                artist,
-                                duration_ms,
-                                position_ms,
-                                is_playing,
-                                artwork,
-                            )) = media
-                            {
-                                let _ = plugin.run_mobile_plugin::<()>(
-                                    "update",
-                                    serde_json::json!({
-                                        "title": title,
-                                        "artist": artist,
-                                        "isPlaying": is_playing,
-                                        "durationMs": duration_ms,
-                                        "positionMs": position_ms,
-                                        "artworkDataUrl": artwork,
-                                    }),
-                                );
+                        let mut signature = media.as_ref().map(|(payload, _)| payload.clone())
+                            .unwrap_or(serde_json::Value::Null);
+                        // Publish position corrections without sending updates on every audio tick.
+                        if let Some(position) = signature.get_mut("positionMs") {
+                            *position = serde_json::json!(position.as_u64().unwrap_or(0) / 2000);
+                        }
+                        let changed = last_media_signature.as_ref() != Some(&signature);
+                        if changed || received_action {
+                            let _ = handle.emit("android-player-state", ());
+                        }
+                        if retry_after.is_some_and(|deadline| std::time::Instant::now() < deadline) {
+                            continue;
+                        }
+                        if changed || received_action || last_media_update.elapsed() >= Duration::from_secs(5) {
+                            // Materialize missing artwork before locking the player for delivery.
+                            if let Some((_, Some((path, art)))) = &media {
+                                if !path.is_file() {
+                                    let saved = path.parent().map(fs::create_dir_all)
+                                        .transpose().and_then(|_| fs::write(path, &art.data));
+                                    if let Err(error) = saved {
+                                        eprintln!("Android notification artwork cache failed: {error}");
+                                    }
+                                }
+                            }
+                            let state = handle.state::<AppState>();
+                            let Ok(core) = state.0.lock() else { continue };
+                            if core.android_media_revision() != revision { continue; }
+                            // Serialize delivery with engine changes. Android commands that
+                            // acquire this lock run off the main thread, leaving the service free
+                            // to acknowledge updates without a main-thread/engine-lock deadlock.
+                            let result = if let Some((payload, _)) = media {
+                                plugin.run_mobile_plugin::<()>("update", payload)
                             } else {
-                                let _ = plugin.run_mobile_plugin::<()>("stop", ());
+                                plugin.run_mobile_plugin::<()>("stop", ())
+                            };
+                            drop(core);
+                            match result {
+                                Ok(()) => {
+                                    last_media_signature = Some(signature);
+                                    last_media_update = std::time::Instant::now();
+                                    retry_after = None;
+                                }
+                                Err(error) => {
+                                    // Keep the old signature so delivery is retried, not marked successful.
+                                    eprintln!("Android media state update failed: {error}");
+                                    retry_after = Some(std::time::Instant::now() + Duration::from_secs(1));
+                                }
                             }
                         }
-                        last_media_signature = Some(signature);
                     }
                 });
             }
@@ -3827,6 +4188,9 @@ pub fn run() {
             library_cancel_scan,
             library_refresh,
             library_saved_roots,
+            app_data_load,
+            app_data_migrate,
+            app_data_save,
             library_cached_tracks,
             library_remove_folder,
             library_artwork,
@@ -3868,6 +4232,7 @@ mod tests {
             .map(|id| LibraryTrack {
                 track: Track {
                     id,
+                    path: format!("/music/{id}.wav"),
                     title: format!("Song {id}"),
                     artist: "Artist".into(),
                     album: "Album".into(),
@@ -3891,6 +4256,90 @@ mod tests {
             current_queue_index: Some(0),
             ..PlayerCore::default()
         }
+    }
+
+    fn playing_without_audio_device() -> (PlayerCore, rodio::queue::SourcesQueueOutput) {
+        let mut core = library();
+        let (sink, output) = Sink::new();
+        sink.append(rodio::source::SineWave::new(440.0).take_duration(Duration::from_secs(10)));
+        sink.play();
+        core.sink = Some(sink);
+        core.is_playing = true;
+        core.audio_focus_generation = 7;
+        (core, output)
+    }
+
+    #[test]
+    fn interruption_transient_pauses_and_resumes_the_same_song() {
+        let (mut core, _output) = playing_without_audio_device();
+        let queue = core.queue.clone();
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        assert!(!core.is_playing);
+        assert!(core.sink.as_ref().unwrap().is_paused());
+        assert!(core.resume_after_interruption);
+        // A second late snapshot of the interruption must preserve resume intent.
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        assert!(core.resume_after_interruption);
+        apply_android_media_action(&mut core, "focus-gain:7").unwrap();
+        assert!(core.is_playing);
+        assert!(!core.sink.as_ref().unwrap().is_paused());
+        assert!(!core.resume_after_interruption);
+        assert_eq!(core.queue, queue);
+        assert_eq!(core.current_queue_index, Some(0));
+    }
+
+    #[test]
+    fn interruption_manual_pause_cancels_automatic_resume() {
+        let (mut core, _output) = playing_without_audio_device();
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        core.set_playing(false).unwrap();
+        apply_android_media_action(&mut core, "focus-gain:7").unwrap();
+        assert!(!core.is_playing);
+        assert!(core.sink.as_ref().unwrap().is_paused());
+        assert!(!core.resume_after_interruption);
+    }
+
+    #[test]
+    fn interruption_permanent_loss_and_disconnection_require_manual_play() {
+        for event in ["focus-loss:7", "becoming-noisy:7", "service-stopped:7"] {
+            let (mut core, _output) = playing_without_audio_device();
+            apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+            apply_android_media_action(&mut core, event).unwrap();
+            apply_android_media_action(&mut core, "focus-gain:7").unwrap();
+            assert!(!core.is_playing, "Unexpected resume after {event}");
+            assert!(core.sink.as_ref().unwrap().is_paused());
+            assert!(!core.resume_after_interruption);
+        }
+    }
+
+    #[test]
+    fn interruption_events_from_old_focus_do_not_pause_new_playback() {
+        let (mut core, _output) = playing_without_audio_device();
+        for event in [
+            "focus-loss:6",
+            "focus-loss-transient:6",
+            "becoming-noisy:6",
+            "service-stopped:6",
+        ] {
+            apply_android_media_action(&mut core, event).unwrap();
+            assert!(core.is_playing);
+            assert!(!core.sink.as_ref().unwrap().is_paused());
+        }
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        apply_android_media_action(&mut core, "focus-gain:6").unwrap();
+        assert!(!core.is_playing);
+        assert!(core.resume_after_interruption);
+    }
+
+    #[test]
+    fn interruption_sleep_timer_cancels_automatic_resume() {
+        let (mut core, _output) = playing_without_audio_device();
+        apply_android_media_action(&mut core, "focus-loss-transient:7").unwrap();
+        core.sleep_timer_deadline = Some(SystemTime::now() - Duration::from_secs(1));
+        assert!(!core.snapshot().is_playing);
+        apply_android_media_action(&mut core, "focus-gain:7").unwrap();
+        assert!(!core.is_playing);
+        assert!(!core.resume_after_interruption);
     }
 
     #[test]

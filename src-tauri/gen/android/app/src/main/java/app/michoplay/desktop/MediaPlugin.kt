@@ -37,7 +37,9 @@ class MediaUpdateArgs {
   var isPlaying: Boolean = false
   var durationMs: Long = 0
   var positionMs: Long = 0
-  var artworkDataUrl: String? = null
+  var artworkPath: String? = null
+  var interrupted: Boolean = false
+  var focusGeneration: Long = 0
 }
 
 @InvokeArg
@@ -185,6 +187,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
     val relative = path.removePrefix("$volumeRoot/")
     val topLevel = relative.substringBefore('/')
+    // Android/data and Android/obb are protected by scoped storage. Never
+    // promote their files to a broad Android/ scan root; users can still add
+    // a readable folder explicitly through the system folder picker.
+    if (topLevel.equals("Android", ignoreCase = true)) return null
     return if (topLevel.isBlank()) parent else File(volumeRoot, topLevel)
   }
 
@@ -345,7 +351,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.reject("Allow storage access, then tap Download again.")
       return
     }
-    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "message" to "Waiting to download")
+    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>())
     downloads.add(item); emitDownloads(); invoke.resolveObject(item); startQueuedDownloads()
   }
 
@@ -388,9 +394,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           if (item["status"] != "paused" && item["status"] != "cancelled") {
             val audioFiles = staging.walkTopDown().filter { it.isFile && it.extension.equals("mp3", ignoreCase = true) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
-            audioFiles.forEach(::publishAudioToMusic)
+            val filePaths = audioFiles.map(::publishAudioToMusic)
             val finalBytes = audioFiles.sumOf { it.length() }
             item["downloadedBytes"] = finalBytes; item["totalBytes"] = finalBytes
+            item["filePaths"] = filePaths
             item["status"] = "completed"; item["percent"] = 100.0; item["message"] = "Saved to Music/MichoPlay/YouTube"
           }
         } catch (error: Exception) {
@@ -436,12 +443,13 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun publishAudioToMusic(file: File) {
+  private fun publishAudioToMusic(file: File): String {
+    val destination = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube/${file.name}")
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
       val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
       if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("Android couldn’t create Music/MichoPlay/YouTube.")
-      file.copyTo(File(directory, file.name), overwrite = true)
-      return
+      file.copyTo(destination, overwrite = true)
+      return destination.absolutePath
     }
     val values = ContentValues().apply {
       put(MediaStore.Audio.Media.DISPLAY_NAME, file.name)
@@ -456,6 +464,13 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       activity.contentResolver.openOutputStream(uri, "w")?.use { output -> file.inputStream().use { input -> input.copyTo(output) } }
         ?: throw IllegalStateException("Android couldn’t open the new Music file.")
       ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }.also { activity.contentResolver.update(uri, it, null, null) }
+      val storedPath = runCatching {
+        activity.contentResolver.query(uri, arrayOf(MediaStore.Audio.Media.DATA), null, null, null)?.use { cursor ->
+          val column = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+          if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+        }
+      }.getOrNull()
+      return storedPath ?: destination.absolutePath
     } catch (error: Exception) {
       activity.contentResolver.delete(uri, null, null)
       throw error
@@ -484,38 +499,44 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
+  fun requestAudioFocus(invoke: Invoke) {
+    activity.runOnUiThread {
+      try {
+        MediaPlaybackService.requestFocus(activity) { granted, generation ->
+          invoke.resolve(JSObject().apply { put("granted", granted); put("generation", generation) })
+        }
+      } catch (error: Exception) {
+        android.util.Log.e("MichoPlayMedia", "Could not acquire audio focus", error)
+        invoke.reject(error.message ?: "Could not acquire audio focus.")
+      }
+    }
+  }
+
+  @Command
   fun update(invoke: Invoke) {
-    try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-        ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
-        !notificationPermissionPrompted) {
-        notificationPermissionPrompted = true
-        activity.runOnUiThread {
+    activity.runOnUiThread {
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+          ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+          !notificationPermissionPrompted) {
+          notificationPermissionPrompted = true
           activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9043)
         }
+        MediaPlaybackService.publish(invoke.parseArgs(MediaUpdateArgs::class.java))
+        invoke.resolve()
+      } catch (error: Exception) {
+        android.util.Log.e("MichoPlayMedia", "Could not update playback notification", error)
+        invoke.reject(error.message ?: "Could not update Android playback controls.")
       }
-      val args = invoke.parseArgs(MediaUpdateArgs::class.java)
-      val intent = Intent(activity, MediaPlaybackService::class.java).apply {
-        action = MediaPlaybackService.ACTION_UPDATE
-        putExtra(MediaPlaybackService.EXTRA_TITLE, args.title)
-        putExtra(MediaPlaybackService.EXTRA_ARTIST, args.artist)
-        putExtra(MediaPlaybackService.EXTRA_PLAYING, args.isPlaying)
-        putExtra(MediaPlaybackService.EXTRA_DURATION, args.durationMs)
-        putExtra(MediaPlaybackService.EXTRA_POSITION, args.positionMs)
-        putExtra(MediaPlaybackService.EXTRA_ARTWORK, args.artworkDataUrl)
-      }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ContextCompat.startForegroundService(activity, intent)
-      else activity.startService(intent)
-      invoke.resolve()
-    } catch (error: Exception) {
-      invoke.reject(error.message ?: "Could not update Android playback controls.")
     }
   }
 
   @Command
   fun stop(invoke: Invoke) {
-    activity.stopService(Intent(activity, MediaPlaybackService::class.java))
-    invoke.resolve()
+    activity.runOnUiThread {
+      MediaPlaybackService.stopFromPlayer(activity)
+      invoke.resolve()
+    }
   }
 
   @Command

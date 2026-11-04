@@ -32,7 +32,12 @@ export function useArtwork(key: string | null | undefined, enabled = true) {
 }
 function Image({ artworkKey, enabled }: { artworkKey: string; enabled: boolean }) {
   const url = useArtwork(artworkKey, enabled);
-  return url ? <img src={url} alt="" loading="lazy" draggable={false} /> : <span className="cover-missing"><Disc3 size={20} /></span>;
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [url]);
+  return url && !failed ? <img src={url} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} /> : <MissingArtwork />;
+}
+function MissingArtwork() {
+  return <span className="cover-missing"><Disc3 size={25}/></span>;
 }
 export function Cover({ keys, className = "", icon }: { keys: (string | null | undefined)[]; className?: string; icon?: React.ReactNode }) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -48,6 +53,6 @@ export function Cover({ keys, className = "", icon }: { keys: (string | null | u
     return () => observer.disconnect();
   }, []);
   return <span ref={ref} className={`cover ${chosen.length === 4 ? "cover-mosaic" : ""} ${className}`}>
-    {chosen.length ? chosen.map((key) => <Image key={key} artworkKey={key} enabled={visible} />) : <span className="cover-missing">{icon ?? <Disc3 size={25} />}</span>}
+    {chosen.length ? chosen.map((key) => <Image key={key} artworkKey={key} enabled={visible} />) : icon ? <span className="cover-missing">{icon}</span> : <MissingArtwork />}
   </span>;
 }

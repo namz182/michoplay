@@ -4,6 +4,7 @@
     "externalBin": [
       "binaries/michoplay-yt-dlp",
       "binaries/michoplay-ffmpeg",
+      "binaries/michoplay-ffprobe",
       "binaries/michoplay-deno"
     ],
     "resources": ["resources/THIRD-PARTY-LICENSES.txt"]
