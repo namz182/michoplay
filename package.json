@@ -10,6 +10,7 @@
     "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --lib",
     "test:youtube-size": "node --experimental-strip-types tests/youtube-size.test.ts",
+    "test:youtube-errors": "node --experimental-strip-types tests/youtube-download-errors.test.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:prepare-tools": "node scripts/prepare-desktop-tools.mjs"

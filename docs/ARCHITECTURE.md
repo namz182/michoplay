@@ -30,6 +30,8 @@ The track index is rebuilt per successfully scanned root. If a configured root i
 
 Core playback and library browsing work offline. YouTube search/download and release checks require network access and depend on upstream services. Desktop media controls use the platform bridge; Android media controls use the native plugin. These integrations still need validation on each supported OS and device.
 
+Desktop downloads default to the user's system Music folder, with a home `Music` fallback, and share the resolved `YouTube` directory with library scanning. yt-dlp reports final MP3 paths as JSON strings with UTF-8 output so desktop encodings cannot strip filename characters. Workers verify each file before optional artwork embedding and again before marking the download complete. Download failures distinguish missing files, unreadable save locations, access permissions, empty files, unsupported formats, and MP3 conversion failures. The UI preserves approved native messages and classifies other tool output without displaying debug logs, file paths, or operating system error details.
+
 ## Known implementation limits
 
 - `src-tauri/src/lib.rs` still contains several domains in one module; continue extracting library scanning, playback, downloads, and platform integration behind focused modules.

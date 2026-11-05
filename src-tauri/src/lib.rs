@@ -2329,6 +2329,21 @@ struct YoutubeMusicDirectory {
     path: String,
 }
 
+#[cfg(not(target_os = "android"))]
+fn desktop_youtube_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let music_directory = app
+        .path()
+        .audio_dir()
+        .or_else(|_| app.path().home_dir().map(|home| home.join("Music")))
+        .map_err(|_| "The Music folder couldn’t be located.".to_owned())?;
+    let directory = music_directory.join("YouTube");
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
+    directory
+        .canonicalize()
+        .map_err(|_| "The YouTube music folder couldn’t be located.".to_owned())
+}
+
 #[tauri::command]
 async fn youtube_music_directory(
     bridge: State<'_, MediaBridge>,
@@ -2345,16 +2360,7 @@ async fn youtube_music_directory(
     #[cfg(not(target_os = "android"))]
     {
         let _ = bridge;
-        let directory = app
-            .path()
-            .audio_dir()
-            .map_err(|_| "The Music folder couldn’t be located.".to_owned())?
-            .join("YouTube");
-        std::fs::create_dir_all(&directory)
-            .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
-        let directory = directory
-            .canonicalize()
-            .map_err(|_| "The YouTube music folder couldn’t be located.".to_owned())?;
+        let directory = desktop_youtube_directory(&app)?;
         Ok(directory.to_string_lossy().into_owned())
     }
 }
@@ -3187,25 +3193,80 @@ fn youtube_download_worker(app: AppHandle) {
 }
 
 #[cfg(not(target_os = "android"))]
+fn youtube_download_file_error(error: std::io::Error) -> String {
+    use std::io::ErrorKind;
+
+    match error.kind() {
+        ErrorKind::NotFound => {
+            "The downloaded song is missing from Music/YouTube. Try downloading it again."
+        }
+        ErrorKind::PermissionDenied => {
+            "MichoPlay doesn't have permission to read the downloaded song. Allow access to your Music folder and try again."
+        }
+        ErrorKind::NotADirectory => {
+            "The downloaded song's folder is no longer available. Restore the folder or download the song again."
+        }
+        ErrorKind::TimedOut => {
+            "Your Music folder took too long to respond. Check that the drive is connected and try again."
+        }
+        _ => {
+            "MichoPlay couldn't read the downloaded song. Check that your Music folder is accessible and try again."
+        }
+    }
+    .to_owned()
+}
+
+#[cfg(not(target_os = "android"))]
+fn youtube_download_file_path(line: &str) -> Result<Option<PathBuf>, String> {
+    let Some(json) = line.strip_prefix("__MICHOPLAY_FILE__") else {
+        return Ok(None);
+    };
+    let path: String = serde_json::from_str(json).map_err(|_| {
+        "MichoPlay couldn't read where the song was saved. Try downloading it again.".to_owned()
+    })?;
+    if path.is_empty() {
+        return Err(
+            "The download finished without a saved song location. Try downloading it again."
+                .to_owned(),
+        );
+    }
+    Ok(Some(PathBuf::from(path)))
+}
+
+#[cfg(not(target_os = "android"))]
+fn youtube_download_file_size(path: &Path) -> Result<u64, String> {
+    if !path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp3"))
+    {
+        return Err("The saved download isn't an MP3 file. Try downloading it again.".to_owned());
+    }
+    let metadata = std::fs::metadata(path).map_err(youtube_download_file_error)?;
+    if !metadata.is_file() {
+        return Err("The saved download isn't a song file. Try downloading it again.".to_owned());
+    }
+    if metadata.len() == 0 {
+        return Err("The downloaded song is empty. Try downloading it again.".to_owned());
+    }
+    Ok(metadata.len())
+}
+
+#[cfg(not(target_os = "android"))]
 fn run_youtube_download(
     app: &AppHandle,
     id: &str,
     url: &str,
     is_playlist: bool,
 ) -> Result<(Option<u64>, Vec<String>), String> {
-    let directory = app
-        .path()
-        .audio_dir()
-        .map_err(|_| "The Music folder couldn’t be located.".to_owned())?
-        .join("YouTube");
-    std::fs::create_dir_all(&directory)
-        .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
+    let directory = desktop_youtube_directory(app)?;
     let yt_dlp = bundled_desktop_tool(app, "yt-dlp")?;
     let ffmpeg = desktop_mp3_ffmpeg(app)?;
     let deno = bundled_desktop_tool(app, "deno")?;
     let output_template = directory.join("%(title).180B.%(ext)s");
     let mut child = hidden_command(yt_dlp)
         .arg("--ignore-config")
+        .arg("--encoding")
+        .arg("utf-8")
         .arg("--newline")
         .arg("--progress")
         .arg("--continue")
@@ -3236,9 +3297,10 @@ fn run_youtube_download(
         // output. Reattach the downloaded cover with Lofty after tagging.
         .arg("--postprocessor-args")
         .arg("Metadata+ffmpeg_o:-vn")
-        .arg("--verbose")
         .arg("--print")
-        .arg("after_move:__MICHOPLAY_FILE__%(filepath)s")
+        // JSON escapes preserve Unicode, backslashes, and line breaks even
+        // when the desktop's default output encoding cannot represent them.
+        .arg("after_move:__MICHOPLAY_FILE__%(filepath)j")
         .arg("--output")
         .arg(output_template)
         .arg("--")
@@ -3246,7 +3308,7 @@ fn run_youtube_download(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|_| "MichoPlay couldn’t start its bundled YouTube audio downloader.".to_owned())?;
+        .map_err(|_| "Couldn't start this download. Restart MichoPlay and try again.".to_owned())?;
     let pid = child.id();
     let continue_running = {
         let state = app.state::<YoutubeDownloadState>();
@@ -3269,16 +3331,15 @@ fn run_youtube_download(
     if !continue_running {
         stop_download_process(pid);
     }
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Couldn’t read downloader output.".to_owned())?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        "MichoPlay couldn't read the download status. Restart the app and try again.".to_owned()
+    })?;
     let stderr_tail = Arc::new(Mutex::new(Vec::<String>::new()));
     let tail = stderr_tail.clone();
     let app_for_stderr = app.clone();
     let task_id = id.to_owned();
     let stderr_reader = std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().flatten() {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if !report_youtube_progress(&app_for_stderr, &task_id, &line) {
                 if let Ok(mut lines) = tail.lock() {
                     lines.push(line);
@@ -3290,42 +3351,54 @@ fn run_youtube_download(
         }
     });
     let mut output_paths = Vec::<PathBuf>::new();
+    let mut output_error = None;
     if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines().flatten() {
-            if let Some(path) = line.strip_prefix("__MICHOPLAY_FILE__") {
-                output_paths.push(PathBuf::from(path));
-            } else {
-                report_youtube_progress(app, id, &line);
+        for line in BufReader::new(stdout).lines() {
+            let line = match line {
+                Ok(line) => line,
+                Err(_) => {
+                    output_error.get_or_insert_with(|| {
+                        "MichoPlay couldn't read where the song was saved. Try downloading it again.".to_owned()
+                    });
+                    break;
+                }
+            };
+            match youtube_download_file_path(&line) {
+                Ok(Some(path)) => output_paths.push(path),
+                Ok(None) => {
+                    report_youtube_progress(app, id, &line);
+                }
+                Err(error) => {
+                    output_error.get_or_insert(error);
+                }
             }
         }
     }
-    let status = child
-        .wait()
-        .map_err(|_| "yt-dlp stopped before the download finished.".to_owned())?;
+    let status = child.wait().map_err(|_| {
+        "MichoPlay couldn't confirm whether the download finished. Try again.".to_owned()
+    })?;
     let _ = stderr_reader.join();
     if status.success() {
+        if let Some(error) = output_error {
+            return Err(error);
+        }
         if output_paths.is_empty() {
-            return Err("The downloader finished without reporting an MP3 file.".to_owned());
+            return Err(
+                "The download finished without a saved song location. Try downloading it again."
+                    .to_owned(),
+            );
         }
         let mut final_bytes = 0_u64;
         for path in &output_paths {
-            if !path
-                .extension()
-                .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("mp3"))
-            {
-                return Err("The downloader did not produce an MP3 file.".to_owned());
-            }
+            // Verify the audio before optional artwork work so a bad path or
+            // inaccessible file is reported without attempting to rewrite it.
+            youtube_download_file_size(path)?;
             if let Some(thumbnail) = thumbnail_for_audio(path) {
                 if embed_thumbnail_in_mp3(path, &thumbnail).is_ok() {
                     let _ = std::fs::remove_file(thumbnail);
                 }
             }
-            let metadata = std::fs::metadata(path)
-                .map_err(|_| "The downloaded MP3 file could not be found.".to_owned())?;
-            if !metadata.is_file() || metadata.len() == 0 {
-                return Err("The downloaded MP3 file is empty or unavailable.".to_owned());
-            }
-            final_bytes = final_bytes.saturating_add(metadata.len());
+            final_bytes = final_bytes.saturating_add(youtube_download_file_size(path)?);
         }
         return Ok((
             Some(final_bytes),
@@ -3367,13 +3440,7 @@ fn run_youtube_download(
         })
         .unwrap_or_default();
     if details.trim().is_empty() {
-        Err(format!(
-            "yt-dlp couldn’t download that video (exit code {}).",
-            status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "unknown".to_owned())
-        ))
+        Err("The download stopped before it could finish. Try again.".to_owned())
     } else {
         Err(details)
     }
@@ -4236,6 +4303,116 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn youtube_download_paths_preserve_escaped_unicode_and_windows_separators() {
+        let reports = [
+            (
+                r#"__MICHOPLAY_FILE__"C:\\Users\\Ren\u00e9\\Music\\YouTube\\Comfort \ud83c\udfb5.mp3""#,
+                "C:\\Users\\René\\Music\\YouTube\\Comfort 🎵.mp3",
+            ),
+            (
+                r#"__MICHOPLAY_FILE__"/music/100% \"Comfort\"\nVisualizer.mp3""#,
+                "/music/100% \"Comfort\"\nVisualizer.mp3",
+            ),
+        ];
+        for (line, expected) in reports {
+            assert_eq!(
+                youtube_download_file_path(line).unwrap(),
+                Some(PathBuf::from(expected))
+            );
+        }
+        assert_eq!(
+            youtube_download_file_path("[download] 100% of 2.4MiB").unwrap(),
+            None
+        );
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn youtube_download_paths_reject_malformed_or_empty_reports() {
+        for report in ["", "null", "[]", "\"\"", "\"unterminated", "plain-path.mp3"] {
+            assert!(youtube_download_file_path(&format!("__MICHOPLAY_FILE__{report}")).is_err());
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn youtube_download_verification_finds_the_original_unicode_file() {
+        let root = std::env::temp_dir().join(format!(
+            "michoplay-download-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let actual = root.join("Café 🎵 100% (Visualizer).MP3");
+        // Only the filesystem handoff is under test; no decoder is invoked.
+        std::fs::write(&actual, b"audio fixture").unwrap();
+        let json = serde_json::to_string(&actual.to_string_lossy())
+            .unwrap()
+            .replace('é', "\\u00e9")
+            .replace('🎵', "\\ud83c\\udfb5");
+        let reported = youtube_download_file_path(&format!("__MICHOPLAY_FILE__{json}"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(reported, actual);
+        assert_eq!(youtube_download_file_size(&reported).unwrap(), 13);
+
+        // The old plain-text protocol could silently lose these characters.
+        assert!(youtube_download_file_size(&root.join("Caf  100% (Visualizer).mp3")).is_err());
+        let missing = root.join("missing.mp3");
+        assert_eq!(
+            youtube_download_file_size(&missing).unwrap_err(),
+            "The downloaded song is missing from Music/YouTube. Try downloading it again."
+        );
+        let empty = root.join("empty.mp3");
+        std::fs::write(&empty, []).unwrap();
+        assert_eq!(
+            youtube_download_file_size(&empty).unwrap_err(),
+            "The downloaded song is empty. Try downloading it again."
+        );
+        let unfinished = root.join("unfinished.webm");
+        std::fs::write(&unfinished, b"not yet converted").unwrap();
+        assert_eq!(
+            youtube_download_file_size(&unfinished).unwrap_err(),
+            "The saved download isn't an MP3 file. Try downloading it again."
+        );
+        let directory = root.join("folder.mp3");
+        std::fs::create_dir(&directory).unwrap();
+        assert_eq!(
+            youtube_download_file_size(&directory).unwrap_err(),
+            "The saved download isn't a song file. Try downloading it again."
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn youtube_download_file_errors_distinguish_access_failures() {
+        use std::io::ErrorKind;
+
+        for (kind, expected) in [
+            (
+                ErrorKind::NotFound,
+                "The downloaded song is missing from Music/YouTube. Try downloading it again.",
+            ),
+            (
+                ErrorKind::PermissionDenied,
+                "MichoPlay doesn't have permission to read the downloaded song. Allow access to your Music folder and try again.",
+            ),
+            (
+                ErrorKind::TimedOut,
+                "Your Music folder took too long to respond. Check that the drive is connected and try again.",
+            ),
+        ] {
+            let error = std::io::Error::new(kind, "private technical details");
+            assert_eq!(youtube_download_file_error(error), expected);
+        }
+    }
 
     fn library() -> PlayerCore {
         let tracks = (1..=4)

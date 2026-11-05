@@ -38,36 +38,77 @@ export function youtubeDownloadProgressText(item: YoutubeDownload) {
   return parts.join(" · ");
 }
 
+const youtubeDownloadMessages = {
+  locationUnreadable: "MichoPlay couldn't read where the song was saved. Try downloading it again.",
+  locationMissing: "The download finished without a saved song location. Try downloading it again.",
+  fileMissing: "The downloaded song is missing from Music/YouTube. Try downloading it again.",
+  readPermission: "MichoPlay doesn't have permission to read the downloaded song. Allow access to your Music folder and try again.",
+  folderUnavailable: "The downloaded song's folder is no longer available. Restore the folder or download the song again.",
+  folderTimeout: "Your Music folder took too long to respond. Check that the drive is connected and try again.",
+  fileUnreadable: "MichoPlay couldn't read the downloaded song. Check that your Music folder is accessible and try again.",
+  wrongFormat: "The saved download isn't an MP3 file. Try downloading it again.",
+  notFile: "The saved download isn't a song file. Try downloading it again.",
+  emptyFile: "The downloaded song is empty. Try downloading it again.",
+  statusUnreadable: "MichoPlay couldn't read the download status. Restart the app and try again.",
+  completionUnknown: "MichoPlay couldn't confirm whether the download finished. Try again.",
+  interrupted: "The download stopped before it could finish. Try again.",
+  startFailed: "Couldn't start this download. Restart MichoPlay and try again.",
+};
+
 export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
+  // Preserve known, specific native messages. Never pass arbitrary tool output through.
+  const friendlyMessage = Object.values(youtubeDownloadMessages).find((message) => message === error.trim());
+  if (friendlyMessage) return friendlyMessage;
+
   const lines = error.split(/\r?\n/).map((line) => line.trim());
   const reportedErrors = lines.filter((line) => /^error:/i.test(line));
-  // Verbose logs also list FFmpeg and authentication options on successful
-  // setup; classify the actual reported error instead of those debug lines.
-  const detail = (reportedErrors.length ? reportedErrors.join("\n") : error).toLowerCase();
+  // Classify reported failures without exposing tool logs or system details.
+  const detail = (reportedErrors.length ? reportedErrors : lines.filter((line) => !/^\[debug\]/i.test(line))).join("\n").toLowerCase();
+  if (/no space left|not enough (?:disk )?space|enospc|disk quota exceeded/.test(detail)) {
+    return "There isn't enough storage to save this song. Free some space and try again.";
+  }
+  if (/read.only file system/.test(detail)) {
+    return "Your Music folder is read-only. Allow writing to this folder and try again.";
+  }
+  if (/permission denied|access denied|couldn.t create.*music|couldn.t open.*music/.test(detail)) {
+    if (/downloaded mp3 file|downloaded song/.test(detail)) return youtubeDownloadMessages.readPermission;
+    return "MichoPlay doesn't have permission to save this song. Allow access to your Music folder and try again.";
+  }
+  if (/used by another process|sharing violation|resource busy/.test(detail)) {
+    return "Another app is using the downloaded song. Close it there and try again.";
+  }
+  if (/file name too long|filename.*too long|path.*too long/.test(detail)) {
+    return "This song's filename is too long to save. Try a version with a shorter title.";
+  }
   if (/sign.?in|log.?in|age.restrict|confirm you.re not a bot|cookies|members.only/.test(detail)) {
     return "YouTube requires sign-in for this video. Try another song.";
   }
   if (/private video|video unavailable|not available|removed by the uploader|has been removed|copyright/.test(detail)) {
     return "This video is unavailable. Try another song.";
   }
-  if (/no space left|not enough (?:disk )?space|enospc/.test(detail)) {
-    return "Your device is low on storage. Free some space and try again.";
+  if (/bundled .+ tool is missing|ffmpeg (?:was )?not found|ffprobe (?:was )?not found/.test(detail)) {
+    return "MichoPlay's download tools are missing. Reinstall the app to restore downloads.";
   }
-  if (/permission denied|access denied|read.only file system|couldn.t create.*music|couldn.t open.*music/.test(detail)) {
-    return "MichoPlay can't save this song. Check storage access and try again.";
+  if (/needs ffmpeg with mp3 encoding support|unknown encoder|encoder.+not found/.test(detail)) {
+    return "MichoPlay's audio tools can't create MP3 files. Update or reinstall the app.";
   }
-  if (/bundled .+ tool is missing|needs ffmpeg with mp3 encoding support/.test(detail)) {
-    return "The desktop audio tools are missing or cannot encode MP3. Update or reinstall MichoPlay.";
+  if (/downloader reported an (?:invalid|empty) mp3 file path|read the downloaded mp3 file path/.test(detail)) {
+    return youtubeDownloadMessages.locationUnreadable;
   }
-  if (/downloader (?:did not produce|finished without reporting) an mp3|downloaded mp3 file/.test(detail)) {
-    return error.trim();
+  if (/finished without reporting an mp3/.test(detail)) {
+    return youtubeDownloadMessages.locationMissing;
   }
-  if (/ffmpeg|ffprobe|postprocess|audio conversion|convert.*mp3|codec|playable audio file/.test(detail)) {
-    // yt-dlp's final line can be just "Conversion failed"; prefer FFmpeg's
-    // underlying error when verbose output includes it.
-    const reason = lines.find((line) => !line.startsWith("[debug]") && /error opening|unknown encoder|unknown decoder|unknown input format|unable to find|could not (?:write|open|find)|invalid data found|unsupported codec/i.test(line))
-      ?? reportedErrors.at(-1);
-    return reason ? `Audio processing failed: ${reason.replace(/^error:\s*/i, "").slice(0, 180)}` : "Audio processing failed. Try again.";
+  if (/downloader did not produce an mp3/.test(detail)) {
+    return youtubeDownloadMessages.wrongFormat;
+  }
+  if (/downloaded mp3 file could not be found|couldn.t find the downloaded song|downloaded (?:mp3 file|song).*(?:no such file or directory|system cannot find the file)/.test(detail)) {
+    return youtubeDownloadMessages.fileMissing;
+  }
+  if (/downloaded mp3 file could not be accessed|couldn.t open the downloaded song/.test(detail)) {
+    return youtubeDownloadMessages.fileUnreadable;
+  }
+  if (/downloaded song is incomplete|downloaded mp3 file is empty/.test(detail)) {
+    return "The downloaded song is incomplete. Try downloading it again.";
   }
   if (/429|too many requests|rate.limit/.test(detail)) {
     return "YouTube is limiting downloads right now. Try again later.";
@@ -78,11 +119,20 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
   if (/timed? out|connection|network|dns|name resolution|unable to download webpage|certificate/.test(detail)) {
     return "Couldn't connect to YouTube. Check your internet connection and try again.";
   }
+  if (/unknown decoder|unsupported (?:audio )?(?:codec|format)|decoder.+not found/.test(detail)) {
+    return "This video's audio format isn't supported. Try another version of the song.";
+  }
   if (/no video formats|requested format|audio format|unsupported url/.test(detail)) {
     return "Audio isn't available for this video. Try another song.";
   }
+  if (/invalid data found|could not find codec parameters/.test(detail)) {
+    return "The downloaded audio couldn't be read. Try downloading it again.";
+  }
+  if (/ffmpeg|ffprobe|postprocess|audio conversion|convert.*mp3|codec|playable audio file|couldn.t prepare this song for playback/.test(detail)) {
+    return "The audio downloaded, but conversion to MP3 failed. Try downloading it again.";
+  }
   if (/couldn.t start|could not initialize|tools couldn.t start/.test(detail)) {
-    return "The downloader couldn't start. Restart MichoPlay and try again.";
+    return youtubeDownloadMessages.startFailed;
   }
   return isPlaylist ? "Couldn't download this playlist. Try again." : "Couldn't download this song. Try again.";
 }
