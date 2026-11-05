@@ -4,19 +4,12 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing release tag to generate notes for
-        required: true
-        type: string
 
 permissions:
   contents: write
 
 jobs:
   publish:
-    if: github.event_name == 'push'
     name: Build ${{ matrix.platform }}${{ matrix.target && format(' ({0})', matrix.target) || '' }}
     runs-on: ${{ matrix.platform }}
     permissions:
@@ -72,7 +65,6 @@ jobs:
           args: ${{ matrix.args }}
 
   generate-release-notes:
-    if: always() && (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch')
     name: Generate release notes
     needs: publish
     runs-on: ubuntu-latest
@@ -84,9 +76,7 @@ jobs:
         with:
           github-token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
-            const tag = context.eventName === 'workflow_dispatch'
-              ? context.payload.inputs.tag.trim()
-              : context.ref.replace('refs/tags/', '');
+            const tag = context.ref.replace('refs/tags/', '');
             const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
               repo: context.repo.repo,
