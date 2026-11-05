@@ -19,6 +19,8 @@ jobs:
     if: github.event_name == 'push'
     name: Build ${{ matrix.platform }}${{ matrix.target && format(' ({0})', matrix.target) || '' }}
     runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -74,6 +76,8 @@ jobs:
     name: Generate release notes
     needs: publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Generate notes from commits and pull requests
         uses: actions/github-script@v7
