@@ -4,12 +4,19 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to generate notes for
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   publish:
+    if: github.event_name == 'push'
     name: Build ${{ matrix.platform }}${{ matrix.target && format(' ({0})', matrix.target) || '' }}
     runs-on: ${{ matrix.platform }}
     strategy:
@@ -63,6 +70,7 @@ jobs:
           args: ${{ matrix.args }}
 
   generate-release-notes:
+    if: always() && (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch')
     name: Generate release notes
     needs: publish
     runs-on: ubuntu-latest
@@ -72,12 +80,20 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const tag = context.ref.replace('refs/tags/', '');
-            const release = await github.rest.repos.getReleaseByTag({
+            const tag = context.eventName === 'workflow_dispatch'
+              ? context.payload.inputs.tag.trim()
+              : context.ref.replace('refs/tags/', '');
+            const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag,
+              per_page: 100,
             });
+            // Draft releases are omitted by getReleaseByTag, but included in
+            // listReleases for tokens with repository push access.
+            const release = releases.find((item) => item.tag_name === tag && item.draft);
+            if (!release) {
+              throw new Error(`Draft release for ${tag} was not found after the build completed.`);
+            }
             const notes = await github.rest.repos.generateReleaseNotes({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -87,6 +103,6 @@ jobs:
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              release_id: release.data.id,
+              release_id: release.id,
               body: notes.data.body,
             });
