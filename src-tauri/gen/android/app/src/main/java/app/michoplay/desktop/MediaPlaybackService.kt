@@ -20,6 +20,7 @@ import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -35,6 +36,7 @@ class MediaPlaybackService : Service() {
     const val ACTION_PAUSE = "app.michoplay.desktop.media.PAUSE"
     const val ACTION_PREVIOUS = "app.michoplay.desktop.media.PREVIOUS"
     const val ACTION_NEXT = "app.michoplay.desktop.media.NEXT"
+    const val ACTION_FAVORITE = "app.michoplay.desktop.media.FAVORITE"
     private const val CHANNEL_ID = "michoplay-playback"
     private const val NOTIFICATION_ID = 9042
     private const val TAG = "MichoPlayMedia"
@@ -77,6 +79,8 @@ class MediaPlaybackService : Service() {
   private var positionUpdatedAt = 0L
   private var artworkPath: String? = null
   private var artwork: Bitmap? = null
+  private var trackId = -1L
+  private var isFavorite = false
   private val defaultArtwork by lazy { createDefaultArtwork() }
   private lateinit var audioManager: AudioManager
   private var focusRequest: AudioFocusRequest? = null
@@ -111,6 +115,9 @@ class MediaPlaybackService : Service() {
         override fun onPause() = dispatch(ACTION_PAUSE)
         override fun onSkipToPrevious() = dispatch(ACTION_PREVIOUS)
         override fun onSkipToNext() = dispatch(ACTION_NEXT)
+        override fun onCustomAction(action: String, extras: Bundle?) {
+          if (action == ACTION_FAVORITE) dispatchFavorite()
+        }
         override fun onSeekTo(pos: Long) {
           wakeForEngineAction()
           MediaPlugin.dispatch("seek:${pos.coerceAtLeast(0)}")
@@ -152,7 +159,7 @@ class MediaPlaybackService : Service() {
       .setAudioAttributes(AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_MEDIA)
         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-      .setWillPauseWhenDucked(true)
+      .setWillPauseWhenDucked(false)
       .setOnAudioFocusChangeListener({ change -> handleFocusChange(generation, change) }, Handler(Looper.getMainLooper()))
       .build()
     focusRequest = request
@@ -170,12 +177,14 @@ class MediaPlaybackService : Service() {
         wakeForEngineAction()
         MediaPlugin.dispatch("focus-gain:$generation")
       }
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
         hasAudioFocus = false
         focusInterrupted = true
         pauseForSystem("focus-loss-transient")
       }
+      // Android lowers and restores music volume for short notification sounds.
+      // Keep playback and the media session active if this callback is delivered.
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> Unit
       AudioManager.AUDIOFOCUS_LOSS -> {
         abandonAudioFocus()
         pauseForSystem("focus-loss")
@@ -196,6 +205,8 @@ class MediaPlaybackService : Service() {
     if (args.focusGeneration != focusGeneration) return
     title = args.title.ifBlank { "MichoPlay" }
     artist = args.artist
+    trackId = args.trackId
+    isFavorite = args.isFavorite
     durationMs = args.durationMs.coerceAtLeast(0)
     positionMs = args.positionMs.coerceAtLeast(0)
     positionUpdatedAt = SystemClock.elapsedRealtime()
@@ -238,16 +249,23 @@ class MediaPlaybackService : Service() {
   }
 
   private fun dispatch(action: String) {
-    wakeForEngineAction()
     when (action) {
-      ACTION_PLAY -> MediaPlugin.dispatch("play")
+      ACTION_PLAY -> { wakeForEngineAction(); MediaPlugin.dispatch("play") }
       ACTION_PAUSE -> {
+        wakeForEngineAction()
         abandonAudioFocus()
         pauseForSystem("pause")
       }
-      ACTION_PREVIOUS -> MediaPlugin.dispatch("previous")
-      ACTION_NEXT -> MediaPlugin.dispatch("next")
+      ACTION_PREVIOUS -> { wakeForEngineAction(); MediaPlugin.dispatch("previous") }
+      ACTION_NEXT -> { wakeForEngineAction(); MediaPlugin.dispatch("next") }
+      ACTION_FAVORITE -> dispatchFavorite()
     }
+  }
+
+  private fun dispatchFavorite() {
+    if (trackId < 0) return
+    wakeForEngineAction()
+    MediaPlugin.dispatch("favorite:$focusGeneration:$trackId")
   }
 
   private fun updateSession() {
@@ -263,9 +281,13 @@ class MediaPlaybackService : Service() {
     val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
       PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_PREVIOUS or
       PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SEEK_TO
-    session?.setPlaybackState(PlaybackState.Builder().setActions(actions)
-      .setState(if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
-        positionMs, if (isPlaying) 1f else 0f, SystemClock.elapsedRealtime()).build())
+    val state = PlaybackState.Builder().setActions(actions)
+    if (trackId >= 0) state.addCustomAction(ACTION_FAVORITE,
+        if (isFavorite) "Remove from favorites" else "Add to favorites",
+        if (isFavorite) R.drawable.ic_favorite_filled else R.drawable.ic_favorite_outline)
+    session?.setPlaybackState(state.setState(
+      if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+      positionMs, if (isPlaying) 1f else 0f, SystemClock.elapsedRealtime()).build())
   }
 
   private fun buildNotification(): Notification {
@@ -273,7 +295,7 @@ class MediaPlaybackService : Service() {
     val contentIntent = launchIntent?.let {
       PendingIntent.getActivity(this, 10, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
-    return Notification.Builder(this, CHANNEL_ID)
+    val notification = Notification.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_stat_michoplay)
       .setContentTitle(title).setContentText(artist).setSubText("MichoPlay")
       .setCategory(Notification.CATEGORY_TRANSPORT).setContentIntent(contentIntent)
@@ -283,8 +305,11 @@ class MediaPlaybackService : Service() {
       .addAction(action(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
         if (isPlaying) "Pause" else "Play", if (isPlaying) ACTION_PAUSE else ACTION_PLAY))
       .addAction(action(android.R.drawable.ic_media_next, "Next", ACTION_NEXT))
-      .setStyle(Notification.MediaStyle().setMediaSession(session?.sessionToken).setShowActionsInCompactView(0, 1, 2))
-      .build()
+    if (trackId >= 0) notification.addAction(action(
+        if (isFavorite) R.drawable.ic_favorite_filled else R.drawable.ic_favorite_outline,
+        if (isFavorite) "Remove from favorites" else "Add to favorites", ACTION_FAVORITE))
+    return notification.setStyle(Notification.MediaStyle().setMediaSession(session?.sessionToken)
+      .setShowActionsInCompactView(0, 1, 2)).build()
   }
 
   private fun decodeArtwork(path: String?): Bitmap? {

@@ -4067,6 +4067,15 @@ pub fn run() {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 #[cfg(target_os = "windows")]
+                let app_icon = tauri::image::Image::from_app_icon_resource(32)
+                    .ok()
+                    .or_else(|| app.default_window_icon().cloned());
+                #[cfg(not(target_os = "windows"))]
+                let app_icon = app.default_window_icon().cloned();
+                if let (Some(window), Some(icon)) = (app.get_webview_window("main"), app_icon) {
+                    let _ = window.set_icon(icon);
+                }
+                #[cfg(target_os = "windows")]
                 let controls = app
                     .get_webview_window("main")
                     .and_then(|window| window.hwnd().ok())
@@ -4143,6 +4152,8 @@ pub fn run() {
                 tauri::async_runtime::spawn_blocking::<_, ()>(move || {
                     let mut last_media_signature = None;
                     let mut last_media_update = std::time::Instant::now();
+                    let mut favorite_ids = HashSet::new();
+                    let mut last_favorite_refresh = std::time::Instant::now() - Duration::from_secs(2);
                     let mut retry_after = None;
                     loop {
                         std::thread::sleep(Duration::from_millis(250));
@@ -4158,10 +4169,34 @@ pub fn run() {
                         };
                         let received_action = !actions.is_empty();
                         for action in actions {
+                            if let Some(request) = action.strip_prefix("favorite:") {
+                                if let Some((generation, track_id)) = request.split_once(':') {
+                                    if let (Ok(generation), Ok(track_id)) =
+                                        (generation.parse::<u64>(), track_id.parse::<u64>())
+                                    {
+                                        let current = handle.state::<AppState>().0.lock().ok().map(|mut core| {
+                                            (core.audio_focus_generation, core.snapshot().current_track_id)
+                                        });
+                                        if current == Some((generation, Some(track_id))) {
+                                            match app_data::toggle_favorite(&handle, track_id) {
+                                                Ok(ids) => { let _ = handle.emit("android-favorites-changed", ids); }
+                                                Err(error) => eprintln!("Android favorite action failed: {error}"),
+                                            }
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
                             if let Ok(mut core) = handle.state::<AppState>().0.lock() {
                                 if let Err(error) = apply_android_media_action(&mut core, &action) {
                                     eprintln!("Android media action {action} failed: {error}");
                                 }
+                            }
+                        }
+                        if received_action || last_favorite_refresh.elapsed() >= Duration::from_secs(2) {
+                            if let Ok(ids) = app_data::favorite_ids(&handle) {
+                                favorite_ids = ids.into_iter().collect();
+                                last_favorite_refresh = std::time::Instant::now();
                             }
                         }
                         let (revision, media) = {
@@ -4177,6 +4212,8 @@ pub fn run() {
                                         let payload = serde_json::json!({
                                             "title": track.track.title,
                                             "artist": track.track.artist,
+                                            "trackId": id,
+                                            "isFavorite": favorite_ids.contains(&id),
                                             "isPlaying": snapshot.is_playing,
                                             "interrupted": core.resume_after_interruption,
                                             "focusGeneration": core.audio_focus_generation,

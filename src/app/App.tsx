@@ -130,6 +130,17 @@ function tracksForDownload(item: YoutubeDownload, tracks: Track[], youtubeDirect
 function isFinishedYoutubeDownload(item: YoutubeDownload) {
   return item.status === "completed" || item.status === "failed" || item.status === "cancelled";
 }
+function sameYoutubeDownloads(current: YoutubeDownload[], next: YoutubeDownload[]) {
+  return current.length === next.length && current.every((item, index) => {
+    const other = next[index];
+    return item.id === other.id && item.title === other.title && item.url === other.url &&
+      item.thumbnail === other.thumbnail && item.isPlaylist === other.isPlaylist &&
+      item.status === other.status && item.percent === other.percent &&
+      item.downloadedBytes === other.downloadedBytes && item.totalBytes === other.totalBytes &&
+      item.message === other.message && item.filePaths?.length === other.filePaths?.length &&
+      (item.filePaths ?? []).every((path, pathIndex) => path === other.filePaths?.[pathIndex]);
+  });
+}
 function youtubeResultSize(result: YoutubeSearchResult) {
   return youtubeResultSizeText(result.durationSeconds, result.isPlaylist);
 }
@@ -256,7 +267,9 @@ export default function App() {
   const [appMenu, setAppMenu] = useState(false);
   const [playlistActionsOpen, setPlaylistActionsOpen] = useState(false);
   const [dialog, setDialog] = useState<{ target?: Track; playlist?: Playlist } | null>(null);
-  const [confirmation, setConfirmation] = useState<{ title: string; message: string; label: string; confirm: () => void } | null>(null);
+  const [confirmation, setConfirmation] = useState<{ title: string; message: string; label: string; confirm: () => void | boolean | Promise<void | boolean> } | null>(null);
+  const [confirmationBusy, setConfirmationBusy] = useState(false);
+  const [confirmationError, setConfirmationError] = useState<string | null>(null);
   const [playlistName, setPlaylistName] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(() => Math.max(184, Math.min(360, stored<number>("sidebar-width", 248))));
   const [panelWidth, setPanelWidth] = useState(() => Math.max(250, Math.min(460, stored<number>("panel-width", 320))));
@@ -340,6 +353,7 @@ export default function App() {
   }, [menu, isAndroid]);
   const clearableYoutubeDownloads = youtubeDownloads.some(isFinishedYoutubeDownload);
   const activeYoutubeDownloadCount = youtubeDownloads.filter((item) => item.status === "queued" || item.status === "downloading").length;
+  const hasActiveYoutubeDownloads = activeYoutubeDownloadCount > 0;
   const mobileDownloadBadgeCount = Math.max(activeYoutubeDownloadCount, unseenDownloadIds.length);
   const selectedPlaylist = page.detail?.kind === "playlist" ? playlists.find((item) => item.id === page.detail?.key) : undefined;
   const addSongsSearchTerm = addSongsSearch.trim().toLocaleLowerCase();
@@ -569,25 +583,34 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     const applyDownloads = (items: YoutubeDownload[]) => {
       if (!active) return;
-      setYoutubeDownloads(items);
-      setGlobalYoutubeDownloadRequested((prior) => prior.filter((url) => !items.some((item) => item.url === url && (item.status === "failed" || item.status === "cancelled"))));
+      setYoutubeDownloads((prior) => sameYoutubeDownloads(prior, items) ? prior : items);
+      const settledUrls = new Set(items.filter((item) => item.status === "failed" || item.status === "cancelled").map((item) => item.url));
+      if (settledUrls.size) setGlobalYoutubeDownloadRequested((prior) => {
+        const next = prior.filter((url) => !settledUrls.has(url));
+        return next.length === prior.length ? prior : next;
+      });
       const newlyCompletedIds = items.filter((item) => item.status === "completed" && !completedYoutubeDownloads.current.has(item.id)).map((item) => item.id);
       items.filter((item) => item.status === "completed").forEach((item) => completedYoutubeDownloads.current.add(item.id));
       if (newlyCompletedIds.length) void syncYoutubeLibrary();
     };
     void api.youtubeDownloadsState().then((items) => {
       if (!active) return;
-      setYoutubeDownloads(items);
+      setYoutubeDownloads((prior) => sameYoutubeDownloads(prior, items) ? prior : items);
       completedYoutubeDownloads.current = new Set(items.filter((item) => item.status === "completed").map((item) => item.id));
     }).catch(() => {});
-    const poll = isAndroid ? window.setInterval(() => {
-      void api.youtubeDownloadsState().then(applyDownloads).catch(() => {});
-    }, 1500) : undefined;
+    let poll: number | undefined;
+    if (isAndroid && hasActiveYoutubeDownloads) {
+      const refresh = async () => {
+        try { applyDownloads(await api.youtubeDownloadsState()); } catch { /* Keep the latest download state until the bridge responds. */ }
+        if (active && hasActiveYoutubeDownloads) poll = window.setTimeout(() => { void refresh(); }, 2500);
+      };
+      poll = window.setTimeout(() => { void refresh(); }, 1200);
+    }
     if (!isAndroid) {
       void listen<YoutubeDownload[]>("youtube-downloads-updated", ({ payload }) => applyDownloads(payload)).then((dispose) => { unlisten = dispose; });
     }
-    return () => { active = false; if (poll !== undefined) window.clearInterval(poll); unlisten?.(); };
-  }, [isAndroid, syncYoutubeLibrary]);
+    return () => { active = false; if (poll !== undefined) window.clearTimeout(poll); unlisten?.(); };
+  }, [isAndroid, hasActiveYoutubeDownloads, syncYoutubeLibrary]);
   useEffect(() => {
     if (!isYoutubePlaylist) return;
     const query = youtubeQuery.trim();
@@ -918,16 +941,17 @@ export default function App() {
     const close = (event: globalThis.PointerEvent) => {
       if (!(event.target as HTMLElement).closest(".action-menu, .menu-trigger, .playlist-actions-trigger")) { setMenu(null); setAppMenu(false); setPlaylistActionsOpen(false); }
     };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setMobileQueueOpen(false); setMenu(null); setAppMenu(false); setPlaylistActionsOpen(false); setDialog(null); setConfirmation(null); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setMobileQueueOpen(false); setMenu(null); setAppMenu(false); setPlaylistActionsOpen(false); setDialog(null); if (!confirmationBusy) setConfirmation(null); } };
     window.addEventListener("pointerdown", close); window.addEventListener("keydown", escape);
     return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); };
-  }, []);
+  }, [confirmationBusy]);
 
   useEffect(() => {
     if (!isAndroid) return;
     let disposed = false;
     let unregister: (() => void) | undefined;
     void onBackButtonPress(() => {
+      if (confirmationBusy) return;
       if (mobileQueueOpen) { setMobileQueueOpen(false); return; }
       if (mobilePlayerOpen) { setMobilePlayerOpen(false); return; }
       if (fullMode) {
@@ -953,7 +977,7 @@ export default function App() {
       else unregister = () => { void listener.unregister(); };
     }).catch(() => {});
     return () => { disposed = true; unregister?.(); };
-  }, [isAndroid, mobileQueueOpen, mobilePlayerOpen, fullMode, dialog, confirmation, menu, appMenu, sortMenuOpen, mobileTab, history, page]);
+  }, [isAndroid, mobileQueueOpen, mobilePlayerOpen, fullMode, dialog, confirmation, confirmationBusy, menu, appMenu, sortMenuOpen, mobileTab, history, page]);
 
   function beginMobileSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
     mobileSheetDragStartY.current = event.clientY;
@@ -1135,16 +1159,41 @@ export default function App() {
     navigate({ section: "Playlists", detail: { kind: "playlist", key: youtube.id, title: youtube.name } });
   }
   async function removeFolder(folder: string) {
-    try { setTracks(await api.removeFolder(folder)); setRoots((prior) => prior.filter((root) => root !== folder)); setPlayer(await api.state()); setMessage(""); }
-    catch (error) { setMessage(String(error)); }
+    try {
+      const remaining = await api.removeFolder(folder);
+      setTracks(remaining);
+      setRoots((prior) => prior.filter((root) => root !== folder));
+      setMessage("");
+      void api.state().then(setPlayer).catch((error) => setMessage(String(error)));
+      return true;
+    } catch (error) {
+      setConfirmationError(String(error));
+      return false;
+    }
+  }
+  async function completeConfirmation() {
+    if (!confirmation || confirmationBusy) return;
+    const accepted = confirmation;
+    setConfirmationError(null);
+    setConfirmationBusy(true);
+    try {
+      if (await accepted.confirm() !== false) {
+        setConfirmation((current) => current === accepted ? null : current);
+      }
+    } finally {
+      setConfirmationBusy(false);
+    }
   }
   function confirmRemoveFolder(folder: string) {
-    setConfirmation({ title: "Remove music folder?", message: `“${folder}” will be removed from your library. The files on disk will stay untouched.`, label: "Remove folder", confirm: () => { void removeFolder(folder); } });
+    setConfirmationError(null);
+    setConfirmation({ title: "Remove music folder?", message: `“${folder}” will be removed from your library. The files on disk will stay untouched.`, label: "Remove folder", confirm: () => removeFolder(folder) });
   }
   function confirmDeletePlaylist(playlist: Playlist) {
+    setConfirmationError(null);
     setConfirmation({ title: "Delete playlist?", message: `“${playlist.name}” and its song list will be removed. Your music files will stay untouched.`, label: "Delete playlist", confirm: () => { setPlaylists((prior) => prior.filter((item) => item.id !== playlist.id)); setHistory((prior) => ({ entries: [...prior.entries.slice(0, prior.index + 1), { section: "Playlists" }], index: prior.index + 1 })); setConfirmation(null); setPlaylistActionsOpen(false); } });
   }
   function confirmRemovePlaylistTrack(playlist: Playlist, track: Track) {
+    setConfirmationError(null);
     setConfirmation({ title: "Remove song from playlist?", message: `“${track.title}” will be removed from “${playlist.name}”.`, label: "Remove song", confirm: () => { setPlaylists((prior) => prior.map((item) => item.id === playlist.id ? { ...item, trackIds: item.trackIds.filter((id) => id !== track.id) } : item)); setConfirmation(null); setMenu(null); } });
   }
   function toggleFavorite(id: number) { setFavorites((prior) => prior.includes(id) ? prior.filter((item) => item !== id) : [...prior, id]); }
@@ -1318,17 +1367,38 @@ export default function App() {
     if (isAndroid) {
       // Android media actions are handled by the Rust playback loop so they
       // continue to reach the audio engine while this WebView is backgrounded.
+      let unlistenFavorites: (() => void) | undefined;
+      let active = true;
+      const receiveFavorites = (ids: number[]) => {
+        if (!Array.isArray(ids) || !ids.every((id) => Number.isSafeInteger(id) && id >= 0)) return;
+        setFavorites((prior) => prior.length === ids.length && prior.every((id, index) => id === ids[index]) ? prior : ids);
+      };
       const refreshPlayerState = () => {
         if (document.visibilityState !== "visible") return;
         void api.state().then(setPlayer).catch(() => {});
       };
-      void listen<string>("android-player-state", refreshPlayerState).then((dispose) => { unlisten = dispose; });
-      document.addEventListener("visibilitychange", refreshPlayerState);
-      window.addEventListener("focus", refreshPlayerState);
+      const refreshOnResume = () => {
+        refreshPlayerState();
+        if (document.visibilityState !== "visible") return;
+        void api.appDataLoad().then((saved) => {
+          if (!active || !saved.favorites) return;
+          try { receiveFavorites(JSON.parse(saved.favorites)); } catch { /* Keep the current favorites if saved data is unreadable. */ }
+        }).catch(() => {});
+      };
+      void listen<string>("android-player-state", refreshPlayerState).then((dispose) => {
+        if (active) unlisten = dispose; else dispose();
+      });
+      void listen<number[]>("android-favorites-changed", ({ payload }) => receiveFavorites(payload)).then((dispose) => {
+        if (active) unlistenFavorites = dispose; else dispose();
+      });
+      document.addEventListener("visibilitychange", refreshOnResume);
+      window.addEventListener("focus", refreshOnResume);
       return () => {
+        active = false;
         unlisten?.();
-        document.removeEventListener("visibilitychange", refreshPlayerState);
-        window.removeEventListener("focus", refreshPlayerState);
+        unlistenFavorites?.();
+        document.removeEventListener("visibilitychange", refreshOnResume);
+        window.removeEventListener("focus", refreshOnResume);
       };
     }
     void listen<string>("system-media-control", ({ payload }) => handleAction(payload)).then((dispose) => { unlisten = dispose; });
@@ -1659,7 +1729,7 @@ export default function App() {
                 <label className="search-box youtube-global-search"><Search size={17}/><input type="text" aria-label="Search YouTube" placeholder="Song, artist, or paste a link" value={youtubeQuery} onChange={(event) => setYoutubeQuery(event.target.value)}/>{youtubeQuery && <button type="button" aria-label="Clear YouTube search" onClick={() => setYoutubeQuery("")}><X size={15}/></button>}</label>
               </form>
             </div>
-            {youtubeSearching ? <div className="youtube-search-grid" aria-label="Loading YouTube results">{Array.from({ length: 6 }, (_, index) => <div className="youtube-result-skeleton" key={index}><span/><div><i/><i/></div></div>)}</div>
+            {youtubeSearching ? <div className="youtube-search-grid is-loading" aria-label="Loading YouTube results">{Array.from({ length: 8 }, (_, index) => <div className="youtube-result-skeleton" key={index}><span/><div><i/><i/></div></div>)}</div>
               : youtubeSearchError ? <p className="youtube-search-empty" role="alert">{youtubeSearchError}</p>
               : youtubeQuery.trim() && youtubeResults.length ? <><div className="youtube-results-scroll" role="region" aria-label="YouTube search results"><div className="youtube-search-grid">{youtubeResults.slice(0, youtubeVisibleLimit).map((result) => <article className="youtube-result-card" key={result.id}>
                 <div className="youtube-result-preview">
@@ -1781,6 +1851,6 @@ export default function App() {
         <div className="add-songs-footer"><span className="add-songs-selected-count">{addSongsSelected.length} selected</span><button type="button" className="primary-button add-songs-submit" disabled={!addSongsSelected.length} onClick={() => { const ids = addSongsSelected; setPlaylists((prior) => prior.map((item) => item.id === addSongsPlaylistId ? { ...item, trackIds: [...item.trackIds, ...ids.filter((id) => !item.trackIds.includes(id))] } : item)); setAddSongsPlaylistId(null); setMessage(`Added ${ids.length} ${ids.length === 1 ? "song" : "songs"} to playlist.`); }}>{addSongsSelected.length ? `Add ${addSongsSelected.length} ${addSongsSelected.length === 1 ? "song" : "songs"}` : "Add songs"}</button></div>
       </section>
     </div>}
-    {confirmation && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setConfirmation(null); }}><section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message"><div className="dialog-title"><h2 id="confirm-title">{confirmation.title}</h2><button className="icon-button" aria-label="Cancel" onClick={() => setConfirmation(null)}><X size={18}/></button></div><p id="confirm-message">{confirmation.message}</p><div className="confirm-actions"><button className="outline-button" onClick={() => setConfirmation(null)}>Cancel</button><button className="danger-button" onClick={confirmation.confirm}>{confirmation.label}</button></div></section></div>}
+    {confirmation && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget && !confirmationBusy) setConfirmation(null); }}><section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby={confirmationError ? "confirm-message confirm-error" : "confirm-message"} aria-busy={confirmationBusy}><div className="dialog-title"><h2 id="confirm-title">{confirmation.title}</h2><button className="icon-button" aria-label="Cancel" disabled={confirmationBusy} onClick={() => setConfirmation(null)}><X size={18}/></button></div><p id="confirm-message">{confirmation.message}</p>{confirmationError && <p id="confirm-error" className="confirm-error" role="alert">{confirmationError}</p>}<div className="confirm-actions"><button className="outline-button" disabled={confirmationBusy} onClick={() => setConfirmation(null)}>Cancel</button><button className="danger-button" disabled={confirmationBusy} onClick={() => void completeConfirmation()}>{confirmationBusy ? "Working…" : confirmation.label}</button></div></section></div>}
   </main>;
 }

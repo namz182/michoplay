@@ -951,6 +951,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .confirm-dialog { display: grid; width: min(430px,100%); gap: 14px; padding: 25px; border: 1px solid rgba(255,255,255,.12); border-radius: 10px; background: #252229; box-shadow: 0 15px 50px rgba(0,0,0,.5); }
 .confirm-dialog .dialog-title h2 { font-size: 20px; }
 .confirm-dialog > p { margin: 0; color: #bcb5c1; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.confirm-dialog .confirm-error { color: #f6aaa4; }
 .about-dialog { display: grid; width: min(440px,100%); gap: 18px; padding: 22px; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: #19191b; box-shadow: 0 18px 60px rgba(0,0,0,.56); }
 .about-dialog-head, .about-product { display: flex; align-items: center; }
 .about-dialog-head { justify-content: space-between; gap: 16px; }
@@ -1332,6 +1333,9 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .youtube-downloader { padding:13px 13px 5px; }
 .android-app .youtube-search-header { margin:0; }
 .android-app .youtube-search-grid { grid-template-columns:1fr; gap:9px; margin-top:12px; }
+.android-app .youtube-search-grid.is-loading { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+.android-app .youtube-search-grid.is-loading .youtube-result-skeleton { gap:5px; padding:5px; }
+.android-app .youtube-search-grid.is-loading .youtube-result-skeleton > span { border-radius:4px; }
 .android-app .youtube-results-scroll { overflow: visible; }
 .android-app .youtube-load-more { width:100%; min-height:39px; margin-top:7px; border-radius:9px; font-size:12px; }
 .android-app .youtube-result-card { min-height:84px; grid-template-columns:minmax(0,1fr) 46px; align-items:center; gap:8px; padding:7px; border-radius:8px; }

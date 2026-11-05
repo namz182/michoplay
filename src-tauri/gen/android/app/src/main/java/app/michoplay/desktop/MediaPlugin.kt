@@ -40,6 +40,8 @@ class MediaUpdateArgs {
   var artworkPath: String? = null
   var interrupted: Boolean = false
   var focusGeneration: Long = 0
+  var trackId: Long = -1
+  var isFavorite: Boolean = false
 }
 
 @InvokeArg
@@ -66,7 +68,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private val io = Executors.newCachedThreadPool()
   private val downloads = CopyOnWriteArrayList<MutableMap<String, Any?>>()
   private val activeDownloads = AtomicInteger(0)
-  private val maxConcurrentDownloads = 3
+  private val downloadQueueLock = Any()
+  // Keep native extraction and FFmpeg from starving the Android UI thread.
+  private val maxConcurrentDownloads = 1
   @Volatile private var nextDownloadId = 1
   @Volatile private var downloaderReady = false
   @Volatile private var downloaderError: String? = null
@@ -355,12 +359,17 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     downloads.add(item); emitDownloads(); invoke.resolveObject(item); startQueuedDownloads()
   }
 
-  @Synchronized
   private fun startQueuedDownloads() {
-    while (activeDownloads.get() < maxConcurrentDownloads) {
-      val item = downloads.firstOrNull { it["status"] == "queued" } ?: return
-      activeDownloads.incrementAndGet()
-      item["status"] = "downloading"; item["message"] = ""; emitDownloads()
+    while (true) {
+      val item = synchronized(downloadQueueLock) {
+        if (activeDownloads.get() >= maxConcurrentDownloads) null
+        else downloads.firstOrNull { it["status"] == "queued" }?.also {
+          activeDownloads.incrementAndGet()
+          it["status"] = "downloading"
+          it["message"] = ""
+        }
+      } ?: return
+      emitDownloads()
       io.execute {
         val staging = File(activity.cacheDir, "youtube/${item["id"]}")
         try {
@@ -377,12 +386,14 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
           request.addOption("--embed-thumbnail")
           request.addOption("-o", File(staging, "%(title).180B.%(ext)s").absolutePath)
+          val downloadProgress = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%")
+          val sizeProgress = Regex("of\\s+~?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)", RegexOption.IGNORE_CASE)
           YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
-            val progressMatch = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%").find(line)
+            val progressMatch = downloadProgress.find(line)
             if (progressMatch != null) {
               val percent = (progressMatch.groupValues[1].toDoubleOrNull() ?: progress.toDouble()).coerceIn(0.0, 100.0)
               item["percent"] = percent
-              val totalMatch = Regex("of\\s+~?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)", RegexOption.IGNORE_CASE).find(line)
+              val totalMatch = sizeProgress.find(line)
               val totalBytes = totalMatch?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
               if (totalBytes != null) {
                 item["totalBytes"] = totalBytes
