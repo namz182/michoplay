@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "michoplay"
-version = "0.1.5"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "lofty",

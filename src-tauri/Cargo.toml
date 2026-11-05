@@ -1,6 +1,6 @@
 [package]
 name = "michoplay"
-version = "0.1.5"
+version = "1.0.0"
 description = "A private, offline-first desktop music player"
 authors = ["MichoPlay contributors"]
 edition = "2021"
