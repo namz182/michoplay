@@ -75,6 +75,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Volatile private var downloaderReady = false
   @Volatile private var downloaderError: String? = null
   @Volatile private var downloaderUpdateAttempted = false
+  @Volatile private var downloader403RefreshAttempted = false
   companion object {
     @Volatile private var notificationPermissionPrompted = false
     private val pendingActions = CopyOnWriteArrayList<String>()
@@ -373,38 +374,22 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       io.execute {
         val staging = File(activity.cacheDir, "youtube/${item["id"]}")
         try {
+          try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) } catch (_: Exception) { }
           if (!downloaderReady && !initializeDownloader()) throw IllegalStateException(downloaderError ?: "YouTube tools couldn’t start.")
           updateDownloaderIfNeeded(item)
-          staging.deleteRecursively(); staging.mkdirs()
-          val request = YoutubeDLRequest(item["url"] as String)
-          request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--newline"); request.addOption("--progress")
-          if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
-          request.addOption("--playlist-end", "100")
-          // The app only needs an audio stream; selecting `best` can return a
-          // video+audio file that fails during MP3 conversion on some devices.
-          request.addOption("-f", "bestaudio[acodec!=none]/bestaudio")
-          request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
-          request.addOption("--embed-thumbnail")
-          request.addOption("-o", File(staging, "%(title).180B.%(ext)s").absolutePath)
-          val downloadProgress = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%")
-          val sizeProgress = Regex("of\\s+~?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)", RegexOption.IGNORE_CASE)
-          YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
-            val progressMatch = downloadProgress.find(line)
-            if (progressMatch != null) {
-              val percent = (progressMatch.groupValues[1].toDoubleOrNull() ?: progress.toDouble()).coerceIn(0.0, 100.0)
-              item["percent"] = percent
-              val totalMatch = sizeProgress.find(line)
-              val totalBytes = totalMatch?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
-              if (totalBytes != null) {
-                item["totalBytes"] = totalBytes
-                item["downloadedBytes"] = (totalBytes * percent / 100.0).toLong()
-              }
-              item["message"] = line.substringAfter("[download]").trim()
-              emitDownloads()
-            }
-            kotlin.Unit
+          staging.mkdirs()
+          try {
+            executeYoutubeAudioDownload(item, staging)
+          } catch (error: Exception) {
+            if (!isYoutubeForbidden(error)) throw error
+            if (item["status"] != "downloading") throw error
+            item["message"] = "Refreshing YouTube support and retrying…"
+            emitDownloads()
+            if (!refreshDownloaderAfter403()) throw error
+            if (item["status"] != "downloading") throw error
+            executeYoutubeAudioDownload(item, staging)
           }
-          if (item["status"] != "paused" && item["status"] != "cancelled") {
+          if (item["status"] == "downloading") {
             val audioFiles = staging.walkTopDown().filter { it.isFile && it.extension.equals("mp3", ignoreCase = true) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
             val filePaths = audioFiles.map(::publishAudioToMusic)
@@ -414,9 +399,70 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
             item["status"] = "completed"; item["percent"] = 100.0; item["message"] = "Saved to Music/MichoPlay/YouTube"
           }
         } catch (error: Exception) {
-          if (item["status"] != "paused" && item["status"] != "cancelled") { item["status"] = "failed"; item["message"] = error.message ?: "Download failed" }
-        } finally { staging.deleteRecursively(); activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads() }
+          // A pause followed quickly by resume changes the item to queued before
+          // this process exits. Do not let the old worker overwrite that request.
+          if (item["status"] == "downloading") { item["status"] = "failed"; item["message"] = error.message ?: "Download failed" }
+        } finally {
+          if (item["status"] == "completed" || item["status"] == "cancelled") staging.deleteRecursively()
+          activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads()
+        }
       }
+    }
+  }
+
+  private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File) {
+    val request = YoutubeDLRequest(item["url"] as String)
+    request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
+    if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
+    request.addOption("--playlist-end", "100")
+    // The app only needs an audio stream; selecting `best` can return a
+    // video+audio file that fails during MP3 conversion on some devices.
+    request.addOption("-f", "bestaudio[acodec!=none]/bestaudio")
+    request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
+    request.addOption("--embed-thumbnail")
+    request.addOption("-o", File(staging, "%(title).180B.%(ext)s").absolutePath)
+    val downloadProgress = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%")
+    val sizeProgress = Regex("of\\s+~?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)", RegexOption.IGNORE_CASE)
+    YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
+      if (item["status"] == "downloading") {
+        val progressMatch = downloadProgress.find(line)
+        if (progressMatch != null) {
+          val percent = (progressMatch.groupValues[1].toDoubleOrNull() ?: progress.toDouble()).coerceIn(0.0, 100.0)
+          item["percent"] = percent
+          val totalMatch = sizeProgress.find(line)
+          val totalBytes = totalMatch?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
+          if (totalBytes != null) {
+            item["totalBytes"] = totalBytes
+            item["downloadedBytes"] = (totalBytes * percent / 100.0).toLong()
+          }
+          item["message"] = line.substringAfter("[download]").trim()
+          emitDownloads()
+        }
+      }
+      kotlin.Unit
+    }
+  }
+
+  private fun isYoutubeForbidden(error: Throwable): Boolean {
+    var cause: Throwable? = error
+    while (cause != null) {
+      if (cause.message.orEmpty().contains("403") || cause.message.orEmpty().contains("forbidden", ignoreCase = true)) return true
+      cause = cause.cause
+    }
+    return false
+  }
+
+  @Synchronized
+  private fun refreshDownloaderAfter403(): Boolean {
+    if (downloader403RefreshAttempted) return false
+    downloader403RefreshAttempted = true
+    return try {
+      YoutubeDL.getInstance().updateYoutubeDL(activity.applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
+      downloaderError = null
+      true
+    } catch (error: Exception) {
+      downloaderError = error.message ?: "YouTube support could not be refreshed."
+      false
     }
   }
 
@@ -506,9 +552,12 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     val id = invoke.parseArgs(YoutubeDownloadArgs::class.java).id
     val item = downloads.firstOrNull { it["id"] == id } ?: run { invoke.reject("Download was not found."); return }
     item["status"] = status
-    if (status == "queued") { item["message"] = "Waiting to resume"; startQueuedDownloads() }
-    else if (stop) { item["message"] = if (status == "paused") "Paused" else "Cancelled"; try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Exception) {} }
-    emitDownloads(); invoke.resolve()
+    if (status == "queued") item["message"] = "Waiting to resume"
+    else if (stop) item["message"] = if (status == "paused") "Paused" else "Cancelled"
+    emitDownloads()
+    invoke.resolve()
+    if (status == "queued") io.execute { startQueuedDownloads() }
+    else if (stop) io.execute { try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Exception) {} }
   }
 
   @Command
