@@ -56,7 +56,7 @@ jobs:
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: MichoPlay ${{ github.ref_name }}
@@ -74,7 +74,7 @@ jobs:
       - name: Generate notes from commits and pull requests
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const tag = context.ref.replace('refs/tags/', '');
             const releases = await github.paginate(github.rest.repos.listReleases, {
