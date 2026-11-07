@@ -513,8 +513,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
             val audioFiles = staging.walkTopDown().filter { it.isFile && it.extension.equals("mp3", ignoreCase = true) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
             audioFiles.forEach { audio ->
-              val lyric = staging.listFiles()?.firstOrNull { file -> file.isFile && file.extension.equals("lrc", true) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
-              if (lyric != null) publishLyricsToMusic(audio, lyric)
+              val lyric = staging.walkTopDown().firstOrNull { file -> file.isFile && file.extension.equals("lrc", true) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
+              if (lyric != null) stageLyricsForEmbedding(audio, lyric)
             }
             val filePaths = audioFiles.map(::publishAudioToMusic)
             val finalBytes = audioFiles.sumOf { it.length() }
@@ -568,10 +568,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun publishLyricsToMusic(audio: File, lyrics: File) {
+  private fun stageLyricsForEmbedding(audio: File, lyrics: File) {
     val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
     if (!directory.exists() && !directory.mkdirs()) return
-    val destination = File(directory, audio.nameWithoutExtension + ".lrc")
+    val destination = File(directory, audio.name + ".lyrics-pending")
     try { lyrics.copyTo(destination, overwrite = true) } catch (_: Exception) { }
   }
 

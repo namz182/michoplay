@@ -252,6 +252,47 @@ fn lyrics_path(audio_path: &Path) -> PathBuf {
     path
 }
 
+fn pending_lyrics_path(audio_path: &Path) -> PathBuf {
+    let name = audio_path.file_name().unwrap_or_default().to_string_lossy();
+    audio_path.with_file_name(format!("{name}.lyrics-pending"))
+}
+
+fn embedded_lyrics(audio_path: &Path) -> Option<String> {
+    let tagged = Probe::open(audio_path).ok()?.read().ok()?;
+    let tag = tagged.primary_tag()?;
+    tag.get_string(ItemKey::Lyrics)
+        .or_else(|| tag.get_string(ItemKey::UnsyncLyrics))
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn track_has_lyrics(audio_path: &Path) -> bool {
+    lyrics_path(audio_path).is_file() || embedded_lyrics(audio_path).is_some()
+}
+
+fn embed_lyrics_file(audio_path: &Path, lyrics_file: &Path) -> Result<(), String> {
+    let contents = fs::read_to_string(lyrics_file)
+        .map_err(|_| "Could not read downloaded lyrics.".to_owned())?;
+    if contents.trim().is_empty() {
+        return Err("Downloaded lyrics were empty.".to_owned());
+    }
+    let mut tagged = Probe::open(audio_path)
+        .map_err(|error| format!("Could not read downloaded audio tags: {error}"))?
+        .read()
+        .map_err(|error| format!("Could not read downloaded audio tags: {error}"))?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::Id3v2));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .ok_or_else(|| "Could not prepare audio lyrics metadata.".to_owned())?;
+    // Keep the original LRC timestamp markup inside the audio's lyrics tag.
+    // This works for ID3 MP3 downloads and preserves timing for MichoPlay's renderer.
+    tag.insert_text(ItemKey::UnsyncLyrics, contents);
+    tag.save_to_path(audio_path, WriteOptions::default())
+        .map_err(|error| format!("Could not embed downloaded lyrics: {error}"))
+}
+
 fn attach_downloaded_lyrics(audio_path: &Path) {
     let Some(parent) = audio_path.parent() else {
         return;
@@ -271,11 +312,25 @@ fn attach_downloaded_lyrics(audio_path: &Path) {
                 .is_some_and(|name| name == stem || name.starts_with(&format!("{stem}.")))
     });
     if let Some(source) = candidate {
-        let target = lyrics_path(audio_path);
-        if source != target {
-            let _ = fs::rename(source, target);
+        let _ = embed_lyrics_file(audio_path, &source);
+        let _ = fs::remove_file(source);
+    }
+}
+
+#[tauri::command]
+fn embed_downloaded_lyrics(paths: Vec<String>) -> Vec<String> {
+    let mut embedded = Vec::new();
+    for value in paths {
+        let audio_path = PathBuf::from(value);
+        let staging_path = pending_lyrics_path(&audio_path);
+        if staging_path.is_file() {
+            if embed_lyrics_file(&audio_path, &staging_path).is_ok() {
+                let _ = fs::remove_file(staging_path);
+                embedded.push(audio_path.to_string_lossy().into_owned());
+            }
         }
     }
+    embedded
 }
 
 #[tauri::command]
@@ -292,8 +347,10 @@ fn lyrics_read(track_id: u64, state: State<'_, AppState>) -> Result<Option<Strin
     let path = lyrics_path(&track.path);
     match fs::read_to_string(path) {
         Ok(contents) if !contents.trim().is_empty() => Ok(Some(contents)),
-        Ok(_) => Ok(None),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Ok(_) => Ok(embedded_lyrics(&track.path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(embedded_lyrics(&track.path))
+        }
         Err(_) => Err("Could not read this song’s lyrics.".to_owned()),
     }
 }
@@ -924,7 +981,7 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
             root_path: root.to_string_lossy().into_owned(),
             folders,
             artwork_key,
-            has_lyrics: lyrics_path(path).is_file(),
+            has_lyrics: track_has_lyrics(path),
         },
         path: path.to_owned(),
         artwork,
@@ -1917,7 +1974,7 @@ impl PlayerCore {
     fn replace_library(&mut self, roots: Vec<PathBuf>, tracks: Vec<LibraryTrack>) -> Vec<Track> {
         let mut tracks = tracks;
         for item in &mut tracks {
-            item.track.has_lyrics = lyrics_path(&item.path).is_file();
+            item.track.has_lyrics = track_has_lyrics(&item.path);
         }
         let views = tracks.iter().map(|track| track.track.clone()).collect();
         let current_id = self
@@ -4631,6 +4688,7 @@ pub fn run() {
             youtube_download_remove,
             library_scan_folder,
             lyrics_read,
+            embed_downloaded_lyrics,
             library_cancel_scan,
             library_refresh,
             library_saved_roots,

@@ -51,6 +51,7 @@ export const api = {
   }),
   mediaStop: () => invoke<void>("media_stop"),
   lyricsRead: (trackId: number) => invoke<string | null>("lyrics_read", { trackId }),
+  embedDownloadedLyrics: (paths: string[]) => invoke<string[]>("embed_downloaded_lyrics", { paths }),
   mediaTakePendingActions: () => invoke<string[]>("media_take_pending_actions"),
   refresh: (folders: string[]) => invoke<Track[]>("library_refresh", { folders }),
   librarySavedRoots: () => invoke<string[]>("library_saved_roots"),
