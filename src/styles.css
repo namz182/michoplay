@@ -717,7 +717,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .queue-list .queue-actions .icon-button:disabled { opacity: .2; }
 .queue-notice { color: #8c8595; font-size: 10px; line-height: 1.6; }
 .refresh-button { margin: 14px 0 5px; }
-.track-menu { width: 225px; }
+.track-menu { z-index: 41; width: 225px; }
 .playlist-menu-wrap { position: relative; }
 .playlist-actions-wrap { position:relative; display:flex; align-items:center; }
 .playlist-actions-menu { position:absolute; top:calc(100% + 7px); right:0; left:auto; box-sizing:border-box; width:min(205px,calc(100vw - 28px)); max-height:min(60dvh,320px); overflow-y:auto; overscroll-behavior:contain; }
@@ -1304,6 +1304,9 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-search-results { padding:0 13px; }
 .mobile-result-group { display:grid; gap:2px; margin-bottom:12px; }
 .mobile-result-group h2 { margin:3px 5px 8px; font-size:15px; }
+.mobile-recent-searches { padding:0 13px; }
+.mobile-recent-searches-heading { display:flex; align-items:center; justify-content:space-between; }
+.mobile-recent-searches-heading button { min-height:36px; padding:0 8px; border:0; background:transparent; color:var(--brand-highlight); font:inherit; font-size:13px; font-weight:700; cursor:pointer; }
 .mobile-result-group .global-search-result { min-height:64px; gap:13px; padding:6px 5px; }
 .mobile-result-group .global-search-cover { width:50px; height:50px; flex-basis:50px; border-radius:4px; }
 .mobile-result-group .search-result-copy strong { font-size:14px; }
@@ -1399,8 +1402,8 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-youtube-search-copy { display:grid; min-width:0; flex:1; gap:3px; }
 .mobile-youtube-search-copy strong { overflow:hidden; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-youtube-search-copy small { color:#aaa6af; font-size:10px; }
-.mobile-youtube-search-loading { display:grid; gap:7px; }
-.mobile-youtube-search-loading span { height:58px; border-radius:7px; background:linear-gradient(100deg,#242326 28%,#343136 45%,#242326 62%); background-size:220% 100%; animation:mobile-shimmer 1.4s ease-in-out infinite; }
+.mobile-youtube-search-loading { display:grid; gap:5px; }
+.mobile-youtube-search-loading span { height:44px; border-radius:7px; background:linear-gradient(100deg,#242326 28%,#343136 45%,#242326 62%); background-size:220% 100%; animation:mobile-shimmer 1.4s ease-in-out infinite; }
 @keyframes mobile-shimmer { to { background-position-x:-220%; } }
 .android-app .mobile-library-songs { padding:0 13px; }
 .android-app .mobile-library-songs .track-table { padding:0; }
