@@ -766,30 +766,19 @@ export default function App() {
   }, [player.currentTrackId, player.durationMs, player.positionMs, run, tracks.length]);
   useEffect(() => {
     if (isAndroid) return;
-    const blockClipboard = (event: Event) => event.preventDefault();
-    const blockContextMenu = (event: globalThis.MouseEvent) => event.preventDefault();
     const blockRestrictedShortcuts = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       const modified = event.ctrlKey || event.metaKey;
-      const copyOrCut = (modified && !event.altKey && (key === "c" || key === "x"))
-        || (event.ctrlKey && key === "insert")
-        || (event.shiftKey && key === "delete");
       const openDevtools = key === "f12"
         || (modified && event.shiftKey && ["i", "j", "c", "k"].includes(key))
         || (event.metaKey && event.altKey && ["i", "j", "c"].includes(key));
-      if (copyOrCut || openDevtools) {
+      if (openDevtools) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }
     };
-    document.addEventListener("copy", blockClipboard, true);
-    document.addEventListener("cut", blockClipboard, true);
-    document.addEventListener("contextmenu", blockContextMenu, true);
     window.addEventListener("keydown", blockRestrictedShortcuts, true);
     return () => {
-      document.removeEventListener("copy", blockClipboard, true);
-      document.removeEventListener("cut", blockClipboard, true);
-      document.removeEventListener("contextmenu", blockContextMenu, true);
       window.removeEventListener("keydown", blockRestrictedShortcuts, true);
     };
   }, [isAndroid]);
@@ -1599,7 +1588,7 @@ export default function App() {
     </section>}
     {searchResults.length ? ["Song", "Artist", "Album", "Folder", "Playlist"].map((type) => {
       const group = searchResults.filter((result) => result.type === type);
-      return group.length ? <section className="global-search-group" key={type}><h2>{type === "Song" ? "Songs" : `${type}s`}</h2>{group.map((result) => <GlobalSearchResultButton key={`${result.type}-${result.title}-${result.subtitle}`} result={result} onClick={() => chooseSearchResult(result)} onMenu={result.type === "Song" ? (event) => openSearchResultMenu(result, event) : undefined} isPlaying={result.trackId === player.currentTrackId && player.isPlaying}/>)}</section> : null;
+      return group.length ? <section className="global-search-group" key={type}><h2>{type === "Song" ? "Songs" : `${type}s`}</h2>{group.map((result) => <GlobalSearchResultButton key={`${result.type}-${result.title}-${result.subtitle}`} result={result} onClick={() => chooseSearchResult(result)} onMenu={result.type === "Song" ? (event) => openSearchResultMenu(result, event) : undefined} isPlaying={result.trackId === player.currentTrackId && player.isPlaying} showPlayHover={false}/>)}</section> : null;
     }) : <div className="global-search-empty"><strong>No matches in your library for “{search}”</strong><span>Try a song, artist, album, folder, or playlist name.</span></div>}
   </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); saveStoredData("recent-searches", "[]"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} onMenu={result.type === "Song" ? (event) => openSearchResultMenu(result, event) : undefined} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
 
@@ -1839,7 +1828,7 @@ export default function App() {
         <div className="mobile-player-track"><div><strong>{footerTrack.title}</strong><span>{footerTrack.artist}</span></div><button className={favorites.includes(footerTrack.id) ? "favorite" : ""} aria-label="Toggle favorite" onClick={() => toggleFavorite(footerTrack.id)}><Heart size={24} fill={favorites.includes(footerTrack.id) ? "url(#michoplay-brand-gradient)" : "none"}/></button></div>
         <div className="mobile-seek"><input type="range" min="0" max={Math.max(1, player.durationMs)} value={Math.min(seekPreviewMs ?? player.positionMs, player.durationMs)} style={{ "--range-value": `${Math.min(100, player.durationMs ? (seekPreviewMs ?? player.positionMs) / player.durationMs * 100 : 0)}%` } as CSSProperties} aria-label="Seek" disabled={!current} onChange={(event) => previewSeek(Number(event.target.value))} onPointerUp={(event) => void commitSeek(Number(event.currentTarget.value))} onKeyUp={(event) => void commitSeek(Number(event.currentTarget.value))}/><div><span>{time(seekPreviewMs ?? player.positionMs)}</span><span>{time(player.durationMs)}</span></div></div>
         <div className="mobile-player-controls"><button className={`shuffle-control ${player.shuffle ? "active" : ""}`} aria-label="Shuffle" onClick={() => void run(api.shuffle)}><Shuffle size={22}/></button><button aria-label="Previous track" onClick={() => void run(api.previous)}><SkipBack size={27} fill="currentColor"/></button><button className="mobile-big-play" aria-label={player.isPlaying ? "Pause" : "Play"} onClick={() => void run(current ? api.toggle : () => api.play(footerTrack.id))}>{player.isPlaying ? <Pause size={28} fill="currentColor"/> : <Play size={28} fill="currentColor"/>}</button><button aria-label="Next track" onClick={() => void run(api.next)}><SkipForward size={27} fill="currentColor"/></button><button className={`repeat-control ${player.repeatMode !== "off" ? "active" : ""}`} aria-label={`Repeat ${player.repeatMode}`} onClick={() => void run(api.repeat)}>↻{player.repeatMode === "one" && <small className="repeat-one-badge">1</small>}</button></div>
-        <div className="mobile-player-actions"><button aria-label="Show queue" onClick={() => setMobileQueueOpen(true)}><ListMusic size={22}/></button></div>
+        <div className="mobile-player-actions"><button className={`mobile-player-timer ${player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd ? "active" : ""}`} aria-label={player.sleepTimerRemainingMs !== null ? `Sleep timer: ${sleepTimerLabel(player.sleepTimerRemainingMs)} remaining` : player.sleepTimerAtTrackEnd ? "Sleep timer: end of track" : "Set sleep timer"} onClick={() => setMobileSleepTimerOpen(true)}><Timer size={22}/>{(player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd) && <span>{player.sleepTimerAtTrackEnd ? "Track end" : sleepTimerLabel(player.sleepTimerRemainingMs!)}</span>}</button><button aria-label="Show queue" onClick={() => setMobileQueueOpen(true)}><ListMusic size={22}/></button></div>
       </> : <div className="mobile-player-empty"><Music2 size={36}/><strong>Nothing playing</strong><span>Choose a song from your library.</span><button onClick={() => { setMobilePlayerOpen(false); setMobileTab("library"); }}>Open library</button></div>}
     </section>}
     {isAndroid && mobileLibraryActionsOpen && <div className="mobile-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileLibraryActionsOpen(false); }}><section className="mobile-library-action-sheet" role="dialog" aria-modal="true" aria-label="Add to your library"><div className="mobile-sheet-handle"/><h2>Add to your library</h2><button onClick={() => { setMobileLibraryActionsOpen(false); newPlaylist(); }}><ListMusic size={21}/><strong>Create playlist</strong><ChevronRight size={18}/></button><button onClick={() => { setMobileLibraryActionsOpen(false); void chooseAndroidAudioFiles(); }}><FolderOpen size={21}/><strong>Import music</strong><ChevronRight size={18}/></button></section></div>}

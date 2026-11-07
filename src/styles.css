@@ -32,6 +32,7 @@ button:disabled { cursor: default; }
 .app-frame { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 8px; width: var(--app-frame-width, 100%); height: var(--app-frame-height, 100vh); zoom: var(--app-zoom, 1); min-height: var(--app-frame-min-height, 500px); overflow-x: clip; padding: 8px 8px 0; background: var(--bg); }
 .desktop-app { user-select:none; -webkit-user-select:none; }
 .desktop-app input, .desktop-app textarea, .desktop-app select, .desktop-app [contenteditable="true"] { user-select:text; -webkit-user-select:text; }
+.desktop-app .track-copy, .desktop-app .track-album, .desktop-app .track-artist-cell, .desktop-app .heading-copy, .desktop-app .search-result-copy, .desktop-app .download-item-copy, .desktop-app .now-track-copy, .desktop-app .queue-song-copy, .desktop-app .settings-page p { user-select:text; -webkit-user-select:text; }
 .sidebar { display: flex; min-height: 0; flex-direction: column; padding: 20px 14px 14px; overflow: hidden; border-radius: 12px 12px 0 0; background: var(--sidebar); }
 .brand { display: flex; align-items: center; gap: 10px; margin: 0 6px 32px; color: var(--text); text-decoration: none; font-size: 18px; font-weight: 800; letter-spacing: -.7px; }
 .brand-mark { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 50%; background: linear-gradient(140deg, var(--blush), var(--brand-highlight) 62%, var(--accent)); color: #302b38; }
@@ -336,6 +337,8 @@ button:disabled { cursor: default; }
 .now-panel-head .side-panel-tabs button { overflow: hidden; justify-content: flex-start; text-overflow: ellipsis; }
 .now-panel-head .side-panel-tabs button { min-width: 0; padding-inline: 4px; font-size: 10px; letter-spacing: -.12px; white-space: nowrap; }
 .now-panel-head .side-panel-tabs button span.download-tab-count { flex: 0 0 auto; }
+.now-panel:has(.download-manager) { display:flex; flex-direction:column; overflow:hidden; }
+.now-panel:has(.download-manager) .now-panel-head { flex:0 0 auto; }
 .now-panel-close { flex: 0 0 28px; }
 .now-panel-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 1px; min-width: 0; }
 .now-panel-tools .download-clear-button { flex: 0 0 auto; white-space: nowrap; }
@@ -904,8 +907,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .side-panel-tabs button.selected { background: rgba(255,255,255,.075); color: #f1edf4; }
 .side-panel-tabs button:focus-visible, .download-manager-trigger:focus-visible { outline: 2px solid var(--brand-highlight); outline-offset: 2px; }
 .download-tab-count { display: inline-grid; min-width: 16px; height: 16px; place-items: center; border-radius: 8px; background: rgba(245,238,232,.16); color: var(--brand-highlight); font-size: 9px; }
-.download-manager { display: grid; align-content: start; gap: 9px; }
-.download-manager-heading { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 1px 1px 2px; }
+.download-manager { display: grid; flex:1 1 auto; min-height:0; align-content: start; gap: 9px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:#514c54 transparent; }
+.download-manager-heading { position:sticky; z-index:2; top:0; display: flex; min-width: 0; align-items: center; gap: 7px; padding: 9px 1px 10px; background:#141316; }
 .download-manager-heading strong { min-width: 0; overflow: hidden; color: #eeeaf1; font-size: 12px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
 .download-manager-heading > span { color: #8f8995; font-size: 9px; white-space: nowrap; }
 .download-manager-heading .download-clear-button { margin-left: auto; }
@@ -1463,7 +1466,10 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-player-controls button.active { color:var(--blush); }
 .mobile-player-controls .repeat-one-badge { position:absolute; top:14px; right:7px; padding:0 2px; border-radius:3px; background:#171619; color:inherit; font-size:11px; font-weight:800; line-height:12px; }
 .mobile-player-controls .mobile-big-play { width:68px; height:68px; border-radius:50%; background:var(--brand-gradient); color:#302b38; }
-.mobile-player-actions { display:flex; justify-content:flex-end; margin:5px -8px 0; }
+.mobile-player-actions { display:flex; align-items:center; justify-content:space-between; margin:5px -8px 0; }
+.mobile-player-actions .mobile-player-timer { display:flex; width:auto; min-width:42px; align-items:center; justify-content:center; gap:6px; padding:0 7px; font-variant-numeric:tabular-nums; }
+.mobile-player-actions .mobile-player-timer.active { color:var(--blush); }
+.mobile-player-timer span { font-size:12px; font-weight:700; }
 .mobile-svg-defs { position:absolute; width:0; height:0; overflow:hidden; }
 .mobile-player-empty { display:grid; flex:1; align-content:center; justify-items:center; gap:10px; color:#bcb7c0; text-align:center; }
 .mobile-player-empty strong { color:white; font-size:21px; }
