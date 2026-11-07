@@ -4,6 +4,7 @@ import android.app.Activity
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.Intent
+import android.content.ContentUris
 import android.content.ContentValues
 import android.net.Uri
 import android.os.Build
@@ -340,12 +341,53 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         }
         val source = File(args.tempPath)
         if (!source.isFile || !source.canRead()) throw IllegalArgumentException("The edited song could not be prepared.")
-        val output = activity.contentResolver.openOutputStream(uri, "wt")
-          ?: throw IllegalStateException("Android could not open this song for writing.")
-        source.inputStream().use { input -> output.use { input.copyTo(it) } }
+        try {
+          copyEditedSong(source, uri)
+        } catch (writeError: Exception) {
+          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) throw writeError
+          val mediaUri = mediaStoreAudioUri(expectedPath) ?: throw writeError
+          val pendingIntent = MediaStore.createWriteRequest(activity.contentResolver, listOf(mediaUri))
+          val mainActivity = activity as? MainActivity
+            ?: throw IllegalStateException("Could not open Android's media write approval.", writeError)
+          activity.runOnUiThread {
+            mainActivity.requestMediaWriteAccess(pendingIntent.intentSender) { approved ->
+              if (!approved) {
+                invoke.reject("Android did not approve writing to this song file.")
+              } else {
+                io.execute {
+                  try {
+                    copyEditedSong(source, mediaUri)
+                    MediaScannerConnection.scanFile(activity, arrayOf(expectedPath), null, null)
+                    invoke.resolve()
+                  } catch (retryError: Exception) {
+                    invoke.reject(retryError.message ?: "Could not write metadata to the song file.")
+                  }
+                }
+              }
+            }
+          }
+          return@execute
+        }
         MediaScannerConnection.scanFile(activity, arrayOf(expectedPath), null, null)
         invoke.resolve()
       } catch (error: Exception) { invoke.reject(error.message ?: "Could not write metadata to the song file.") }
+    }
+  }
+
+  private fun copyEditedSong(source: File, uri: Uri) {
+    val output = activity.contentResolver.openOutputStream(uri, "wt")
+      ?: throw IllegalStateException("Android could not open this song for writing.")
+    source.inputStream().use { input -> output.use { input.copyTo(it) } }
+  }
+
+  private fun mediaStoreAudioUri(path: String): Uri? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+    val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+    val projection = arrayOf(MediaStore.Audio.Media._ID)
+    val selection = "${MediaStore.Audio.Media.DATA} = ?"
+    return activity.contentResolver.query(collection, projection, selection, arrayOf(path), null)?.use { cursor ->
+      if (!cursor.moveToFirst()) null
+      else ContentUris.withAppendedId(collection, cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)))
     }
   }
 

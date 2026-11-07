@@ -7,13 +7,24 @@ import android.os.Build
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.IntentSenderRequest
+import android.content.IntentSender
 
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
+  private lateinit var mediaWriteLauncher: ActivityResultLauncher<IntentSenderRequest>
+  private var mediaWriteResult: ((Boolean) -> Unit)? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    mediaWriteLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+      val callback = mediaWriteResult
+      mediaWriteResult = null
+      callback?.invoke(result.resultCode == RESULT_OK)
+    }
 
     // Android 17 blocks LAN access for apps targeting API 37 unless the
     // ACCESS_LOCAL_NETWORK runtime permission is granted. Tauri's Android
@@ -34,6 +45,11 @@ class MainActivity : TauriActivity() {
         }
       }
     }
+  }
+
+  fun requestMediaWriteAccess(intentSender: IntentSender, callback: (Boolean) -> Unit) {
+    mediaWriteResult = callback
+    mediaWriteLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
   }
 
   override fun onWebViewCreate(webView: WebView) {

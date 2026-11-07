@@ -3678,6 +3678,7 @@ struct TrackMetadataEdit {
 struct TrackMetadataUpdateResult {
     track: Track,
     saved_to_file: bool,
+    write_error: Option<String>,
 }
 
 #[tauri::command]
@@ -3754,6 +3755,10 @@ async fn library_update_track_metadata(
     if !release_date.is_empty() {
         tag.insert_text(ItemKey::ReleaseDate, release_date.to_owned());
     }
+    #[cfg(target_os = "android")]
+    let mut write_error = None;
+    #[cfg(not(target_os = "android"))]
+    let write_error: Option<String> = None;
     let saved_to_file = match tag.save_to_path(&path, WriteOptions::default()) {
         Ok(()) => true,
         Err(error) => {
@@ -3779,7 +3784,10 @@ async fn library_update_track_metadata(
                     ).map_err(|error| error.to_string())
                 })();
                 let _ = fs::remove_file(&temp_path);
-                prepared.is_ok()
+                match prepared {
+                    Ok(()) => true,
+                    Err(error) => { write_error = Some(error); false }
+                }
             }
         }
     };
@@ -3856,6 +3864,7 @@ async fn library_update_track_metadata(
     Ok(TrackMetadataUpdateResult {
         track,
         saved_to_file,
+        write_error,
     })
 }
 

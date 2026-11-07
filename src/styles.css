@@ -1494,14 +1494,15 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-edit-queue { min-height:39px; padding:0 17px; border:0; border-radius:999px; background:#343236; color:#f3f0f4; font-weight:750; }
 .mobile-close-sheet { display:grid; width:39px; height:39px; place-items:center; border:0; border-radius:50%; background:#343236; color:#f3f0f4; }
 .mobile-queue-list { min-height:0; flex:1 1 auto; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
-.mobile-queue-row { display:flex; min-height:60px; align-items:center; gap:10px; }
+.mobile-queue-row { --queue-shift-y:0px; position:relative; display:flex; min-height:60px; align-items:center; gap:10px; transform:translate3d(0,var(--queue-shift-y),0); transition:transform 190ms cubic-bezier(.2,.85,.25,1), opacity 160ms ease, box-shadow 160ms ease; will-change:transform; }
 .mobile-queue-row > span:nth-child(2), .mobile-queue-song > span:last-child { display:grid; min-width:0; flex:1; gap:4px; }
 .mobile-queue-row strong { overflow:hidden; font-size:15px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-queue-row small { overflow:hidden; color:#b6b1ba; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-queue-row.current strong { color:var(--brand-highlight); }
 .mobile-queue-row.current { min-height:68px; }
-.mobile-queue-row.dragging { opacity:.42; }
+.mobile-queue-row.dragging { z-index:2; opacity:1; transform:translate3d(0,var(--queue-drag-offset,0px),0) scale(1.025); border-radius:10px; background:#38363b; box-shadow:0 12px 28px rgba(0,0,0,.4); transition:none; }
 .mobile-queue-row.drop-target { box-shadow:inset 0 2px var(--brand-highlight); }
+.mobile-queue-row.dragging .mobile-queue-song { pointer-events:none; }
 .mobile-queue-cover { width:42px; height:42px; flex:0 0 42px; border-radius:5px; }
 .mobile-queue-song > .mobile-queue-cover { width:42px !important; height:42px !important; min-width:42px; max-width:42px; flex:0 0 42px; aspect-ratio:1; }
 .mobile-queue-state { color:var(--brand-highlight); font-size:11px; }
