@@ -208,6 +208,8 @@ export default function App() {
   const [lyricsText, setLyricsText] = useState<string | null>(null);
   const [mobileLyricsExpanded, setMobileLyricsExpanded] = useState(false);
   const [mobilePlayerLyricsOpen, setMobilePlayerLyricsOpen] = useState(false);
+  const [mobileTrackSwipeOffset, setMobileTrackSwipeOffset] = useState(0);
+  const [mobileTrackIsDragging, setMobileTrackIsDragging] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [mobileAboutOpen, setMobileAboutOpen] = useState(false);
   const [appVersion, setAppVersion] = useState(packageInfo.version);
@@ -1406,6 +1408,8 @@ export default function App() {
   const nowPlayingTrack = current;
   const nowPlayingIsActive = current !== null && player.isPlaying;
   const footerTrack = current ?? recentTracks[0] ?? null;
+  const mobileSwipeNextTrack = player.priorityQueue.concat(player.queue).map((id) => trackMap.get(id)).find((track) => track && track.id !== footerTrack?.id) ?? null;
+  const mobileSwipePreviousTrack = recentTracks.find((track) => track.id !== footerTrack?.id) ?? null;
   useEffect(() => {
     if (current && player.isPlaying) {
       setShowPanel(true);
@@ -1974,7 +1978,11 @@ export default function App() {
     {isAndroid && mobilePlayerOpen && <section className="mobile-player-screen" aria-label="Now playing">
       <header className="mobile-player-top"><button aria-label="Close player" onClick={() => setMobilePlayerOpen(false)}><ChevronDown size={27}/></button><div><span className="mobile-player-brand-row"><img className="mobile-player-app-logo" src="/michoplay-logo.svg" alt=""/><small>MichoPlay</small></span></div><button aria-label="Track options" onClick={(event) => footerTrack && openTrackMenu(footerTrack, event)}><MoreVertical size={23}/></button></header>
       {footerTrack ? <>
-        <div className={`mobile-player-art-swipe ${mobilePlayerLyricsOpen ? "showing-lyrics" : ""}`} onPointerDown={!mobilePlayerLyricsOpen ? (event) => { mobileTrackSwipeStartX.current = event.clientX; mobileTrackSwipeMoved.current = false; event.currentTarget.setPointerCapture(event.pointerId); } : undefined} onPointerUp={!mobilePlayerLyricsOpen ? (event) => { const start = mobileTrackSwipeStartX.current; mobileTrackSwipeStartX.current = null; if (start === null) return; const delta = event.clientX - start; if (delta <= -55) { mobileTrackSwipeMoved.current = true; void run(api.next); } else if (delta >= 55) { mobileTrackSwipeMoved.current = true; void run(api.previous); } } : undefined} onPointerCancel={() => { mobileTrackSwipeStartX.current = null; }}>
+        <div className={`mobile-player-art-swipe ${mobilePlayerLyricsOpen ? "showing-lyrics" : ""} ${mobileTrackIsDragging ? "is-dragging" : ""} ${mobileTrackSwipeOffset < 0 ? "swiping-next" : mobileTrackSwipeOffset > 0 ? "swiping-previous" : ""}`} style={{ "--mobile-art-offset": `${mobileTrackSwipeOffset}px`, "--mobile-art-rotation": `${mobileTrackSwipeOffset * 0.012}deg`, "--mobile-art-opacity": `${Math.max(0.68, 1 - Math.abs(mobileTrackSwipeOffset) / 1000)}` } as CSSProperties} onPointerDown={!mobilePlayerLyricsOpen ? (event) => { mobileTrackSwipeStartX.current = event.clientX; mobileTrackSwipeMoved.current = false; setMobileTrackIsDragging(true); event.currentTarget.setPointerCapture(event.pointerId); } : undefined} onPointerMove={!mobilePlayerLyricsOpen ? (event) => { if (mobileTrackSwipeStartX.current !== null) setMobileTrackSwipeOffset(Math.max(-220, Math.min(220, event.clientX - mobileTrackSwipeStartX.current))); } : undefined} onPointerUp={!mobilePlayerLyricsOpen ? (event) => { const start = mobileTrackSwipeStartX.current; mobileTrackSwipeStartX.current = null; setMobileTrackIsDragging(false); const delta = event.clientX - (start ?? event.clientX); const commitThreshold = Math.max(72, event.currentTarget.clientWidth * 0.22); setMobileTrackSwipeOffset(0); if (start === null) return; if (delta <= -commitThreshold) { mobileTrackSwipeMoved.current = true; void run(api.next); } else if (delta >= commitThreshold) { mobileTrackSwipeMoved.current = true; void run(api.previous); } } : undefined} onPointerCancel={() => { mobileTrackSwipeStartX.current = null; setMobileTrackIsDragging(false); setMobileTrackSwipeOffset(0); }}>
+          {!mobilePlayerLyricsOpen && <>
+            {mobileSwipeNextTrack && <div className="mobile-player-swipe-preview mobile-player-swipe-preview-next" aria-hidden="true"><Cover className="mobile-player-cover" keys={[mobileSwipeNextTrack.artworkKey]}/></div>}
+            {mobileSwipePreviousTrack && <div className="mobile-player-swipe-preview mobile-player-swipe-preview-previous" aria-hidden="true"><Cover className="mobile-player-cover" keys={[mobileSwipePreviousTrack.artworkKey]}/></div>}
+          </>}
           {mobilePlayerLyricsOpen && footerTrack.hasLyrics ? <div className="mobile-player-inline-lyrics"><LyricsView track={footerTrack} text={lyricsText ?? ""} positionMs={player.positionMs} expanded onExpand={() => setMobileLyricsExpanded(true)} onClose={() => setMobilePlayerLyricsOpen(false)} onSeek={(positionMs) => void run(() => api.seek(positionMs))}/></div> : <button className="mobile-player-cover-button" aria-label={footerTrack.hasLyrics ? "Show lyrics" : "Album art"} onClick={() => { if (mobileTrackSwipeMoved.current) { mobileTrackSwipeMoved.current = false; return; } if (footerTrack.hasLyrics) setMobilePlayerLyricsOpen(true); }}><Cover className="mobile-player-cover" keys={[footerTrack.artworkKey]}/></button>}
         </div>
         <div className="mobile-player-track"><div><strong>{footerTrack.title}</strong><span className="mobile-player-track-meta">{footerTrack.hasLyrics && <span className="lyrics-badge" aria-label="Lyrics available">E</span>}<span>{footerTrack.artist}</span></span></div><button className={favorites.includes(footerTrack.id) ? "favorite" : ""} aria-label="Toggle favorite" onClick={() => toggleFavorite(footerTrack.id)}><Heart size={24} fill={favorites.includes(footerTrack.id) ? "url(#michoplay-brand-gradient)" : "none"}/></button></div>
