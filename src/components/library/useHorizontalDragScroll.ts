@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 
 type DragState = { pointerId: number; startX: number; startScrollLeft: number; moved: boolean };
 
@@ -13,7 +13,6 @@ export function useHorizontalDragScroll() {
     if (!event.currentTarget.closest(".desktop-app") || event.button !== 0 || !event.isPrimary) return;
     suppressClickRef.current = false;
     dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScrollLeft: event.currentTarget.scrollLeft, moved: false };
-    event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
@@ -22,6 +21,7 @@ export function useHorizontalDragScroll() {
     if (!drag.moved && Math.abs(delta) < 4) return;
     drag.moved = true;
     event.currentTarget.classList.add("is-dragging");
+    event.currentTarget.setPointerCapture(event.pointerId);
     event.currentTarget.scrollLeft = drag.startScrollLeft - delta;
     event.preventDefault();
   };
@@ -33,7 +33,7 @@ export function useHorizontalDragScroll() {
     event.currentTarget.classList.remove("is-dragging");
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
-  const onClickCapture = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const onClickCapture = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!suppressClickRef.current) return;
     suppressClickRef.current = false;
     event.preventDefault();

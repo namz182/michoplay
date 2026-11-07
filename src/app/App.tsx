@@ -259,6 +259,10 @@ export default function App() {
     return () => { active = false; unlisten?.(); };
   }, []);
   const [menu, setMenu] = useState<TrackMenu | null>(null);
+  const [metadataTrack, setMetadataTrack] = useState<Track | null>(null);
+  const [metadataDraft, setMetadataDraft] = useState({ title: "", artist: "", album: "", releaseDate: "" });
+  const [metadataSaving, setMetadataSaving] = useState(false);
+  const [metadataError, setMetadataError] = useState("");
   const appFrameRef = useRef<HTMLElement>(null);
   const trackMenuRef = useRef<HTMLDivElement>(null);
   const playlistSubmenuRef = useRef<HTMLDivElement>(null);
@@ -372,6 +376,27 @@ export default function App() {
     try { await action(); setPlayer(await api.state()); setMessage(""); }
     catch (error) { setMessage(String(error)); }
   }, []);
+  function openMetadataEditor(track: Track) {
+    setMenu(null);
+    setMetadataTrack(track);
+    setMetadataDraft({ title: track.title, artist: track.artist, album: track.album, releaseDate: track.releaseDate });
+    setMetadataError("");
+  }
+  async function saveMetadata() {
+    if (!metadataTrack || metadataSaving) return;
+    setMetadataSaving(true);
+    setMetadataError("");
+    try {
+      const updated = await api.updateTrackMetadata(metadataTrack.id, metadataDraft);
+      setTracks((prior) => prior.map((track) => track.id === updated.id ? updated : track));
+      setMetadataTrack(null);
+      setMessage("");
+    } catch (error) {
+      setMetadataError(String(error));
+    } finally {
+      setMetadataSaving(false);
+    }
+  }
   useEffect(() => { if (player.volume > 0) lastAudibleVolume.current = player.volume; }, [player.volume]);
   function setVolume(volume: number) {
     saveStoredData("volume", JSON.stringify(volume));
@@ -1503,6 +1528,12 @@ export default function App() {
     }
     else if (result.page) { if (isAndroid) setMobileTab("home"); navigate(result.page); }
   }
+  function openSearchResultMenu(result: GlobalSearchResult, event: MouseEvent<HTMLButtonElement>) {
+    const track = result.trackId === undefined ? null : trackMap.get(result.trackId);
+    if (!track) return;
+    setSearchOpen(false);
+    openTrackMenu(track, event);
+  }
   const playCounts = useMemo(() => new Map(listeningHistory.map((entry) => [entry.trackId, entry.playCount])), [listeningHistory]);
   const rows = (items: Track[], emptyTitle = "No songs here") => <TrackRows items={items} player={player} favorites={favoriteSet} compact={compact} rowHeight={isAndroid ? 64 : undefined} playCounts={playCounts} showPlayCount={page.section === "Recently Played"} onPlay={(track) => playCollection(track, items)} onFavorite={toggleFavorite} onMenu={openTrackMenu} emptyTitle={scanning ? "Scanning music…" : search || inlineSearch ? "No results" : emptyTitle} emptyMessage={scanning ? "Reading local audio and artwork." : search || inlineSearch ? "Try another search." : page.section === "Favorites" ? "Save songs with the heart in their action menu." : page.section === "Recently Played" ? "Songs will appear here after you play them." : page.detail?.kind === "playlist" ? "Add songs to this playlist from your library." : "Add a music folder to get started."} emptyAction={!scanning && !search && !inlineSearch && selectedPlaylist && selectedPlaylist.name.toLocaleLowerCase() !== "youtube" ? <button className="primary-button playlist-add-songs" onClick={() => { setAddSongsPlaylistId(selectedPlaylist.id); setAddSongsSelected([]); setAddSongsSearch(""); setAddSongsVisibleLimit(100); }}><Plus size={15}/>Add songs</button> : undefined} />;
   async function loadMoreYoutubeFolderResults() {
@@ -1569,9 +1600,9 @@ export default function App() {
     </section>}
     {searchResults.length ? ["Song", "Artist", "Album", "Folder", "Playlist"].map((type) => {
       const group = searchResults.filter((result) => result.type === type);
-      return group.length ? <section className="global-search-group" key={type}><h2>{type === "Song" ? "Songs" : `${type}s`}</h2>{group.map((result) => <GlobalSearchResultButton key={`${result.type}-${result.title}-${result.subtitle}`} result={result} onClick={() => chooseSearchResult(result)} isPlaying={result.trackId === player.currentTrackId && player.isPlaying}/>)}</section> : null;
+      return group.length ? <section className="global-search-group" key={type}><h2>{type === "Song" ? "Songs" : `${type}s`}</h2>{group.map((result) => <GlobalSearchResultButton key={`${result.type}-${result.title}-${result.subtitle}`} result={result} onClick={() => chooseSearchResult(result)} onMenu={result.type === "Song" ? (event) => openSearchResultMenu(result, event) : undefined} isPlaying={result.trackId === player.currentTrackId && player.isPlaying}/>)}</section> : null;
     }) : <div className="global-search-empty"><strong>No matches in your library for “{search}”</strong><span>Try a song, artist, album, folder, or playlist name.</span></div>}
-  </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); saveStoredData("recent-searches", "[]"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
+  </> : recentSearchResults.length ? <section className="global-search-group"><div className="global-search-heading"><h2>Recent searches</h2><button onClick={() => { setRecentSearches([]); saveStoredData("recent-searches", "[]"); }}>Clear</button></div>{recentSearchResults.map(({ query, result }) => result ? <GlobalSearchResultButton key={query} result={result} onClick={() => { setSearch(query); setSearchOpen(true); }} onMenu={result.type === "Song" ? (event) => openSearchResultMenu(result, event) : undefined} showPlayHover={false}/> : <button className="global-search-result recent-query" key={query} role="option" onClick={() => { setSearch(query); setSearchOpen(true); }}><span className="search-result-symbol"><Search size={17}/></span><span className="search-result-copy"><strong>{query}</strong><small>Recent search</small></span></button>)}</section> : <div className="global-search-empty"><strong>Search your library</strong><span>Find songs, artists, albums, folders, and playlists.</span></div>;
 
   const submenuPlacement = menu && !isAndroid ? playlistSubmenuPlacement(menu.x) : "";
   const updatePromptOpen = Boolean(availableUpdate && deferredUpdatePrompt !== availableUpdate);
@@ -1673,6 +1704,7 @@ export default function App() {
             searchResults={searchResults}
             recentSearchResults={recentSearchResults}
             onChooseResult={chooseSearchResult}
+            onResultMenu={openSearchResultMenu}
             onLoadRecentSearch={(query) => setSearch(query)}
             currentTrackId={player.currentTrackId}
             isPlaying={player.isPlaying}
@@ -1821,6 +1853,7 @@ export default function App() {
     {isAndroid && mobileSleepTimerOpen && <div className="mobile-sheet-layer sleep-timer-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileSleepTimerOpen(false); }}><section className="mobile-sleep-timer-sheet" role="dialog" aria-modal="true" aria-label="Sleep timer"><div className="mobile-sheet-handle"/><h2>Sleep timer</h2>{[[5, "5 minutes"], [10, "10 minutes"], [15, "15 minutes"], [30, "30 minutes"], [45, "45 minutes"], [60, "1 hour"]].map(([minutes, label]) => <button key={minutes} onClick={() => { void run(() => api.sleepTimer(Number(minutes), false)); setMobileSleepTimerOpen(false); }}>{label}</button>)}<button onClick={() => { void run(() => api.sleepTimer(null, true)); setMobileSleepTimerOpen(false); }}>End of track</button>{(player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd) && <button className="sleep-timer-cancel" onClick={() => { void run(() => api.sleepTimer(null, false)); setMobileSleepTimerOpen(false); }}>Turn off timer</button>}</section></div>}
     {menu && createPortal(<>{isAndroid && <button className="mobile-sheet-backdrop" aria-label="Close song actions" onClick={() => setMenu(null)}/>}<div ref={trackMenuRef} className={`action-menu track-menu ${isAndroid ? "mobile-action-sheet" : ""} ${submenuPlacement === "submenu-inline" ? "submenu-inline" : ""}`} role="menu" style={{ left: menu.x, top: menu.y }}>
       {isAndroid && <div className="mobile-action-heading"><div className="mobile-sheet-handle" role="presentation" onPointerDown={beginMobileSheetDrag} onPointerUp={(event) => finishMobileSheetDrag(event, () => setMenu(null))} onPointerCancel={() => { mobileSheetDragStartY.current = null; }}/><div className="mobile-action-track"><Cover className="mobile-queue-cover" keys={[menu.track.artworkKey]}/><span><strong>{menu.track.title}</strong><small>{menu.track.artist}</small></span></div></div>}
+      <button role="menuitem" onClick={() => openMetadataEditor(menu.track)}><Pencil size={15}/>Edit metadata</button>
       <div className="playlist-menu-wrap" onMouseEnter={() => setPlaylistSubmenu(true)}><button role="menuitem" aria-expanded={playlistSubmenu} onClick={() => setPlaylistSubmenu(!playlistSubmenu)}><Plus size={15}/>Add to playlist<ChevronRight size={14} className="menu-arrow"/></button>{playlistSubmenu && <div ref={playlistSubmenuRef} className={`playlist-submenu ${submenuPlacement}`}><label className="playlist-find"><Search size={15}/><input autoFocus placeholder="Find a playlist" aria-label="Find a playlist" value={playlistSearch} onChange={(event) => setPlaylistSearch(event.target.value)}/></label><button onClick={() => newPlaylist(menu.track)}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><div className="playlist-options">{playlists.filter((item) => item.name.toLocaleLowerCase().includes(playlistSearch.toLocaleLowerCase())).map((item) => <button key={item.id} onClick={() => addToPlaylist(item, menu.track)}><ListMusic size={15}/>{item.name}</button>)}</div>{!playlists.length && <p>Create your first playlist above.</p>}</div>}</div>{selectedPlaylist && <button role="menuitem" onClick={() => confirmRemovePlaylistTrack(selectedPlaylist, menu.track)}><Trash2 size={15}/>Remove from playlist</button>}<button role="menuitem" onClick={() => { toggleFavorite(menu.track.id); setMenu(null); }}><Heart size={15}/>{favorites.includes(menu.track.id) ? "Remove from favorites" : "Save to favorites"}</button><button role="menuitem" onClick={() => { void run(() => api.queueAdd(menu.track.id)); setMenu(null); }}><ListMusic size={15}/>Add to queue</button><button role="menuitem" onClick={() => { playCollection(menu.track); setMenu(null); }}><Play size={15}/>Play now</button><button role="menuitem" onClick={() => hideTrack(menu.track)}><EyeOff size={15}/>Hide song</button><div className="menu-separator"/><button role="menuitem" onClick={() => navigate({ section: "Artists", detail: { kind: "artist", key: menu.track.artist, title: menu.track.artist } })}><AudioLines size={15}/>Go to artist</button><button role="menuitem" onClick={() => navigate({ section: "Albums", detail: { kind: "album", key: albumKey(menu.track), title: menu.track.album } })}><Disc3 size={15}/>Go to album</button>
     </div></>, isAndroid ? appFrameRef.current ?? document.body : document.body)}
     {updatePromptOpen && availableUpdate && <div className="update-dialog-overlay"><section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" aria-describedby="update-dialog-description">
@@ -1830,6 +1863,7 @@ export default function App() {
       <button className="update-later-button" onClick={deferUpdatePrompt}>Later</button>
     </section></div>}
     {aboutOpen && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><div className="about-dialog-head"><span className="about-dialog-kicker">About</span><button className="icon-button" aria-label="Close About" title="Close" onClick={() => setAboutOpen(false)}><X size={19}/></button></div><div className="about-dialog-hero"><span className="about-mark"><AudioLines size={46}/></span><h2 id="about-title">MichoPlay</h2><span className="about-version-pill">Version {appVersion}</span><div className="about-dialog-actions"><button onClick={() => openAboutUrl(michoplayGithubUrl)}><Github size={16}/>GitHub</button><button onClick={() => openAboutUrl(michoplayIssueUrl)}><Bug size={16}/>Report issue</button></div></div><section className="about-dialog-section"><h3>Links</h3><div className="about-dialog-links"><button onClick={() => openAboutUrl(michoplayDeveloperUrl)}><Globe2 size={18}/><span>Developer</span><ChevronRight size={17}/></button><button onClick={() => openAboutUrl(michoplayWebsiteUrl)}><AudioLines size={18}/><span>Website</span><ChevronRight size={17}/></button></div></section></section></div>}
+    {metadataTrack && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget && !metadataSaving) setMetadataTrack(null); }}><form className="playlist-dialog metadata-dialog" role="dialog" aria-modal="true" aria-labelledby="metadata-dialog-title" aria-busy={metadataSaving} onSubmit={(event) => { event.preventDefault(); void saveMetadata(); }}><div className="dialog-title"><h2 id="metadata-dialog-title">Edit metadata</h2><button type="button" className="icon-button" aria-label="Close metadata editor" disabled={metadataSaving} onClick={() => setMetadataTrack(null)}><X size={18}/></button></div><p>Changes are saved to the song file.</p><label>Title<input autoFocus required maxLength={500} value={metadataDraft.title} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, title: event.target.value }))}/></label><label>Artist<input required maxLength={500} value={metadataDraft.artist} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, artist: event.target.value }))}/></label><label>Album<input required maxLength={500} value={metadataDraft.album} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, album: event.target.value }))}/></label><label>Release date<input maxLength={500} placeholder="e.g. 2024 or 2024-05-12" value={metadataDraft.releaseDate} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, releaseDate: event.target.value }))}/></label>{metadataError && <p className="metadata-error" role="alert">{metadataError}</p>}<div className="metadata-actions"><button type="button" className="outline-button" disabled={metadataSaving} onClick={() => setMetadataTrack(null)}>Cancel</button><button className="primary-button" type="submit" disabled={metadataSaving || !metadataDraft.title.trim() || !metadataDraft.artist.trim() || !metadataDraft.album.trim()}>{metadataSaving ? "Saving…" : "Save changes"}</button></div></form></div>}
     {dialog && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setDialog(null); }}><form className="playlist-dialog" role="dialog" aria-modal="true" aria-labelledby="playlist-dialog-title" onSubmit={(event) => { event.preventDefault(); savePlaylist(); }}><div className="dialog-title"><h2 id="playlist-dialog-title">{dialog.playlist ? "Rename playlist" : "Create playlist"}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={() => setDialog(null)}><X size={18}/></button></div><label>Playlist name<input autoFocus required maxLength={120} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)}/></label>{dialog.target && <p>“{dialog.target.title}” will be added.</p>}<button className="primary-button" type="submit" disabled={!playlistName.trim()}>{dialog.playlist ? "Save" : "Create playlist"}</button></form></div>}
     {addSongsPlaylistId && <div className="dialog-overlay add-songs-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAddSongsPlaylistId(null); }}>
       <section className="add-songs-dialog" role="dialog" aria-modal="true" aria-labelledby="add-songs-title">

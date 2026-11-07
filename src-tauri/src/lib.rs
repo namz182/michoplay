@@ -3619,6 +3619,104 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
     .collect()
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackMetadataEdit {
+    title: String,
+    artist: String,
+    album: String,
+    release_date: String,
+}
+
+#[cfg_attr(target_os = "android", tauri::command(async))]
+#[cfg_attr(not(target_os = "android"), tauri::command)]
+fn library_update_track_metadata(
+    track_id: u64,
+    metadata: TrackMetadataEdit,
+    state: State<'_, AppState>,
+) -> Result<Track, String> {
+    let title = metadata.title.trim();
+    let artist = metadata.artist.trim();
+    let album = metadata.album.trim();
+    let release_date = metadata.release_date.trim();
+    if title.is_empty() || artist.is_empty() || album.is_empty() {
+        return Err("Title, artist, and album are required.".to_owned());
+    }
+    if [title, artist, album, release_date]
+        .iter()
+        .any(|value| value.len() > 500 || value.chars().any(char::is_control))
+    {
+        return Err("Metadata contains unsupported characters or is too long.".to_owned());
+    }
+
+    let mut core = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?;
+    let index = core.find_track_index(track_id)?;
+    let existing = &core.tracks[index];
+    let path = existing.path.clone();
+    if !path.is_file() {
+        return Err("This song's file is unavailable for editing.".to_owned());
+    }
+    let root = PathBuf::from(&existing.track.root_path);
+    let previous_added_at = existing.track.added_at;
+    let previous_artwork = existing.artwork.clone();
+    let mut tagged = Probe::open(&path)
+        .and_then(|probe| probe.read())
+        .map_err(|error| format!("Could not read song metadata: {error}"))?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(tagged.primary_tag_type()));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .ok_or("This audio format does not support editable tags.")?;
+    tag.insert_text(ItemKey::TrackTitle, title.to_owned());
+    tag.insert_text(ItemKey::TrackArtist, artist.to_owned());
+    tag.insert_text(ItemKey::AlbumTitle, album.to_owned());
+    tag.remove_key(ItemKey::ReleaseDate);
+    tag.remove_key(ItemKey::RecordingDate);
+    if !release_date.is_empty() {
+        tag.insert_text(ItemKey::ReleaseDate, release_date.to_owned());
+    }
+    tag.save_to_path(&path, WriteOptions::default())
+        .map_err(|error| format!("Could not save song metadata: {error}"))?;
+
+    let mut refreshed = read_track(&path, track_id, &root, previous_artwork);
+    refreshed.track.added_at = previous_added_at;
+    let track = refreshed.track.clone();
+    let file_metadata =
+        fs::metadata(&path).map_err(|error| format!("Could not inspect edited song: {error}"))?;
+    let modified_at = file_metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|time| time.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default();
+    let artwork_mime = refreshed.artwork.as_ref().map(|art| art.mime.clone());
+    let track_json = serde_json::to_string(&track).map_err(|error| error.to_string())?;
+    let _cache_write = LIBRARY_CACHE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "The library cache is unavailable.".to_owned())?;
+    let connection = open_library_cache(&core.storage_dir)
+        .map_err(|error| format!("Could not update the library cache: {error}"))?;
+    connection.execute(
+        "INSERT INTO tracks(path, root_path, title, artist, album, folder_path, file_size, modified_at, track_json, artwork_mime)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(path) DO UPDATE SET title = excluded.title, artist = excluded.artist,
+           album = excluded.album, file_size = excluded.file_size, modified_at = excluded.modified_at,
+           track_json = excluded.track_json, artwork_mime = excluded.artwork_mime",
+        params![track.path, track.root_path, track.title, track.artist, track.album,
+            track.folder_path, file_metadata.len().min(i64::MAX as u64) as i64,
+            modified_at, track_json, artwork_mime],
+    ).map_err(|error| format!("Could not update the library cache: {error}"))?;
+    if let (Some(key), Some(artwork)) = (&track.artwork_key, &refreshed.artwork) {
+        core.artwork_by_key.insert(key.clone(), artwork.clone());
+    }
+    core.tracks[index] = refreshed;
+    Ok(track)
+}
+
 #[cfg_attr(target_os = "android", tauri::command(async))]
 #[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_play_track(track_id: u64, state: State<'_, AppState>) -> Result<(), String> {
@@ -4306,6 +4404,7 @@ pub fn run() {
             app_data_migrate,
             app_data_save,
             library_cached_tracks,
+            library_update_track_metadata,
             library_remove_folder,
             library_artwork,
             take_pending_audio_opens,
