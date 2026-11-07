@@ -263,6 +263,9 @@ export default function App() {
   const [metadataDraft, setMetadataDraft] = useState({ title: "", artist: "", album: "", releaseDate: "" });
   const [metadataSaving, setMetadataSaving] = useState(false);
   const [metadataError, setMetadataError] = useState("");
+  const [metadataSheetDragY, setMetadataSheetDragY] = useState(0);
+  const [metadataSheetDragging, setMetadataSheetDragging] = useState(false);
+  const metadataSheetDrag = useRef<{ startY: number; lastY: number; lastAt: number; velocity: number } | null>(null);
   const appFrameRef = useRef<HTMLElement>(null);
   const trackMenuRef = useRef<HTMLDivElement>(null);
   const playlistSubmenuRef = useRef<HTMLDivElement>(null);
@@ -300,7 +303,8 @@ export default function App() {
   const [addSongsSelected, setAddSongsSelected] = useState<number[]>([]);
   const [addSongsSearch, setAddSongsSearch] = useState("");
   const [addSongsVisibleLimit, setAddSongsVisibleLimit] = useState(100);
-  const mobileSheetDragStartY = useRef<number | null>(null);
+  const [mobileSheetDrag, setMobileSheetDrag] = useState<{ sheet: string; offset: number; dragging: boolean } | null>(null);
+  const mobileSheetDragState = useRef<{ sheet: string; startY: number; lastY: number; lastAt: number; velocity: number } | null>(null);
   const mobileTrackSwipeStartX = useRef<number | null>(null);
   const [youtubeDirectory, setYoutubeDirectory] = useState("");
   const [youtubeFolderScanned, setYoutubeFolderScanned] = useState(false);
@@ -379,6 +383,8 @@ export default function App() {
   function openMetadataEditor(track: Track) {
     setMenu(null);
     setMetadataTrack(track);
+    setMetadataSheetDragY(0);
+    setMetadataSheetDragging(false);
     setMetadataDraft({ title: track.title, artist: track.artist, album: track.album, releaseDate: track.releaseDate });
     setMetadataError("");
   }
@@ -388,9 +394,9 @@ export default function App() {
     setMetadataError("");
     try {
       const updated = await api.updateTrackMetadata(metadataTrack.id, metadataDraft);
-      setTracks((prior) => prior.map((track) => track.id === updated.id ? updated : track));
+      setTracks((prior) => prior.map((track) => track.id === updated.track.id ? updated.track : track));
       setMetadataTrack(null);
-      setMessage("");
+      setMessage(updated.savedToFile ? "Metadata saved to the song file." : "Metadata saved in MichoPlay. Android did not allow changes to the song file.");
     } catch (error) {
       setMetadataError(String(error));
     } finally {
@@ -993,14 +999,68 @@ export default function App() {
     return () => { disposed = true; unregister?.(); };
   }, [isAndroid, mobileQueueOpen, mobilePlayerOpen, fullMode, dialog, confirmation, confirmationBusy, menu, appMenu, sortMenuOpen, mobileTab, history, page]);
 
-  function beginMobileSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    mobileSheetDragStartY.current = event.clientY;
+  function mobileSheetStyle(sheet: string): CSSProperties {
+    const active = mobileSheetDrag?.sheet === sheet;
+    return {
+      "--mobile-sheet-drag": active ? `${mobileSheetDrag.offset}px` : "0px",
+      transition: active && mobileSheetDrag.dragging ? "none" : undefined,
+    } as CSSProperties;
+  }
+  function beginMobileSheetDrag(event: ReactPointerEvent<HTMLDivElement>, sheet: string) {
+    const now = performance.now();
+    mobileSheetDragState.current = { sheet, startY: event.clientY, lastY: event.clientY, lastAt: now, velocity: 0 };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
-  function finishMobileSheetDrag(event: ReactPointerEvent<HTMLDivElement>, close: () => void) {
-    const startY = mobileSheetDragStartY.current;
-    mobileSheetDragStartY.current = null;
-    if (startY !== null && event.clientY - startY > 56) close();
+  function moveMobileSheetDrag(event: ReactPointerEvent<HTMLDivElement>, sheet: string) {
+    const drag = mobileSheetDragState.current;
+    if (!drag || drag.sheet !== sheet) return;
+    const now = performance.now();
+    drag.velocity = (event.clientY - drag.lastY) / Math.max(1, now - drag.lastAt);
+    drag.lastY = event.clientY;
+    drag.lastAt = now;
+    setMobileSheetDrag({ sheet, offset: Math.max(0, event.clientY - drag.startY), dragging: true });
+  }
+  function finishMobileSheetDrag(sheet: string, close: () => void) {
+    const drag = mobileSheetDragState.current;
+    if (!drag || drag.sheet !== sheet) return;
+    mobileSheetDragState.current = null;
+    const shouldClose = drag.lastY - drag.startY > 85 || drag.velocity > 0.55;
+    setMobileSheetDrag({ sheet, offset: shouldClose ? window.innerHeight : 0, dragging: false });
+    window.setTimeout(() => {
+      if (shouldClose) close();
+      setMobileSheetDrag((current) => current?.sheet === sheet ? null : current);
+    }, shouldClose ? 270 : 260);
+  }
+  function cancelMobileSheetDrag(sheet: string) {
+    mobileSheetDragState.current = null;
+    setMobileSheetDrag((current) => current?.sheet === sheet ? { sheet, offset: 0, dragging: false } : current);
+    window.setTimeout(() => setMobileSheetDrag((current) => current?.sheet === sheet ? null : current), 260);
+  }
+  function beginMetadataSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    const now = performance.now();
+    metadataSheetDrag.current = { startY: event.clientY, lastY: event.clientY, lastAt: now, velocity: 0 };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setMetadataSheetDragging(true);
+  }
+  function moveMetadataSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = metadataSheetDrag.current;
+    if (!drag) return;
+    const now = performance.now();
+    drag.velocity = (event.clientY - drag.lastY) / Math.max(1, now - drag.lastAt);
+    drag.lastY = event.clientY;
+    drag.lastAt = now;
+    setMetadataSheetDragY(Math.max(0, event.clientY - drag.startY));
+  }
+  function endMetadataSheetDrag() {
+    const drag = metadataSheetDrag.current;
+    metadataSheetDrag.current = null;
+    setMetadataSheetDragging(false);
+    if (drag && (drag.lastY - drag.startY > 105 || drag.velocity > 0.58)) {
+      setMetadataSheetDragY(0);
+      setMetadataTrack(null);
+    } else {
+      setMetadataSheetDragY(0);
+    }
   }
 
   async function chooseFolder() {
@@ -1831,17 +1891,17 @@ export default function App() {
         <div className="mobile-player-actions"><button className={`mobile-player-timer ${player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd ? "active" : ""}`} aria-label={player.sleepTimerRemainingMs !== null ? `Sleep timer: ${sleepTimerLabel(player.sleepTimerRemainingMs)} remaining` : player.sleepTimerAtTrackEnd ? "Sleep timer: end of track" : "Set sleep timer"} onClick={() => setMobileSleepTimerOpen(true)}><Timer size={22}/>{(player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd) && <span>{player.sleepTimerAtTrackEnd ? "Track end" : sleepTimerLabel(player.sleepTimerRemainingMs!)}</span>}</button><button aria-label="Show queue" onClick={() => setMobileQueueOpen(true)}><ListMusic size={22}/></button></div>
       </> : <div className="mobile-player-empty"><Music2 size={36}/><strong>Nothing playing</strong><span>Choose a song from your library.</span><button onClick={() => { setMobilePlayerOpen(false); setMobileTab("library"); }}>Open library</button></div>}
     </section>}
-    {isAndroid && mobileLibraryActionsOpen && <div className="mobile-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileLibraryActionsOpen(false); }}><section className="mobile-library-action-sheet" role="dialog" aria-modal="true" aria-label="Add to your library"><div className="mobile-sheet-handle"/><h2>Add to your library</h2><button onClick={() => { setMobileLibraryActionsOpen(false); newPlaylist(); }}><ListMusic size={21}/><strong>Create playlist</strong><ChevronRight size={18}/></button><button onClick={() => { setMobileLibraryActionsOpen(false); void chooseAndroidAudioFiles(); }}><FolderOpen size={21}/><strong>Import music</strong><ChevronRight size={18}/></button></section></div>}
+    {isAndroid && mobileLibraryActionsOpen && <div className="mobile-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileLibraryActionsOpen(false); }}><section className="mobile-library-action-sheet" style={mobileSheetStyle("library")} role="dialog" aria-modal="true" aria-label="Add to your library"><div className="mobile-sheet-handle" onPointerDown={(event) => beginMobileSheetDrag(event, "library")} onPointerMove={(event) => moveMobileSheetDrag(event, "library")} onPointerUp={() => finishMobileSheetDrag("library", () => setMobileLibraryActionsOpen(false))} onPointerCancel={() => cancelMobileSheetDrag("library")}/><h2>Add to your library</h2><button onClick={() => { setMobileLibraryActionsOpen(false); newPlaylist(); }}><ListMusic size={21}/><strong>Create playlist</strong><ChevronRight size={18}/></button><button onClick={() => { setMobileLibraryActionsOpen(false); void chooseAndroidAudioFiles(); }}><FolderOpen size={21}/><strong>Import music</strong><ChevronRight size={18}/></button></section></div>}
     {isAndroid && mobileQueueOpen && <div className="mobile-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileQueueOpen(false); }}>
-      <section className="mobile-queue-sheet" role="dialog" aria-modal="true" aria-label="Playback queue">
-        <div className="mobile-sheet-handle" role="presentation" onPointerDown={beginMobileSheetDrag} onPointerUp={(event) => finishMobileSheetDrag(event, () => setMobileQueueOpen(false))} onPointerCancel={() => { mobileSheetDragStartY.current = null; }}/><div className="mobile-queue-heading"><div><h2>Queue</h2><p>Playing {page.detail?.title ?? "from your library"}</p></div><div className="mobile-queue-heading-actions"><button className="mobile-edit-queue" onClick={() => setMobileQueueEditing((editing) => !editing)}>{mobileQueueEditing ? "Done" : "Edit"}</button><button className="mobile-close-sheet" aria-label="Close queue" onClick={() => setMobileQueueOpen(false)}><X size={20}/></button></div></div>
+      <section className="mobile-queue-sheet" style={mobileSheetStyle("queue")} role="dialog" aria-modal="true" aria-label="Playback queue">
+        <div className="mobile-sheet-handle" role="presentation" onPointerDown={(event) => beginMobileSheetDrag(event, "queue")} onPointerMove={(event) => moveMobileSheetDrag(event, "queue")} onPointerUp={() => finishMobileSheetDrag("queue", () => setMobileQueueOpen(false))} onPointerCancel={() => cancelMobileSheetDrag("queue")}/><div className="mobile-queue-heading"><div><h2>Queue</h2><p>Playing {page.detail?.title ?? "from your library"}</p></div><div className="mobile-queue-heading-actions"><button className="mobile-edit-queue" onClick={() => setMobileQueueEditing((editing) => !editing)}>{mobileQueueEditing ? "Done" : "Edit"}</button><button className="mobile-close-sheet" aria-label="Close queue" onClick={() => setMobileQueueOpen(false)}><X size={20}/></button></div></div>
         <div className="mobile-queue-list">{footerTrack && <div className="mobile-queue-row current"><Cover className="mobile-queue-cover" keys={[footerTrack.artworkKey]}/><span><strong>{footerTrack.title}</strong><small>{footerTrack.artist}</small></span><button className="mobile-queue-play" aria-label="Play current song" onClick={() => void run(current ? api.toggle : () => api.play(footerTrack.id))}>{player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button></div>}{visibleQueue.map((id, index) => { const track = trackMap.get(id); return track ? <div className="mobile-queue-row" key={`${id}-${index}`}><button className="mobile-queue-song" onClick={() => void run(() => api.play(id))}><Cover className="mobile-queue-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button><div className="mobile-queue-order">{mobileQueueEditing && <><button aria-label={`Move ${track.title} up`} disabled={index === 0} onClick={() => void run(() => api.queueMove(index, index - 1))}><ChevronUp size={16}/></button><button aria-label={`Move ${track.title} down`} disabled={index === player.queue.length - 1} onClick={() => void run(() => api.queueMove(index, index + 1))}><ChevronDown size={16}/></button></>}<GripVertical size={18}/></div></div> : null; })}{!queueExpanded && player.queue.length > visibleQueue.length && <button className="queue-expand-button" onClick={() => setQueueExpanded(true)}>Show all {player.queue.length} queued songs</button>}{queueExpanded && player.queue.length > 80 && <button className="queue-expand-button" onClick={() => setQueueExpanded(false)}>Show fewer queued songs</button>}{!footerTrack && !player.queue.length && <p className="mobile-queue-empty">Your queue is empty.</p>}</div>
         <div className="mobile-queue-tools"><button className={`shuffle-control ${player.shuffle ? "active" : ""}`} onClick={() => void run(api.shuffle)}><Shuffle size={22}/><span>Shuffle</span></button><button className={`repeat-control ${player.repeatMode !== "off" ? "active" : ""}`} onClick={() => void run(api.repeat)}><span className="repeat-symbol">↻{player.repeatMode === "one" && <small className="repeat-one-badge">1</small>}</span><span>Repeat</span></button><button className={`full-mode-control ${player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd ? "active" : ""}`} onClick={() => setMobileSleepTimerOpen(true)}><Timer size={22}/><span>{player.sleepTimerRemainingMs !== null ? sleepTimerLabel(player.sleepTimerRemainingMs) : player.sleepTimerAtTrackEnd ? "Track end" : "Timer"}</span></button></div>
       </section>
     </div>}
-    {isAndroid && mobileSleepTimerOpen && <div className="mobile-sheet-layer sleep-timer-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileSleepTimerOpen(false); }}><section className="mobile-sleep-timer-sheet" role="dialog" aria-modal="true" aria-label="Sleep timer"><div className="mobile-sheet-handle"/><h2>Sleep timer</h2>{[[5, "5 minutes"], [10, "10 minutes"], [15, "15 minutes"], [30, "30 minutes"], [45, "45 minutes"], [60, "1 hour"]].map(([minutes, label]) => <button key={minutes} onClick={() => { void run(() => api.sleepTimer(Number(minutes), false)); setMobileSleepTimerOpen(false); }}>{label}</button>)}<button onClick={() => { void run(() => api.sleepTimer(null, true)); setMobileSleepTimerOpen(false); }}>End of track</button>{(player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd) && <button className="sleep-timer-cancel" onClick={() => { void run(() => api.sleepTimer(null, false)); setMobileSleepTimerOpen(false); }}>Turn off timer</button>}</section></div>}
-    {menu && createPortal(<>{isAndroid && <button className="mobile-sheet-backdrop" aria-label="Close song actions" onClick={() => setMenu(null)}/>}<div ref={trackMenuRef} className={`action-menu track-menu ${isAndroid ? "mobile-action-sheet" : ""} ${submenuPlacement === "submenu-inline" ? "submenu-inline" : ""}`} role="menu" style={{ left: menu.x, top: menu.y }}>
-      {isAndroid && <div className="mobile-action-heading"><div className="mobile-sheet-handle" role="presentation" onPointerDown={beginMobileSheetDrag} onPointerUp={(event) => finishMobileSheetDrag(event, () => setMenu(null))} onPointerCancel={() => { mobileSheetDragStartY.current = null; }}/><div className="mobile-action-track"><Cover className="mobile-queue-cover" keys={[menu.track.artworkKey]}/><span><strong>{menu.track.title}</strong><small>{menu.track.artist}</small></span></div></div>}
+    {isAndroid && mobileSleepTimerOpen && <div className="mobile-sheet-layer sleep-timer-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileSleepTimerOpen(false); }}><section className="mobile-sleep-timer-sheet" style={mobileSheetStyle("timer")} role="dialog" aria-modal="true" aria-label="Sleep timer"><div className="mobile-sheet-handle" onPointerDown={(event) => beginMobileSheetDrag(event, "timer")} onPointerMove={(event) => moveMobileSheetDrag(event, "timer")} onPointerUp={() => finishMobileSheetDrag("timer", () => setMobileSleepTimerOpen(false))} onPointerCancel={() => cancelMobileSheetDrag("timer")}/><h2>Sleep timer</h2>{[[5, "5 minutes"], [10, "10 minutes"], [15, "15 minutes"], [30, "30 minutes"], [45, "45 minutes"], [60, "1 hour"]].map(([minutes, label]) => <button key={minutes} onClick={() => { void run(() => api.sleepTimer(Number(minutes), false)); setMobileSleepTimerOpen(false); }}>{label}</button>)}<button onClick={() => { void run(() => api.sleepTimer(null, true)); setMobileSleepTimerOpen(false); }}>End of track</button>{(player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd) && <button className="sleep-timer-cancel" onClick={() => { void run(() => api.sleepTimer(null, false)); setMobileSleepTimerOpen(false); }}>Turn off timer</button>}</section></div>}
+    {menu && createPortal(<>{isAndroid && <button className="mobile-sheet-backdrop" aria-label="Close song actions" onClick={() => setMenu(null)}/>}<div ref={trackMenuRef} className={`action-menu track-menu ${isAndroid ? "mobile-action-sheet" : ""} ${submenuPlacement === "submenu-inline" ? "submenu-inline" : ""}`} role="menu" style={isAndroid ? { ...mobileSheetStyle("actions"), left: 0, top: "auto" } : { left: menu.x, top: menu.y }}>
+      {isAndroid && <div className="mobile-action-heading"><div className="mobile-sheet-handle" role="presentation" onPointerDown={(event) => beginMobileSheetDrag(event, "actions")} onPointerMove={(event) => moveMobileSheetDrag(event, "actions")} onPointerUp={() => finishMobileSheetDrag("actions", () => setMenu(null))} onPointerCancel={() => cancelMobileSheetDrag("actions")}/><div className="mobile-action-track"><Cover className="mobile-queue-cover" keys={[menu.track.artworkKey]}/><span><strong>{menu.track.title}</strong><small>{menu.track.artist}</small></span></div></div>}
       <button role="menuitem" onClick={() => openMetadataEditor(menu.track)}><Pencil size={15}/>Edit metadata</button>
       <div className="playlist-menu-wrap" onMouseEnter={() => { if (!isAndroid) setPlaylistSubmenu(true); }} onMouseLeave={() => { if (!isAndroid) setPlaylistSubmenu(false); }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setPlaylistSubmenu(false); }}><button role="menuitem" aria-expanded={playlistSubmenu} onClick={() => setPlaylistSubmenu(isAndroid ? !playlistSubmenu : true)}><Plus size={15}/>Add to playlist<ChevronRight size={14} className="menu-arrow"/></button>{playlistSubmenu && <div ref={playlistSubmenuRef} className={`playlist-submenu ${submenuPlacement}`}><label className="playlist-find"><Search size={15}/><input autoFocus placeholder="Find a playlist" aria-label="Find a playlist" value={playlistSearch} onChange={(event) => setPlaylistSearch(event.target.value)}/></label><button onClick={() => newPlaylist(menu.track)}><ListMusic size={15}/>New playlist</button><div className="menu-separator"/><div className="playlist-options">{playlists.filter((item) => item.name.toLocaleLowerCase().includes(playlistSearch.toLocaleLowerCase())).map((item) => <button key={item.id} onClick={() => addToPlaylist(item, menu.track)}><ListMusic size={15}/>{item.name}</button>)}</div>{!playlists.length && <p>Create your first playlist above.</p>}</div>}</div>{selectedPlaylist && <button role="menuitem" onClick={() => confirmRemovePlaylistTrack(selectedPlaylist, menu.track)}><Trash2 size={15}/>Remove from playlist</button>}<button role="menuitem" onClick={() => { toggleFavorite(menu.track.id); setMenu(null); }}><Heart size={15}/>{favorites.includes(menu.track.id) ? "Remove from favorites" : "Save to favorites"}</button><button role="menuitem" onClick={() => { void run(() => api.queueAdd(menu.track.id)); setMenu(null); }}><ListMusic size={15}/>Add to queue</button><button role="menuitem" onClick={() => { playCollection(menu.track); setMenu(null); }}><Play size={15}/>Play now</button><button role="menuitem" onClick={() => hideTrack(menu.track)}><EyeOff size={15}/>Hide song</button><div className="menu-separator"/><button role="menuitem" onClick={() => navigate({ section: "Artists", detail: { kind: "artist", key: menu.track.artist, title: menu.track.artist } })}><AudioLines size={15}/>Go to artist</button><button role="menuitem" onClick={() => navigate({ section: "Albums", detail: { kind: "album", key: albumKey(menu.track), title: menu.track.album } })}><Disc3 size={15}/>Go to album</button>
     </div></>, isAndroid ? appFrameRef.current ?? document.body : document.body)}
@@ -1852,7 +1912,18 @@ export default function App() {
       <button className="update-later-button" onClick={deferUpdatePrompt}>Later</button>
     </section></div>}
     {aboutOpen && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><div className="about-dialog-head"><span className="about-dialog-kicker">About</span><button className="icon-button" aria-label="Close About" title="Close" onClick={() => setAboutOpen(false)}><X size={19}/></button></div><div className="about-dialog-hero"><span className="about-mark"><AudioLines size={46}/></span><h2 id="about-title">MichoPlay</h2><span className="about-version-pill">Version {appVersion}</span><div className="about-dialog-actions"><button onClick={() => openAboutUrl(michoplayGithubUrl)}><Github size={16}/>GitHub</button><button onClick={() => openAboutUrl(michoplayIssueUrl)}><Bug size={16}/>Report issue</button></div></div><section className="about-dialog-section"><h3>Links</h3><div className="about-dialog-links"><button onClick={() => openAboutUrl(michoplayDeveloperUrl)}><Globe2 size={18}/><span>Developer</span><ChevronRight size={17}/></button><button onClick={() => openAboutUrl(michoplayWebsiteUrl)}><AudioLines size={18}/><span>Website</span><ChevronRight size={17}/></button></div></section></section></div>}
-    {metadataTrack && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget && !metadataSaving) setMetadataTrack(null); }}><form className="playlist-dialog metadata-dialog" role="dialog" aria-modal="true" aria-labelledby="metadata-dialog-title" aria-busy={metadataSaving} onSubmit={(event) => { event.preventDefault(); void saveMetadata(); }}><div className="dialog-title"><h2 id="metadata-dialog-title">Edit metadata</h2><button type="button" className="icon-button" aria-label="Close metadata editor" disabled={metadataSaving} onClick={() => setMetadataTrack(null)}><X size={18}/></button></div><p>Changes are saved to the song file.</p><label>Title<input autoFocus required maxLength={500} value={metadataDraft.title} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, title: event.target.value }))}/></label><label>Artist<input required maxLength={500} value={metadataDraft.artist} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, artist: event.target.value }))}/></label><label>Album<input required maxLength={500} value={metadataDraft.album} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, album: event.target.value }))}/></label><label>Release date<input maxLength={500} placeholder="e.g. 2024 or 2024-05-12" value={metadataDraft.releaseDate} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, releaseDate: event.target.value }))}/></label>{metadataError && <p className="metadata-error" role="alert">{metadataError}</p>}<div className="metadata-actions"><button type="button" className="outline-button" disabled={metadataSaving} onClick={() => setMetadataTrack(null)}>Cancel</button><button className="primary-button" type="submit" disabled={metadataSaving || !metadataDraft.title.trim() || !metadataDraft.artist.trim() || !metadataDraft.album.trim()}>{metadataSaving ? "Saving…" : "Save changes"}</button></div></form></div>}
+    {metadataTrack && <div className={`dialog-overlay metadata-overlay ${isAndroid ? "metadata-sheet-layer" : ""}`} onPointerDown={(event) => { if (event.target === event.currentTarget && !metadataSaving) setMetadataTrack(null); }}>
+      <form className={`playlist-dialog metadata-dialog ${isAndroid ? "mobile-metadata-sheet" : ""}`} style={isAndroid ? { "--metadata-sheet-drag": `${metadataSheetDragY}px`, transition: metadataSheetDragging ? "none" : undefined } as CSSProperties : undefined} role="dialog" aria-modal="true" aria-labelledby="metadata-dialog-title" aria-busy={metadataSaving} onSubmit={(event) => { event.preventDefault(); void saveMetadata(); }}>
+        {isAndroid && <div className="metadata-sheet-handle" aria-hidden="true" onPointerDown={beginMetadataSheetDrag} onPointerMove={moveMetadataSheetDrag} onPointerUp={endMetadataSheetDrag} onPointerCancel={endMetadataSheetDrag}><span/></div>}
+        <div className="dialog-title"><h2 id="metadata-dialog-title">Edit metadata</h2><button type="button" className="icon-button" aria-label="Close metadata editor" disabled={metadataSaving} onClick={() => setMetadataTrack(null)}><X size={18}/></button></div>
+        <label>Title<input autoFocus required maxLength={500} value={metadataDraft.title} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, title: event.target.value }))}/></label>
+        <label>Artist<input required maxLength={500} value={metadataDraft.artist} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, artist: event.target.value }))}/></label>
+        <label>Album<input required maxLength={500} value={metadataDraft.album} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, album: event.target.value }))}/></label>
+        <label>Release date<input maxLength={500} placeholder="e.g. 2024 or 2024-05-12" value={metadataDraft.releaseDate} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, releaseDate: event.target.value }))}/></label>
+        {metadataError && <p className="metadata-error" role="alert">{metadataError}</p>}
+        <div className="metadata-actions"><button type="button" className="outline-button" disabled={metadataSaving} onClick={() => setMetadataTrack(null)}>Cancel</button><button className="primary-button" type="submit" disabled={metadataSaving || !metadataDraft.title.trim() || !metadataDraft.artist.trim() || !metadataDraft.album.trim()}>{metadataSaving ? "Saving…" : "Save changes"}</button></div>
+      </form>
+    </div>}
     {dialog && <div className="dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setDialog(null); }}><form className="playlist-dialog" role="dialog" aria-modal="true" aria-labelledby="playlist-dialog-title" onSubmit={(event) => { event.preventDefault(); savePlaylist(); }}><div className="dialog-title"><h2 id="playlist-dialog-title">{dialog.playlist ? "Rename playlist" : "Create playlist"}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={() => setDialog(null)}><X size={18}/></button></div><label>Playlist name<input autoFocus required maxLength={120} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)}/></label>{dialog.target && <p>“{dialog.target.title}” will be added.</p>}<button className="primary-button" type="submit" disabled={!playlistName.trim()}>{dialog.playlist ? "Save" : "Create playlist"}</button></form></div>}
     {addSongsPlaylistId && <div className="dialog-overlay add-songs-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setAddSongsPlaylistId(null); }}>
       <section className="add-songs-dialog" role="dialog" aria-modal="true" aria-labelledby="add-songs-title">

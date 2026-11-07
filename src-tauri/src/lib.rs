@@ -1092,9 +1092,48 @@ fn open_library_cache(storage_dir: &Path) -> rusqlite::Result<Connection> {
         CREATE INDEX IF NOT EXISTS tracks_by_title ON tracks(title COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS tracks_by_artist ON tracks(artist COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS tracks_by_album ON tracks(album COLLATE NOCASE);
-        CREATE INDEX IF NOT EXISTS tracks_by_folder ON tracks(folder_path);",
+        CREATE INDEX IF NOT EXISTS tracks_by_folder ON tracks(folder_path);
+        CREATE TABLE IF NOT EXISTS track_metadata_overrides (
+            path TEXT PRIMARY KEY NOT NULL,
+            title TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            album TEXT NOT NULL,
+            release_date TEXT NOT NULL
+        );",
     )?;
     Ok(connection)
+}
+
+fn load_metadata_overrides(storage_dir: &Path) -> HashMap<String, TrackMetadataEdit> {
+    let Ok(connection) = open_library_cache(storage_dir) else {
+        return HashMap::new();
+    };
+    let Ok(mut statement) = connection
+        .prepare("SELECT path, title, artist, album, release_date FROM track_metadata_overrides")
+    else {
+        return HashMap::new();
+    };
+    let Ok(rows) = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            TrackMetadataEdit {
+                title: row.get(1)?,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                release_date: row.get(4)?,
+            },
+        ))
+    }) else {
+        return HashMap::new();
+    };
+    rows.flatten().collect()
+}
+
+fn apply_metadata_edit(track: &mut Track, edit: &TrackMetadataEdit) {
+    track.title = edit.title.clone();
+    track.artist = edit.artist.clone();
+    track.album = edit.album.clone();
+    track.release_date = edit.release_date.clone();
 }
 
 fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
@@ -1595,6 +1634,12 @@ where
     progress("Finishing library index", jobs.len(), jobs.len());
 
     let mut result = result.into_iter().flatten().collect::<Vec<_>>();
+    let metadata_overrides = load_metadata_overrides(storage_dir);
+    for item in &mut result {
+        if let Some(edit) = metadata_overrides.get(&item.track.path) {
+            apply_metadata_edit(&mut item.track, edit);
+        }
+    }
     let mut shared_artwork = HashMap::<String, Arc<Artwork>>::new();
     for item in &mut result {
         if let (Some(key), Some(artwork)) = (&item.track.artwork_key, &item.artwork) {
@@ -3619,7 +3664,7 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
     .collect()
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TrackMetadataEdit {
     title: String,
@@ -3628,13 +3673,20 @@ struct TrackMetadataEdit {
     release_date: String,
 }
 
-#[cfg_attr(target_os = "android", tauri::command(async))]
-#[cfg_attr(not(target_os = "android"), tauri::command)]
-fn library_update_track_metadata(
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackMetadataUpdateResult {
+    track: Track,
+    saved_to_file: bool,
+}
+
+#[tauri::command]
+async fn library_update_track_metadata(
     track_id: u64,
     metadata: TrackMetadataEdit,
     state: State<'_, AppState>,
-) -> Result<Track, String> {
+    bridge: State<'_, MediaBridge>,
+) -> Result<TrackMetadataUpdateResult, String> {
     let title = metadata.title.trim();
     let artist = metadata.artist.trim();
     let album = metadata.album.trim();
@@ -3648,6 +3700,29 @@ fn library_update_track_metadata(
     {
         return Err("Metadata contains unsupported characters or is too long.".to_owned());
     }
+    let metadata = TrackMetadataEdit {
+        title: title.to_owned(),
+        artist: artist.to_owned(),
+        album: album.to_owned(),
+        release_date: release_date.to_owned(),
+    };
+
+    #[cfg(target_os = "android")]
+    {
+        let path = {
+            let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
+            core.tracks.get(core.find_track_index(track_id)?).map(|track| track.path.to_string_lossy().into_owned())
+                .ok_or_else(|| "The song is no longer in the library.".to_owned())?
+        };
+        let plugin = android_media_plugin(&bridge)?;
+        let _: serde_json::Value = call_android_media(
+            plugin,
+            "chooseMetadataFile",
+            serde_json::json!({ "path": path }),
+        ).await?;
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = &bridge;
 
     let mut core = state
         .0
@@ -3679,10 +3754,44 @@ fn library_update_track_metadata(
     if !release_date.is_empty() {
         tag.insert_text(ItemKey::ReleaseDate, release_date.to_owned());
     }
-    tag.save_to_path(&path, WriteOptions::default())
-        .map_err(|error| format!("Could not save song metadata: {error}"))?;
+    let saved_to_file = match tag.save_to_path(&path, WriteOptions::default()) {
+        Ok(()) => true,
+        Err(error) => {
+            #[cfg(not(target_os = "android"))]
+            {
+                let _ = &bridge;
+                return Err(format!("Could not save song metadata: {error}"));
+            }
+            #[cfg(target_os = "android")]
+            {
+                let _ = error;
+                let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("audio");
+                let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+                let temp_path = core.storage_dir.join(format!(".michoplay-metadata-{track_id}-{stamp}.{extension}"));
+                let prepared = (|| -> Result<(), String> {
+                    fs::copy(&path, &temp_path).map_err(|error| format!("Could not prepare the song file: {error}"))?;
+                    tag.save_to_path(&temp_path, WriteOptions::default())
+                        .map_err(|error| format!("Could not edit song metadata: {error}"))?;
+                    let plugin = android_media_plugin(&bridge)?;
+                    plugin.run_mobile_plugin::<()>(
+                        "writeMetadataFile",
+                        serde_json::json!({ "path": path, "tempPath": temp_path }),
+                    ).map_err(|error| error.to_string())
+                })();
+                let _ = fs::remove_file(&temp_path);
+                prepared.is_ok()
+            }
+        }
+    };
 
-    let mut refreshed = read_track(&path, track_id, &root, previous_artwork);
+    let mut refreshed = if saved_to_file {
+        read_track(&path, track_id, &root, previous_artwork)
+    } else {
+        existing.clone()
+    };
+    if !saved_to_file {
+        apply_metadata_edit(&mut refreshed.track, &metadata);
+    }
     refreshed.track.added_at = previous_added_at;
     let track = refreshed.track.clone();
     let file_metadata =
@@ -3698,9 +3807,36 @@ fn library_update_track_metadata(
     let _cache_write = LIBRARY_CACHE_WRITE_LOCK
         .lock()
         .map_err(|_| "The library cache is unavailable.".to_owned())?;
-    let connection = open_library_cache(&core.storage_dir)
+    let mut connection = open_library_cache(&core.storage_dir)
         .map_err(|error| format!("Could not update the library cache: {error}"))?;
-    connection.execute(
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not update the library cache: {error}"))?;
+    if saved_to_file {
+        transaction
+            .execute(
+                "DELETE FROM track_metadata_overrides WHERE path = ?1",
+                [&track.path],
+            )
+            .map_err(|error| format!("Could not update the library cache: {error}"))?;
+    } else {
+        transaction
+            .execute(
+                "INSERT INTO track_metadata_overrides(path, title, artist, album, release_date)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(path) DO UPDATE SET title = excluded.title, artist = excluded.artist,
+               album = excluded.album, release_date = excluded.release_date",
+                params![
+                    track.path,
+                    track.title,
+                    track.artist,
+                    track.album,
+                    track.release_date
+                ],
+            )
+            .map_err(|error| format!("Could not save metadata in MichoPlay: {error}"))?;
+    }
+    transaction.execute(
         "INSERT INTO tracks(path, root_path, title, artist, album, folder_path, file_size, modified_at, track_json, artwork_mime)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(path) DO UPDATE SET title = excluded.title, artist = excluded.artist,
@@ -3710,11 +3846,17 @@ fn library_update_track_metadata(
             track.folder_path, file_metadata.len().min(i64::MAX as u64) as i64,
             modified_at, track_json, artwork_mime],
     ).map_err(|error| format!("Could not update the library cache: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not update the library cache: {error}"))?;
     if let (Some(key), Some(artwork)) = (&track.artwork_key, &refreshed.artwork) {
         core.artwork_by_key.insert(key.clone(), artwork.clone());
     }
     core.tracks[index] = refreshed;
-    Ok(track)
+    Ok(TrackMetadataUpdateResult {
+        track,
+        saved_to_file,
+    })
 }
 
 #[cfg_attr(target_os = "android", tauri::command(async))]

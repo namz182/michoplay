@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.media.MediaScannerConnection
 import android.os.Environment
 import app.tauri.annotation.Command
 import app.tauri.annotation.ActivityCallback
@@ -63,6 +64,12 @@ class ShareTextArgs {
   var url: String = ""
 }
 
+@InvokeArg
+class MetadataFileAccessArgs { var path: String = "" }
+
+@InvokeArg
+class MetadataFileWriteArgs { var path: String = ""; var tempPath: String = "" }
+
 @TauriPlugin
 class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private val io = Executors.newCachedThreadPool()
@@ -76,6 +83,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Volatile private var downloaderError: String? = null
   @Volatile private var downloaderUpdateAttempted = false
   @Volatile private var downloader403RefreshAttempted = false
+  @Volatile private var pendingMetadataPath: String? = null
   companion object {
     @Volatile private var notificationPermissionPrompted = false
     private val pendingActions = CopyOnWriteArrayList<String>()
@@ -271,6 +279,73 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
       }
       activity.runOnUiThread { startActivityForResult(invoke, intent, "onAudioFilesChosen") }
+    }
+  }
+
+  @Command
+  fun chooseMetadataFile(invoke: Invoke) {
+    val args = invoke.parseArgs(MetadataFileAccessArgs::class.java)
+    val expectedPath = try { File(args.path).canonicalPath } catch (_: Exception) {
+      invoke.reject("This song's file path is unavailable."); return
+    }
+    val existing = activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE).getString(expectedPath, null)
+    if (existing != null) {
+      val uri = Uri.parse(existing)
+      val granted = activity.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }
+      if (granted && directPathForUri(uri)?.canonicalPath == expectedPath) { invoke.resolve(); return }
+    }
+    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = "audio/*"
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+    }
+    pendingMetadataPath = expectedPath
+    activity.runOnUiThread { startActivityForResult(invoke, intent, "onMetadataFileChosen") }
+  }
+
+  @ActivityCallback
+  fun onMetadataFileChosen(invoke: Invoke, result: ActivityResult) {
+    if (result.resultCode != Activity.RESULT_OK) { pendingMetadataPath = null; invoke.reject("Song file access was cancelled."); return }
+    val uri = result.data?.data ?: run { pendingMetadataPath = null; invoke.reject("No song file was selected."); return }
+    val expectedPath = pendingMetadataPath.also { pendingMetadataPath = null }
+      ?: run { invoke.reject("The song selection expired. Try again."); return }
+    io.execute {
+      try {
+        val selectedPath = directPathForUri(uri)?.canonicalPath
+        if (selectedPath != expectedPath) throw IllegalArgumentException("Select the same song that you are editing.")
+        val flags = result.data?.flags ?: 0
+        val grantFlags = flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        if (grantFlags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION == 0) {
+          throw IllegalArgumentException("Android did not grant write access to this song.")
+        }
+        activity.contentResolver.takePersistableUriPermission(uri, grantFlags)
+        activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE)
+          .edit().putString(expectedPath, uri.toString()).apply()
+        invoke.resolve()
+      } catch (error: Exception) { invoke.reject(error.message ?: "Could not get write access to this song.") }
+    }
+  }
+
+  @Command
+  fun writeMetadataFile(invoke: Invoke) {
+    val args = invoke.parseArgs(MetadataFileWriteArgs::class.java)
+    io.execute {
+      try {
+        val expectedPath = File(args.path).canonicalPath
+        val uriValue = activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE).getString(expectedPath, null)
+          ?: throw IllegalStateException("Choose this song in Android's file picker before saving metadata.")
+        val uri = Uri.parse(uriValue)
+        if (directPathForUri(uri)?.canonicalPath != expectedPath) {
+          throw IllegalStateException("Android's file access expired. Choose the song again to continue.")
+        }
+        val source = File(args.tempPath)
+        if (!source.isFile || !source.canRead()) throw IllegalArgumentException("The edited song could not be prepared.")
+        val output = activity.contentResolver.openOutputStream(uri, "wt")
+          ?: throw IllegalStateException("Android could not open this song for writing.")
+        source.inputStream().use { input -> output.use { input.copyTo(it) } }
+        MediaScannerConnection.scanFile(activity, arrayOf(expectedPath), null, null)
+        invoke.resolve()
+      } catch (error: Exception) { invoke.reject(error.message ?: "Could not write metadata to the song file.") }
     }
   }
 
