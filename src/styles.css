@@ -1497,7 +1497,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-queue-list { position:relative; min-height:0; flex:1 1 auto; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; scroll-behavior:smooth; }
 .mobile-queue-current { padding:0 0 3px; }
 .mobile-queue-section-label { display:block; padding:0 2px 1px; color:#aaa5ad; font-size:10px; font-weight:750; letter-spacing:.09em; text-transform:uppercase; }
-.mobile-queue-next-divider { position:sticky; top:0; z-index:1; display:flex; align-items:center; gap:9px; padding:5px 2px 6px; background:#242225; color:#aaa5ad; font-size:11px; font-weight:650; }
+.mobile-queue-next-divider { position:relative; z-index:2; flex:0 0 auto; display:flex; align-items:center; gap:9px; padding:5px 2px 6px; background:#242225; color:#aaa5ad; font-size:11px; font-weight:650; }
 .mobile-queue-next-divider::before, .mobile-queue-next-divider::after { height:1px; flex:1; background:rgba(255,255,255,.12); content:""; }
 .mobile-queue-row { --queue-shift-y:0px; position:relative; display:flex; min-height:60px; align-items:center; gap:10px; transform:translate3d(0,var(--queue-shift-y),0); transition:transform 240ms cubic-bezier(.16,1,.3,1), opacity 180ms ease, box-shadow 180ms ease; will-change:transform; }
 .mobile-queue-row > span:nth-child(2), .mobile-queue-song > span:last-child { display:grid; min-width:0; flex:1; gap:4px; }
@@ -1518,12 +1518,13 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-queue-drag-handle { touch-action:none; cursor:grab; }
 .mobile-queue-drag-handle:active { color:var(--brand-highlight) !important; cursor:grabbing; }
 .mobile-queue-empty { padding:20px 4px; color:#b6b1ba; }
-.mobile-queue-tools { display:grid; flex:0 0 auto; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; padding-top:10px; }
-.mobile-queue-tools button { position:relative; display:grid; width:100%; height:auto; min-height:69px; box-sizing:border-box; align-content:center; justify-items:center; gap:5px; border:0; border-radius:10px; background:#373539; color:#f1eff2; }
+.mobile-queue-tools { display:grid; flex:0 0 auto; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; padding-top:6px; }
+.mobile-queue-tools button { position:relative; display:grid; width:100%; height:auto; min-height:52px; box-sizing:border-box; align-content:center; justify-items:center; gap:2px; border:0; border-radius:9px; background:#373539; color:#f1eff2; }
+.mobile-queue-tools button > svg { width:19px; height:19px; }
 .mobile-queue-tools button.active { color:var(--blush); }
-.mobile-queue-tools button span { font-size:12px; }
+.mobile-queue-tools button span { font-size:11px; }
 .mobile-queue-tools .full-mode-control span { font-variant-numeric:tabular-nums; }
-.mobile-queue-tools .repeat-symbol { position:relative; font-size:26px; line-height:22px; }
+.mobile-queue-tools .repeat-symbol { position:relative; font-size:22px; line-height:19px; }
 .mobile-queue-tools .repeat-one-badge { position:absolute; top:-4px; right:-7px; padding:0 2px; border-radius:3px; background:#373539; color:inherit; font-size:10px; font-weight:800; line-height:11px; }
 .mobile-sleep-timer-sheet { display:grid; box-sizing:border-box; width:100%; max-height:min(86vh, 780px, calc(100vh - max(env(safe-area-inset-top),24px) - 8px)); max-height:min(86dvh, 780px, calc(100dvh - max(env(safe-area-inset-top),24px) - 8px)); overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; gap:0; padding:4px 10px calc(env(safe-area-inset-bottom) + 8px); border-radius:22px 22px 0 0; background:#242225; box-shadow:0 -12px 40px rgba(0,0,0,.32); }
 .mobile-sleep-timer-sheet h2 { margin:0; padding:1px 0 7px; border-bottom:1px solid rgba(255,255,255,.12); text-align:center; font-size:16px; }
@@ -1667,7 +1668,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
   .mobile-queue-cover { width:42px; height:42px; flex-basis:42px; }
   .mobile-queue-state { max-width:58px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mobile-queue-tools { gap:6px; }
-  .mobile-queue-tools button { min-height:61px; }
+  .mobile-queue-tools button { min-height:50px; }
   .mobile-action-sheet { padding-inline:10px; }
 }
 .shuffle-control.active, .repeat-control.active, .full-mode-control.active { color: var(--blush); }
@@ -1675,7 +1676,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .player-bar .transport-buttons .shuffle-control, .player-bar .transport-buttons .repeat-control { position: relative; width: 24px; height: 30px; flex: 0 0 24px; }
 .player-bar .transport-buttons .shuffle-control.active::after, .player-bar .transport-buttons .repeat-control.active::after { bottom: -1px; }
 .mobile-player-controls .shuffle-control.active::after, .mobile-player-controls .repeat-control.active::after { bottom: 7px; }
-.mobile-queue-tools .shuffle-control.active::after, .mobile-queue-tools .repeat-control.active::after { bottom: 29px; }
+.mobile-queue-tools .shuffle-control.active::after, .mobile-queue-tools .repeat-control.active::after { bottom: 21px; }
 @media (max-width: 1100px) { .home-quick-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .home-quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; } .home-quick-grid.home-library-links { grid-template-columns: repeat(2, minmax(0, 1fr)); } .home-quick-card { min-height: 56px; gap: 7px; } .home-quick-art { width: 56px; height: 56px; flex-basis: 56px; } .home-quick-card strong { font-size: 11px; } }
 
