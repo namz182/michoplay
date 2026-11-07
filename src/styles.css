@@ -1499,7 +1499,9 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-player-top { display:grid; min-height:52px; flex:0 0 auto; grid-template-columns:44px minmax(0,1fr) 44px; align-items:center; margin:0 -12px; }
 .mobile-player-top button, .mobile-player-track button, .mobile-player-actions button { display:grid; width:42px; height:44px; place-items:center; border:0; background:transparent; color:#eeeaf1; }
 .mobile-player-top > div { display:grid; justify-items:center; gap:2px; }
-.mobile-player-brand-mark { width:21px; height:21px; }
+.mobile-player-brand-row { display:flex; align-items:center; gap:6px; }
+.mobile-player-brand-row small { color:#f0edf2; font-size:12px; font-weight:700; }
+.mobile-player-app-logo { width:22px; height:22px; flex:0 0 22px; border-radius:5px; object-fit:cover; }
 .mobile-player-top small { color:#aaa5ad; font-size:11px; }
 .mobile-player-top strong { max-width:100%; overflow:hidden; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-player-art-swipe { display:flex; min-height:0; flex:1 1 0; align-items:center; justify-content:center; overflow:hidden; touch-action:pan-y; }
