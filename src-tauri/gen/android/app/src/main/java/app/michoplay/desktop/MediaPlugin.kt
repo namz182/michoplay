@@ -84,7 +84,6 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Volatile private var downloaderError: String? = null
   @Volatile private var downloaderUpdateAttempted = false
   @Volatile private var downloader403RefreshAttempted = false
-  @Volatile private var pendingMetadataPath: String? = null
   companion object {
     @Volatile private var notificationPermissionPrompted = false
     private val pendingActions = CopyOnWriteArrayList<String>()
@@ -284,46 +283,71 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
-  fun chooseMetadataFile(invoke: Invoke) {
+  fun requestMetadataWriteAccess(invoke: Invoke) {
     val args = invoke.parseArgs(MetadataFileAccessArgs::class.java)
     val expectedPath = try { File(args.path).canonicalPath } catch (_: Exception) {
       invoke.reject("This song's file path is unavailable."); return
     }
-    val existing = activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE).getString(expectedPath, null)
-    if (existing != null) {
-      val uri = Uri.parse(existing)
-      val granted = activity.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }
-      if (granted && directPathForUri(uri)?.canonicalPath == expectedPath) { invoke.resolve(); return }
+    val mainActivity = activity as? MainActivity
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+        ContextCompat.checkSelfPermission(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+        if (mainActivity == null) { invoke.reject("Android could not request permission to edit this song."); return }
+        mainActivity.requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) { granted ->
+          if (granted == true) {
+            activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE)
+              .edit().putString(expectedPath, Uri.fromFile(File(expectedPath)).toString()).apply()
+            invoke.resolve()
+          } else invoke.reject("Allow storage access to edit this song file.")
+        }
+      } else {
+        activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE)
+          .edit().putString(expectedPath, Uri.fromFile(File(expectedPath)).toString()).apply()
+        invoke.resolve()
+      }
+      return
     }
-    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-      addCategory(Intent.CATEGORY_OPENABLE)
-      type = "audio/*"
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-    }
-    pendingMetadataPath = expectedPath
-    activity.runOnUiThread { startActivityForResult(invoke, intent, "onMetadataFileChosen") }
-  }
 
-  @ActivityCallback
-  fun onMetadataFileChosen(invoke: Invoke, result: ActivityResult) {
-    if (result.resultCode != Activity.RESULT_OK) { pendingMetadataPath = null; invoke.reject("Song file access was cancelled."); return }
-    val uri = result.data?.data ?: run { pendingMetadataPath = null; invoke.reject("No song file was selected."); return }
-    val expectedPath = pendingMetadataPath.also { pendingMetadataPath = null }
-      ?: run { invoke.reject("The song selection expired. Try again."); return }
+    val mediaUri = try { mediaStoreAudioUri(expectedPath) } catch (_: Exception) { null }
+    if (mediaUri == null) {
+      invoke.reject("Android could not find this song in its audio library, so it cannot request edit access.")
+      return
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val pendingIntent = try { MediaStore.createWriteRequest(activity.contentResolver, listOf(mediaUri)) }
+      catch (error: Exception) { invoke.reject(error.message ?: "Android could not request permission to edit this song."); return }
+      if (mainActivity == null) { invoke.reject("Android could not open the media edit permission prompt."); return }
+      activity.runOnUiThread {
+        mainActivity.requestMediaWriteAccess(pendingIntent.intentSender) { approved ->
+          if (approved) {
+            activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE)
+              .edit().putString(expectedPath, mediaUri.toString()).apply()
+            invoke.resolve()
+          } else invoke.reject("Android did not approve editing this song.")
+        }
+      }
+      return
+    }
+
     io.execute {
       try {
-        val selectedPath = directPathForUri(uri)?.canonicalPath
-        if (selectedPath != expectedPath) throw IllegalArgumentException("Select the same song that you are editing.")
-        val flags = result.data?.flags ?: 0
-        val grantFlags = flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        if (grantFlags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION == 0) {
-          throw IllegalArgumentException("Android did not grant write access to this song.")
-        }
-        activity.contentResolver.takePersistableUriPermission(uri, grantFlags)
+        activity.contentResolver.openFileDescriptor(mediaUri, "rw")?.use { }
+          ?: throw IllegalStateException("Android could not open this song for editing.")
         activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE)
-          .edit().putString(expectedPath, uri.toString()).apply()
+          .edit().putString(expectedPath, mediaUri.toString()).apply()
         invoke.resolve()
-      } catch (error: Exception) { invoke.reject(error.message ?: "Could not get write access to this song.") }
+      } catch (error: android.app.RecoverableSecurityException) {
+        if (mainActivity == null) { invoke.reject("Android could not open the media edit permission prompt."); return@execute }
+        activity.runOnUiThread {
+          mainActivity.requestMediaWriteAccess(error.userAction.actionIntent.intentSender) { approved ->
+            if (approved) {
+              activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE)
+                .edit().putString(expectedPath, mediaUri.toString()).apply()
+              invoke.resolve()
+            } else invoke.reject("Android did not approve editing this song.")
+          }
+        }
+      } catch (error: Exception) { invoke.reject(error.message ?: "Could not request permission to edit this song.") }
     }
   }
 
@@ -334,40 +358,14 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       try {
         val expectedPath = File(args.path).canonicalPath
         val uriValue = activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE).getString(expectedPath, null)
-          ?: throw IllegalStateException("Choose this song in Android's file picker before saving metadata.")
+          ?: throw IllegalStateException("Request Android edit permission before saving metadata.")
         val uri = Uri.parse(uriValue)
         if (directPathForUri(uri)?.canonicalPath != expectedPath) {
           throw IllegalStateException("Android's file access expired. Choose the song again to continue.")
         }
         val source = File(args.tempPath)
         if (!source.isFile || !source.canRead()) throw IllegalArgumentException("The edited song could not be prepared.")
-        try {
-          copyEditedSong(source, uri)
-        } catch (writeError: Exception) {
-          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) throw writeError
-          val mediaUri = mediaStoreAudioUri(expectedPath) ?: throw writeError
-          val pendingIntent = MediaStore.createWriteRequest(activity.contentResolver, listOf(mediaUri))
-          val mainActivity = activity as? MainActivity
-            ?: throw IllegalStateException("Could not open Android's media write approval.", writeError)
-          activity.runOnUiThread {
-            mainActivity.requestMediaWriteAccess(pendingIntent.intentSender) { approved ->
-              if (!approved) {
-                invoke.reject("Android did not approve writing to this song file.")
-              } else {
-                io.execute {
-                  try {
-                    copyEditedSong(source, mediaUri)
-                    MediaScannerConnection.scanFile(activity, arrayOf(expectedPath), null, null)
-                    invoke.resolve()
-                  } catch (retryError: Exception) {
-                    invoke.reject(retryError.message ?: "Could not write metadata to the song file.")
-                  }
-                }
-              }
-            }
-          }
-          return@execute
-        }
+        copyEditedSong(source, uri)
         MediaScannerConnection.scanFile(activity, arrayOf(expectedPath), null, null)
         invoke.resolve()
       } catch (error: Exception) { invoke.reject(error.message ?: "Could not write metadata to the song file.") }
@@ -375,6 +373,11 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   private fun copyEditedSong(source: File, uri: Uri) {
+    if (uri.scheme == "file") {
+      val target = File(uri.path ?: throw IllegalArgumentException("The song file path is unavailable."))
+      source.inputStream().use { input -> target.outputStream().use { input.copyTo(it) } }
+      return
+    }
     val output = activity.contentResolver.openOutputStream(uri, "wt")
       ?: throw IllegalStateException("Android could not open this song for writing.")
     source.inputStream().use { input -> output.use { input.copyTo(it) } }

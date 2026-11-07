@@ -3718,7 +3718,7 @@ async fn library_update_track_metadata(
         let plugin = android_media_plugin(&bridge)?;
         let _: serde_json::Value = call_android_media(
             plugin,
-            "chooseMetadataFile",
+            "requestMetadataWriteAccess",
             serde_json::json!({ "path": path }),
         ).await?;
     }
@@ -3759,37 +3759,36 @@ async fn library_update_track_metadata(
     let mut write_error = None;
     #[cfg(not(target_os = "android"))]
     let write_error: Option<String> = None;
+    #[cfg(target_os = "android")]
     let saved_to_file = match tag.save_to_path(&path, WriteOptions::default()) {
         Ok(()) => true,
-        Err(error) => {
-            #[cfg(not(target_os = "android"))]
-            {
-                let _ = &bridge;
-                return Err(format!("Could not save song metadata: {error}"));
-            }
-            #[cfg(target_os = "android")]
-            {
-                let _ = error;
-                let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("audio");
-                let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-                let temp_path = core.storage_dir.join(format!(".michoplay-metadata-{track_id}-{stamp}.{extension}"));
-                let prepared = (|| -> Result<(), String> {
-                    fs::copy(&path, &temp_path).map_err(|error| format!("Could not prepare the song file: {error}"))?;
-                    tag.save_to_path(&temp_path, WriteOptions::default())
-                        .map_err(|error| format!("Could not edit song metadata: {error}"))?;
-                    let plugin = android_media_plugin(&bridge)?;
-                    plugin.run_mobile_plugin::<()>(
-                        "writeMetadataFile",
-                        serde_json::json!({ "path": path, "tempPath": temp_path }),
-                    ).map_err(|error| error.to_string())
-                })();
-                let _ = fs::remove_file(&temp_path);
-                match prepared {
-                    Ok(()) => true,
-                    Err(error) => { write_error = Some(error); false }
-                }
+        Err(_direct_write_error) => {
+            let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("audio");
+            let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+            let temp_path = core.storage_dir.join(format!(".michoplay-metadata-{track_id}-{stamp}.{extension}"));
+            let prepared = (|| -> Result<(), String> {
+                fs::copy(&path, &temp_path).map_err(|error| format!("Could not prepare the song file: {error}"))?;
+                tag.save_to_path(&temp_path, WriteOptions::default())
+                    .map_err(|error| format!("Could not edit song metadata: {error}"))?;
+                let plugin = android_media_plugin(&bridge)?;
+                plugin.run_mobile_plugin::<()>(
+                    "writeMetadataFile",
+                    serde_json::json!({ "path": path, "tempPath": temp_path }),
+                ).map_err(|error| error.to_string())
+            })();
+            let _ = fs::remove_file(&temp_path);
+            match prepared {
+                Ok(()) => true,
+                Err(error) => { write_error = Some(error); false }
             }
         }
+    };
+    #[cfg(not(target_os = "android"))]
+    let saved_to_file = {
+        let _ = &bridge;
+        tag.save_to_path(&path, WriteOptions::default())
+            .map_err(|error| format!("Could not save song metadata: {error}"))?;
+        true
     };
 
     let mut refreshed = if saved_to_file {
