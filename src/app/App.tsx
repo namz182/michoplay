@@ -348,9 +348,28 @@ export default function App() {
   const youtubeSearchVersion = useRef(0);
   const globalYoutubeSearchVersion = useRef(0);
   const youtubeSearchCache = useRef(new Map<string, { results: YoutubeSearchResult[]; savedAt: number; hasMore?: boolean }>());
+  const youtubeLyricsProbes = useRef(new Set<string>());
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const completedYoutubeDownloads = useRef(new Set<string>());
   const isAndroid = useMemo(() => /android/i.test(navigator.userAgent), []);
+  function enrichYoutubeLyrics(query: string, offset: number, results: YoutubeSearchResult[]) {
+    if (!results.length || results.every((result) => result.hasLyrics || result.isPlaylist)) return;
+    const cacheKey = query.toLocaleLowerCase();
+    const probeKey = `${cacheKey}:${offset}:${results.length}`;
+    if (youtubeLyricsProbes.current.has(probeKey)) return;
+    youtubeLyricsProbes.current.add(probeKey);
+    void api.youtubeSearch(query, results.length, offset, true).then((details) => {
+      const idsWithLyrics = new Set(details.filter((result) => result.hasLyrics).map((result) => result.id));
+      if (!idsWithLyrics.size) return;
+      const update = (items: YoutubeSearchResult[]) => items.map((result) => idsWithLyrics.has(result.id) && !result.hasLyrics ? { ...result, hasLyrics: true } : result);
+      setYoutubeResults(update);
+      setGlobalYoutubeResults(update);
+      const cached = youtubeSearchCache.current.get(cacheKey);
+      if (cached) youtubeSearchCache.current.set(cacheKey, { ...cached, results: update(cached.results) });
+    }).catch(() => { /* Search results remain usable if caption details cannot load. */ }).finally(() => {
+      youtubeLyricsProbes.current.delete(probeKey);
+    });
+  }
   useLayoutEffect(() => {
     if (!menu || isAndroid) return;
     const menuElement = trackMenuRef.current;
@@ -688,6 +707,7 @@ export default function App() {
         const hasMore = youtubeSearchCanContinue(query, results.length);
         setYoutubeResults(results); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(hasMore);
         youtubeSearchCache.current.set(query.toLocaleLowerCase(), { results, hasMore, savedAt: Date.now() });
+        enrichYoutubeLyrics(query, 0, results);
       }).catch(() => {
         if (youtubeSearchVersion.current === version) { setYoutubeResults([]); setYoutubeVisibleLimit(youtubeFolderInitialResultLimit); setYoutubeHasMore(false); setYoutubeSearchError(navigator.onLine ? "Couldn't search YouTube. Try again." : "YouTube search needs an internet connection."); }
       }).finally(() => { if (youtubeSearchVersion.current === version) setYoutubeSearching(false); });
@@ -725,6 +745,7 @@ export default function App() {
         const hasMore = youtubeSearchCanContinue(query, results.length);
         setGlobalYoutubeResults(results); setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit); setGlobalYoutubeHasMore(hasMore);
         youtubeSearchCache.current.set(cacheKey, { results, hasMore, savedAt: Date.now() });
+        enrichYoutubeLyrics(query, 0, results);
       }).catch(() => {
         if (globalYoutubeSearchVersion.current === version) {
           setGlobalYoutubeResults([]);
@@ -1693,6 +1714,7 @@ export default function App() {
       });
       setYoutubeHasMore(youtubeSearchCanContinue(query, next.length));
       setYoutubeVisibleLimit((limit) => limit + youtubeSearchPageSize);
+      enrichYoutubeLyrics(query, offset, next);
     } catch {
       if (youtubeSearchVersion.current === version) setMessage("Couldn't load more YouTube results. Try again.");
     } finally {
@@ -1716,6 +1738,7 @@ export default function App() {
       });
       setGlobalYoutubeHasMore(youtubeSearchCanContinue(query, next.length));
       setGlobalYoutubeVisibleLimit((limit) => limit + youtubeSearchPageSize);
+      enrichYoutubeLyrics(query, offset, next);
     } catch {
       if (globalYoutubeSearchVersion.current === version) setMessage("Couldn't load more YouTube results. Try again.");
     } finally {
@@ -1730,7 +1753,7 @@ export default function App() {
           {globalYoutubeResults.slice(0, globalYoutubeVisibleLimit).map((result) => <div className="global-youtube-result-row" key={result.id}>
             <button className="global-search-result global-youtube-result" role="option" aria-label={`Download ${result.title} from YouTube`} onClick={(event) => requestYoutubeDownload(result, search, event.currentTarget.getBoundingClientRect())}>
               {result.thumbnail ? <img className="cover global-search-cover" src={result.thumbnail} alt="" loading="lazy"/> : <span className="cover global-search-cover global-youtube-placeholder"><Youtube size={18}/></span>}
-              <span className="search-result-copy"><strong>{result.title}</strong><small>YouTube · {result.isPlaylist ? "Playlist" : `${result.durationSeconds == null ? "Audio" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span>
+              <span className="search-result-copy"><strong>{result.title}</strong><small>{result.hasLyrics && <span className="lyrics-badge" aria-label="Lyrics available" title="English captions available">E</span>}YouTube · {result.isPlaylist ? "Playlist" : `${result.durationSeconds == null ? "Audio" : durationLabel(result.durationSeconds)} · ${youtubeResultSize(result)}`}</small></span>
             </button>
             {!globalYoutubeDownloadRequested.includes(result.url) && !youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) && <button className="global-youtube-download" aria-label={`Download ${result.title}`} title="Download audio" onClick={(event) => requestYoutubeDownload(result, search, event.currentTarget.getBoundingClientRect())}><Download size={16}/></button>}
           </div>)}
@@ -1907,7 +1930,7 @@ export default function App() {
               : youtubeQuery.trim() && youtubeResults.length ? <><div className="youtube-results-scroll" role="region" aria-label="YouTube search results"><div className="youtube-search-grid">{youtubeResults.slice(0, youtubeVisibleLimit).map((result) => <article className="youtube-result-card" key={result.id}>
                 <div className="youtube-result-preview">
                   <span className="youtube-result-art">{result.thumbnail ? <img src={result.thumbnail} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }}/> : <Youtube size={24}/>}<span className="youtube-result-duration">{result.durationSeconds === null ? (result.isPlaylist ? "Playlist" : "YouTube") : durationLabel(result.durationSeconds)}</span></span>
-                  <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.isPlaylist ? "Playlist · MP3 audio" : `Video · ${youtubeResultSize(result)}`}</small></span>
+                  <span className="youtube-result-copy"><strong>{result.title}</strong><small>{result.hasLyrics && <span className="lyrics-badge" aria-label="Lyrics available" title="English captions available">E</span>}{result.isPlaylist ? "Playlist · MP3 audio" : `Video · ${youtubeResultSize(result)}`}</small></span>
                 </div>
                 <button className="youtube-result-download" aria-label={`Download ${result.title}`} onClick={(event) => requestYoutubeDownload(result, undefined, event.currentTarget.getBoundingClientRect())} disabled={globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status))}><Download size={14}/><span>{globalYoutubeDownloadRequested.includes(result.url) || youtubeDownloads.some((download) => download.url === result.url && !["failed", "cancelled"].includes(download.status)) ? "Queued" : "Download"}</span></button>
               </article>)}</div></div>{youtubeHasMore && <button className="youtube-load-more" disabled={youtubeLoadingMore} onClick={() => void loadMoreYoutubeFolderResults()}>{youtubeLoadingMore ? "Loading YouTube results…" : "Load more"}</button>}</>

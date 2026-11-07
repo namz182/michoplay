@@ -9,7 +9,7 @@ export function youtubeDownloadDescription(item: YoutubeDownload) {
   if (loadingLabel) {
     return <span className="download-pending-label">{loadingLabel}</span>;
   }
-  if (item.status === "downloading" && (item.percent ?? 0) >= 100) return "Processing audio…";
+  if (item.status === "downloading" && (item.percent ?? 0) >= 99) return "Finishing audio…";
   if (["downloading", "paused", "completed"].includes(item.status)) return youtubeDownloadProgressText(item);
   if (item.status === "failed") return youtubeDownloadErrorText(item.message, item.isPlaylist);
   return item.message;

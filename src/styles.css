@@ -1357,6 +1357,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .android-app .recent-listening .track-actions .favorite-action, .android-app .recent-listening .track-actions .track-duration { display:none; }
 .mobile-search-view, .mobile-library-view { min-height:100%; padding-bottom:22px; }
 .mobile-search-input { display:flex; min-height:56px; align-items:center; gap:12px; margin:14px 18px 17px; padding:0 14px; border-radius:6px; background:#f3f1f4; color:#28252b; }
+.mobile-search-input:focus-within { box-shadow:0 0 0 2px var(--brand-highlight); }
 .mobile-search-input input { width:100%; min-width:0; border:0; outline:none; background:transparent; color:#262329; font-size:16px; font-weight:650; }
 .mobile-search-input input::placeholder { color:#6f6b73; opacity:1; }
 .mobile-search-input button { display:grid; width:34px; height:36px; flex:0 0 34px; place-items:center; border:0; background:transparent; color:#48434d; }
@@ -1370,7 +1371,7 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-result-group .global-search-cover { width:50px; height:50px; flex-basis:50px; border-radius:4px; }
 .mobile-result-group .search-result-copy strong { font-size:14px; }
 .mobile-result-group .search-result-copy small { font-size:12px; }
-.mobile-search-empty { display:grid; min-height:45vh; align-content:center; justify-items:center; gap:8px; padding:24px; color:#aaa5ad; text-align:center; }
+.mobile-search-empty { display:grid; min-height:0; align-content:start; justify-items:center; gap:8px; margin-top:18px; padding:8px 24px 24px; color:#aaa5ad; text-align:center; }
 .mobile-search-empty strong { color:#f5f3f6; font-size:21px; }
 .mobile-search-empty span { max-width:270px; font-size:14px; line-height:1.5; }
 .mobile-library-list { display:grid; gap:7px; padding:9px 13px 20px; }
@@ -1451,6 +1452,8 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-download-actions .download-menu-trigger { width:32px; flex:0 0 32px; }
 .mobile-youtube-search-results { display:grid; gap:5px; margin:0 13px 14px; }
 .mobile-youtube-search-results h2 { margin:0 3px 5px; font-size:15px; }
+.mobile-search-local-divider { display:flex; align-items:center; gap:10px; margin:3px 16px 10px; color:#a8a4ad; font-size:11px; font-weight:650; }
+.mobile-search-local-divider::before, .mobile-search-local-divider::after { height:1px; flex:1; background:rgba(255,255,255,.14); content:""; }
 .mobile-youtube-search-results > p { margin:2px 4px; color:#aaa6af; font-size:12px; }
 .mobile-youtube-results-scroll { overflow: visible; }
 .mobile-youtube-load-more { width:100%; margin-top:5px; }
@@ -1462,12 +1465,12 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-youtube-search-copy strong { overflow:hidden; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-youtube-search-copy small { color:#aaa6af; font-size:10px; }
 .mobile-youtube-search-loading { display:grid; gap:5px; }
-.mobile-youtube-result-skeleton { display:grid; min-height:60px; grid-template-columns:48px minmax(0,1fr); align-items:center; gap:10px; padding:6px 8px; border-radius:7px; background:#242326; }
+.mobile-youtube-result-skeleton { display:grid; min-height:43px; grid-template-columns:36px minmax(0,1fr); align-items:center; gap:8px; padding:2px 4px; }
 .mobile-youtube-result-skeleton > span, .mobile-youtube-result-skeleton i { background:linear-gradient(100deg,#29272b 20%,#3b383f 42%,#29272b 64%); background-size:220% 100%; animation:mobile-shimmer 1.4s ease-in-out infinite; }
-.mobile-youtube-result-skeleton > span { width:48px; height:48px; border-radius:5px; }
-.mobile-youtube-result-skeleton > div { display:grid; gap:8px; }
-.mobile-youtube-result-skeleton i { display:block; width:76%; height:9px; border-radius:5px; }
-.mobile-youtube-result-skeleton i:last-child { width:46%; height:7px; }
+.mobile-youtube-result-skeleton > span { width:36px; height:36px; border-radius:4px; }
+.mobile-youtube-result-skeleton > div { display:grid; gap:6px; }
+.mobile-youtube-result-skeleton i { display:block; width:66%; height:7px; border-radius:5px; }
+.mobile-youtube-result-skeleton i:last-child { width:38%; height:6px; }
 @keyframes mobile-shimmer { to { background-position-x:-220%; } }
 @media (prefers-reduced-motion: reduce) { .mobile-youtube-result-skeleton > span, .mobile-youtube-result-skeleton i { animation:none; } }
 .android-app .mobile-library-songs { padding:0 13px; }

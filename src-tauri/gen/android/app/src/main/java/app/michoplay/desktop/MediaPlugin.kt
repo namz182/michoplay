@@ -28,6 +28,10 @@ import com.yausername.ffmpeg.FFmpeg
 import org.json.JSONObject
 import org.json.JSONArray
 import java.io.File
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
+import java.io.IOException
+import java.nio.charset.Charset
 import java.util.concurrent.Executors
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -47,7 +51,7 @@ class MediaUpdateArgs {
 }
 
 @InvokeArg
-class YoutubeSearchArgs { var query: String = ""; var limit: Int = 15; var offset: Int = 0 }
+class YoutubeSearchArgs { var query: String = ""; var limit: Int = 15; var offset: Int = 0; var includeLyrics: Boolean = false }
 
 @InvokeArg
 class YoutubeDownloadArgs {
@@ -435,13 +439,13 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         if (isUrl && !isYoutubeUrl(query)) throw IllegalArgumentException("Enter a valid YouTube video or playlist URL.")
         val isPlaylist = isUrl && query.contains("list=")
         val request = YoutubeDLRequest(if (isUrl) query else "ytsearch$searchEnd:$query")
-        request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--flat-playlist")
+        request.addOption("--ignore-config"); request.addOption("--no-warnings"); if (isPlaylist || !args.includeLyrics) request.addOption("--flat-playlist")
         request.addOption("--dump-single-json"); request.addOption("--playlist-end", searchEnd.toString()); request.addOption("--skip-download")
         val json = JSONObject(YoutubeDL.getInstance().execute(request).out)
         val results = mutableListOf<Map<String, Any?>>()
         if (isPlaylist) {
           val id = json.optString("id", "playlist")
-          results.add(mapOf("id" to id, "title" to json.optString("title", "YouTube playlist"), "url" to query, "thumbnail" to json.optString("thumbnail").takeIf { it.startsWith("https://") }, "durationSeconds" to null, "isPlaylist" to true))
+          results.add(mapOf("id" to id, "title" to json.optString("title", "YouTube playlist"), "url" to query, "thumbnail" to json.optString("thumbnail").takeIf { it.startsWith("https://") }, "durationSeconds" to null, "isPlaylist" to true, "hasLyrics" to false))
         } else {
           val entries = json.optJSONArray("entries")
           if (entries == null) addSearchEntry(results, json) else for (index in offset until minOf(entries.length(), offset + limit)) addSearchEntry(results, entries.optJSONObject(index) ?: JSONObject())
@@ -456,7 +460,18 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     val title = entry.optString("title").trim().takeIf { it.isNotBlank() } ?: return
     val url = entry.optString("webpage_url").takeIf { isYoutubeUrl(it) } ?: "https://www.youtube.com/watch?v=$id"
     val duration = entry.opt("duration").takeIf { it is Number } as? Number
-    results.add(mapOf("id" to id, "title" to title, "url" to url, "thumbnail" to (entry.optString("thumbnail").takeIf { it.startsWith("https://") } ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"), "durationSeconds" to duration?.toDouble(), "isPlaylist" to false))
+    results.add(mapOf("id" to id, "title" to title, "url" to url, "thumbnail" to (entry.optString("thumbnail").takeIf { it.startsWith("https://") } ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"), "durationSeconds" to duration?.toDouble(), "isPlaylist" to false, "hasLyrics" to hasEnglishCaptions(entry)))
+  }
+
+  private fun hasEnglishCaptions(entry: JSONObject): Boolean = listOf("subtitles", "automatic_captions").any { field ->
+    val captions = entry.optJSONObject(field) ?: return@any false
+    val keys = captions.keys()
+    while (keys.hasNext()) {
+      val language = keys.next()
+      val formats = captions.optJSONArray(language)
+      if (language.lowercase().startsWith("en") && formats != null && (0 until formats.length()).any { formats.optJSONObject(it)?.optString("ext") == "vtt" }) return@any true
+    }
+    false
   }
 
   private fun isYoutubeUrl(raw: String): Boolean = try {
@@ -512,11 +527,17 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           if (item["status"] == "downloading") {
             val audioFiles = staging.walkTopDown().filter { it.isFile && it.extension.equals("mp3", ignoreCase = true) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
-            audioFiles.forEach { audio ->
-              val lyric = staging.walkTopDown().firstOrNull { file -> file.isFile && file.extension.equals("lrc", true) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
-              if (lyric != null) stageLyricsForEmbedding(audio, lyric)
+            val filePaths = audioFiles.map { audio ->
+              val lyric = staging.walkTopDown().firstOrNull { file -> file.isFile && (file.extension.equals("lrc", true) || file.extension.equals("vtt", true)) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
+              if (lyric != null) {
+                val text = lyric.readText()
+                val synchronizedLyrics = if (lyric.extension.equals("vtt", true)) vttToLrc(text) else text
+                if (synchronizedLyrics.isNotBlank() && !embedLyricsInMp3(audio, synchronizedLyrics)) {
+                  throw IllegalStateException("Could not embed the downloaded lyrics in the MP3.")
+                }
+              }
+              publishAudioToMusic(audio)
             }
-            val filePaths = audioFiles.map(::publishAudioToMusic)
             val finalBytes = audioFiles.sumOf { it.length() }
             item["downloadedBytes"] = finalBytes; item["totalBytes"] = finalBytes
             item["filePaths"] = filePaths
@@ -543,7 +564,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     // video+audio file that fails during MP3 conversion on some devices.
     request.addOption("-f", "bestaudio[acodec!=none]/bestaudio")
     request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
-    request.addOption("--write-subs"); request.addOption("--write-auto-subs"); request.addOption("--sub-langs", "en.*"); request.addOption("--convert-subs", "lrc")
+    request.addOption("--write-subs"); request.addOption("--write-auto-subs"); request.addOption("--sub-langs", "en.*"); request.addOption("--sub-format", "vtt")
     request.addOption("--embed-thumbnail")
     request.addOption("-o", File(staging, "%(title).180B.%(ext)s").absolutePath)
     val downloadProgress = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%")
@@ -552,13 +573,19 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       if (item["status"] == "downloading") {
         val progressMatch = downloadProgress.find(line)
         if (progressMatch != null) {
-          val percent = (progressMatch.groupValues[1].toDoubleOrNull() ?: progress.toDouble()).coerceIn(0.0, 100.0)
+          // yt-dlp can emit a new 0–100% sequence for subtitles, thumbnails,
+          // and the audio itself. Reserve completion for validated saved MP3s.
+          val reportedPercent = (progressMatch.groupValues[1].toDoubleOrNull() ?: progress.toDouble()).coerceIn(0.0, 99.0)
+          val percent = maxOf(reportedPercent, (item["percent"] as? Number)?.toDouble() ?: 0.0)
           item["percent"] = percent
           val totalMatch = sizeProgress.find(line)
           val totalBytes = totalMatch?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
-          if (totalBytes != null) {
+          val previousTotal = (item["totalBytes"] as? Number)?.toLong() ?: 0L
+          if (totalBytes != null && totalBytes >= previousTotal) {
             item["totalBytes"] = totalBytes
-            item["downloadedBytes"] = (totalBytes * percent / 100.0).toLong()
+            val estimate = (totalBytes * percent / 100.0).toLong()
+            val previousDownloaded = (item["downloadedBytes"] as? Number)?.toLong() ?: 0L
+            item["downloadedBytes"] = maxOf(previousDownloaded, estimate).coerceAtMost(totalBytes)
           }
           item["message"] = line.substringAfter("[download]").trim()
           emitDownloads()
@@ -568,11 +595,143 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun stageLyricsForEmbedding(audio: File, lyrics: File) {
-    val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
-    if (!directory.exists() && !directory.mkdirs()) return
-    val destination = File(directory, audio.name + ".lyrics-pending")
-    try { lyrics.copyTo(destination, overwrite = true) } catch (_: Exception) { }
+  /** Add/update the ID3 USLT frame while the MP3 is still in app-private storage. */
+  private fun embedLyricsInMp3(audio: File, lyrics: String): Boolean {
+    return try {
+      val original = audio.readBytes()
+      var version = 3
+      var tagFlags = 0
+      var audioOffset = 0
+      val frames = ByteArrayOutputStream()
+      if (original.size >= 10 && original.copyOfRange(0, 3).contentEquals(byteArrayOf(0x49, 0x44, 0x33))) {
+        version = original[3].toInt() and 0xff
+        tagFlags = original[5].toInt() and 0xff
+        if (version !in 3..4 || tagFlags and 0x80 != 0 || (version == 4 && tagFlags and 0x10 != 0)) return false
+        val tagLength = readSynchsafeInt(original, 6)
+        audioOffset = 10 + tagLength
+        if (audioOffset > original.size) return false
+        val bodyStart = when {
+          tagFlags and 0x40 == 0 -> 10
+          version == 3 -> 10 + 4 + readBigEndianInt(original, 10)
+          else -> 10 + readSynchsafeInt(original, 10)
+        }
+        if (bodyStart > audioOffset) return false
+        var cursor = bodyStart
+        while (cursor + 10 <= audioOffset) {
+          if (original[cursor] == 0.toByte()) break // ID3 padding
+          val id = String(original, cursor, 4, Charsets.ISO_8859_1)
+          if (!id.matches(Regex("[A-Z0-9]{4}"))) return false
+          val frameLength = if (version == 4) readSynchsafeInt(original, cursor + 4) else readBigEndianInt(original, cursor + 4)
+          val frameEnd = cursor + 10 + frameLength
+          if (frameLength < 0 || frameEnd > audioOffset) return false
+          if (id != "USLT") frames.write(original, cursor, frameEnd - cursor)
+          cursor = frameEnd
+        }
+        // The extended header was intentionally removed; its flag must not remain set.
+        tagFlags = tagFlags and 0x40.inv()
+      }
+
+      val lyricFrameBody = ByteArrayOutputStream().apply {
+        write(1) // UTF-16 with BOM, supported by ID3v2.3 and v2.4.
+        write(byteArrayOf(0x65, 0x6e, 0x67)) // English
+        write(byteArrayOf(0xff.toByte(), 0xfe.toByte(), 0x00, 0x00)) // Empty UTF-16 descriptor.
+        write(lyrics.toByteArray(Charset.forName("UTF-16")))
+      }.toByteArray()
+      DataOutputStream(frames).use { out ->
+        out.writeBytes("USLT")
+        if (version == 4) writeSynchsafeInt(out, lyricFrameBody.size) else out.writeInt(lyricFrameBody.size)
+        out.writeShort(0)
+        out.write(lyricFrameBody)
+      }
+      val newBody = frames.toByteArray()
+      val temp = File(audio.parentFile, audio.name + ".lyrics-tmp")
+      DataOutputStream(temp.outputStream().buffered()).use { out ->
+        out.writeBytes("ID3")
+        out.writeByte(version)
+        out.writeByte(0)
+        out.writeByte(tagFlags)
+        writeSynchsafeInt(out, newBody.size)
+        out.write(newBody)
+        out.write(original, audioOffset, original.size - audioOffset)
+      }
+      if (temp.length() <= 10L) { temp.delete(); return false }
+      val backup = File(audio.parentFile, audio.name + ".lyrics-backup")
+      if (backup.exists()) backup.delete()
+      if (!audio.renameTo(backup)) { temp.delete(); return false }
+      if (!temp.renameTo(audio)) {
+        backup.renameTo(audio)
+        temp.delete()
+        return false
+      }
+      backup.delete()
+      true
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  private fun readBigEndianInt(bytes: ByteArray, offset: Int): Int {
+    if (offset + 4 > bytes.size) throw IOException("Incomplete ID3 frame size")
+    return ((bytes[offset].toInt() and 0xff) shl 24) or ((bytes[offset + 1].toInt() and 0xff) shl 16) or
+      ((bytes[offset + 2].toInt() and 0xff) shl 8) or (bytes[offset + 3].toInt() and 0xff)
+  }
+
+  private fun readSynchsafeInt(bytes: ByteArray, offset: Int): Int {
+    if (offset + 4 > bytes.size) throw IOException("Incomplete ID3 size")
+    val a = bytes[offset].toInt() and 0xff; val b = bytes[offset + 1].toInt() and 0xff
+    val c = bytes[offset + 2].toInt() and 0xff; val d = bytes[offset + 3].toInt() and 0xff
+    if ((a or b or c or d) and 0x80 != 0) throw IOException("Invalid ID3 synchsafe size")
+    return (a shl 21) or (b shl 14) or (c shl 7) or d
+  }
+
+  private fun writeSynchsafeInt(out: DataOutputStream, value: Int) {
+    if (value < 0 || value > 0x0fffffff) throw IOException("ID3 tag is too large")
+    out.writeByte((value shr 21) and 0x7f); out.writeByte((value shr 14) and 0x7f)
+    out.writeByte((value shr 7) and 0x7f); out.writeByte(value and 0x7f)
+  }
+
+  private fun vttToLrc(vtt: String): String {
+    val lines = mutableListOf<String>()
+    val cue = mutableListOf<String>()
+    var startMs: Long? = null
+    fun flush() {
+      val start = startMs
+      val text = cue.joinToString(" ").replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        .replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ")
+        .trim().split(Regex("\\s+")).joinToString(" ").trim()
+      cue.clear()
+      if (start != null && text.isNotEmpty() && lines.lastOrNull()?.substringAfter(']') != text) {
+        val minutes = (start / 60000).toString().padStart(2, '0')
+        val seconds = (start / 1000 % 60).toString().padStart(2, '0')
+        val centiseconds = (start % 1000 / 10).toString().padStart(2, '0')
+        lines.add("[$minutes:$seconds.$centiseconds]$text")
+      }
+    }
+    for (row in vtt.lineSequence() + sequenceOf("")) {
+      val line = row.trim()
+      if ("-->" in line) {
+        flush()
+        startMs = vttTimestampMs(line.substringBefore("-->"))
+      } else if (line.isEmpty()) {
+        flush()
+        startMs = null
+      } else if (startMs != null) cue.add(line)
+    }
+    return if (lines.isEmpty()) "" else lines.joinToString("\n", postfix = "\n")
+  }
+
+  private fun vttTimestampMs(value: String): Long? {
+    val parts = value.trim().split('.')
+    if (parts.size != 2) return null
+    val time = parts[0].split(':').map { it.toLongOrNull() ?: return null }
+    val seconds = when (time.size) {
+      2 -> time[0] * 60 + time[1]
+      3 -> time[0] * 3600 + time[1] * 60 + time[2]
+      else -> return null
+    }
+    val millis = parts[1].take(3).padEnd(3, '0').toLongOrNull() ?: return null
+    return seconds * 1000 + millis
   }
 
   private fun isYoutubeForbidden(error: Throwable): Boolean {

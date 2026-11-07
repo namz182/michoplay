@@ -273,6 +273,10 @@ fn track_has_lyrics(audio_path: &Path) -> bool {
 fn embed_lyrics_file(audio_path: &Path, lyrics_file: &Path) -> Result<(), String> {
     let contents = fs::read_to_string(lyrics_file)
         .map_err(|_| "Could not read downloaded lyrics.".to_owned())?;
+    embed_lyrics_text(audio_path, &contents)
+}
+
+fn embed_lyrics_text(audio_path: &Path, contents: &str) -> Result<(), String> {
     if contents.trim().is_empty() {
         return Err("Downloaded lyrics were empty.".to_owned());
     }
@@ -288,9 +292,95 @@ fn embed_lyrics_file(audio_path: &Path, lyrics_file: &Path) -> Result<(), String
         .ok_or_else(|| "Could not prepare audio lyrics metadata.".to_owned())?;
     // Keep the original LRC timestamp markup inside the audio's lyrics tag.
     // This works for ID3 MP3 downloads and preserves timing for MichoPlay's renderer.
-    tag.insert_text(ItemKey::UnsyncLyrics, contents);
+    tag.insert_text(ItemKey::UnsyncLyrics, contents.to_owned());
     tag.save_to_path(audio_path, WriteOptions::default())
         .map_err(|error| format!("Could not embed downloaded lyrics: {error}"))
+}
+
+fn vtt_timestamp_ms(value: &str) -> Option<u64> {
+    let (time, fraction) = value.trim().split_once('.')?;
+    let parts = time
+        .split(':')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let seconds = match parts.as_slice() {
+        [minutes, seconds] => minutes.checked_mul(60)?.checked_add(*seconds)?,
+        [hours, minutes, seconds] => hours
+            .checked_mul(3600)?
+            .checked_add(minutes.checked_mul(60)?)?
+            .checked_add(*seconds)?,
+        _ => return None,
+    };
+    let millis = fraction.chars().take(3).collect::<String>();
+    let millis = millis.parse::<u64>().ok()? * 10_u64.pow(3 - millis.len() as u32);
+    seconds.checked_mul(1000)?.checked_add(millis)
+}
+
+fn append_vtt_cue(lyrics: &mut Vec<String>, start_ms: Option<u64>, cue: &mut Vec<String>) {
+    let Some(start_ms) = start_ms else {
+        cue.clear();
+        return;
+    };
+    let raw = cue.join(" ");
+    cue.clear();
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for character in raw.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => plain.push(character),
+            _ => {}
+        }
+    }
+    let plain = plain
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ");
+    let line = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty()
+        || lyrics.last().is_some_and(|previous| {
+            previous
+                .split_once(']')
+                .is_some_and(|(_, text)| text == line)
+        })
+    {
+        return;
+    }
+    lyrics.push(format!(
+        "[{:02}:{:02}.{:02}]{}",
+        start_ms / 60_000,
+        start_ms / 1000 % 60,
+        start_ms % 1000 / 10,
+        line
+    ));
+}
+
+fn vtt_to_lrc(vtt: &str) -> String {
+    let mut lyrics = Vec::new();
+    let mut cue = Vec::new();
+    let mut start_ms = None;
+    for row in vtt.lines().chain(std::iter::once("")) {
+        let row = row.trim();
+        if let Some((start, _)) = row.split_once("-->") {
+            append_vtt_cue(&mut lyrics, start_ms, &mut cue);
+            start_ms = vtt_timestamp_ms(start);
+        } else if row.is_empty() {
+            append_vtt_cue(&mut lyrics, start_ms, &mut cue);
+            start_ms = None;
+        } else if start_ms.is_some() {
+            cue.push(row.to_owned());
+        }
+    }
+    if lyrics.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lyrics.join("\n"))
+    }
 }
 
 fn attach_downloaded_lyrics(audio_path: &Path) {
@@ -303,17 +393,40 @@ fn attach_downloaded_lyrics(audio_path: &Path) {
     let Ok(entries) = fs::read_dir(parent) else {
         return;
     };
-    let candidate = entries.flatten().map(|entry| entry.path()).find(|path| {
-        path.extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc"))
-            && path
+    let mut sources = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("lrc") || ext.eq_ignore_ascii_case("vtt")
+            }) && path
                 .file_stem()
                 .and_then(|value| value.to_str())
                 .is_some_and(|name| name == stem || name.starts_with(&format!("{stem}.")))
+        })
+        .collect::<Vec<_>>();
+    sources.sort_by_key(|path| {
+        !path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc"))
     });
-    if let Some(source) = candidate {
-        let _ = embed_lyrics_file(audio_path, &source);
-        let _ = fs::remove_file(source);
+    for source in &sources {
+        let result = if source
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc"))
+        {
+            embed_lyrics_file(audio_path, source)
+        } else {
+            fs::read_to_string(source)
+                .map_err(|_| "Could not read downloaded captions.".to_owned())
+                .and_then(|text| embed_lyrics_text(audio_path, &vtt_to_lrc(&text)))
+        };
+        if result.is_ok() {
+            for sidecar in &sources {
+                let _ = fs::remove_file(sidecar);
+            }
+            break;
+        }
     }
 }
 
@@ -2535,6 +2648,26 @@ struct YoutubeSearchResult {
     thumbnail: Option<String>,
     duration_seconds: Option<f64>,
     is_playlist: bool,
+    has_lyrics: bool,
+}
+
+#[cfg(not(target_os = "android"))]
+fn youtube_entry_has_lyrics(entry: &serde_json::Value) -> bool {
+    ["subtitles", "automatic_captions"].iter().any(|field| {
+        entry
+            .get(field)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|captions| {
+                captions.iter().any(|(language, formats)| {
+                    language.to_ascii_lowercase().starts_with("en")
+                        && formats.as_array().is_some_and(|formats| {
+                            formats.iter().any(|format| {
+                                format.get("ext").and_then(serde_json::Value::as_str) == Some("vtt")
+                            })
+                        })
+                })
+            })
+    })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2642,7 +2775,9 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) -> bool {
     else {
         return false;
     };
-    let percent = percent.clamp(0.0, 100.0);
+    // yt-dlp may report separate 100% transfers for subtitles, thumbnails, and
+    // audio. Keep the task in its active state until the output MP3 is verified.
+    let percent = percent.clamp(0.0, 99.0);
     let total_bytes = remainder
         .trim_start()
         .strip_prefix("of")
@@ -2651,9 +2786,16 @@ fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) -> bool {
         total_bytes.map(|total| (total as f64 * f64::from(percent) / 100.0) as u64);
     if let Ok(mut manager) = app.state::<YoutubeDownloadState>().0.lock() {
         if let Some(task) = manager.tasks.iter_mut().find(|task| task.item.id == id) {
+            let percent = percent.max(task.item.percent.unwrap_or(0.0));
             task.item.percent = Some(percent);
-            task.item.downloaded_bytes = downloaded_bytes.or(task.item.downloaded_bytes);
-            task.item.total_bytes = total_bytes.or(task.item.total_bytes);
+            if let Some(total) = total_bytes.filter(|total| Some(*total) >= task.item.total_bytes) {
+                task.item.total_bytes = Some(total);
+                if let Some(downloaded) = downloaded_bytes {
+                    task.item.downloaded_bytes = Some(
+                        downloaded.max(task.item.downloaded_bytes.unwrap_or(0)).min(total),
+                    );
+                }
+            }
             task.item.message = progress.to_owned();
         }
     }
@@ -2830,6 +2972,7 @@ async fn youtube_search(
     query: String,
     limit: Option<usize>,
     offset: Option<usize>,
+    include_lyrics: Option<bool>,
     bridge: State<'_, MediaBridge>,
     app: AppHandle,
 ) -> Result<Vec<YoutubeSearchResult>, String> {
@@ -2843,7 +2986,7 @@ async fn youtube_search(
         call_android_media(
             plugin,
             "youtubeSearch",
-            serde_json::json!({ "query": query, "limit": limit, "offset": offset }),
+            serde_json::json!({ "query": query, "limit": limit, "offset": offset, "includeLyrics": include_lyrics.unwrap_or(false) }),
         )
         .await
     }
@@ -2870,10 +3013,12 @@ async fn youtube_search(
             } else {
                 format!("ytsearch{search_end}:{query}")
             };
-            let output = hidden_command(yt_dlp)
-                .arg("--ignore-config")
-                .arg("--no-warnings")
-                .arg("--flat-playlist")
+            let mut command = hidden_command(yt_dlp);
+            command.arg("--ignore-config").arg("--no-warnings");
+            if is_playlist_url || !include_lyrics.unwrap_or(false) {
+                command.arg("--flat-playlist");
+            }
+            let output = command
                 .arg("--dump-single-json")
                 .arg("--playlist-end")
                 .arg(search_end.to_string())
@@ -2925,6 +3070,7 @@ async fn youtube_search(
                     thumbnail,
                     duration_seconds: None,
                     is_playlist: true,
+                    has_lyrics: false,
                 }]);
             }
             let entries: Vec<&serde_json::Value> = document
@@ -2942,6 +3088,7 @@ async fn youtube_search(
                     if title.is_empty() {
                         return None;
                     }
+                    let has_lyrics = youtube_entry_has_lyrics(entry);
                     let url = entry
                         .get("webpage_url")
                         .and_then(serde_json::Value::as_str)
@@ -2968,6 +3115,7 @@ async fn youtube_search(
                         thumbnail,
                         duration_seconds: entry.get("duration").and_then(serde_json::Value::as_f64),
                         is_playlist: false,
+                        has_lyrics,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -3449,8 +3597,8 @@ fn run_youtube_download(
         .arg("--write-auto-subs")
         .arg("--sub-langs")
         .arg("en.*")
-        .arg("--convert-subs")
-        .arg("lrc")
+        .arg("--sub-format")
+        .arg("vtt")
         .arg("--ffmpeg-location")
         .arg(ffmpeg)
         .arg("--js-runtimes")
@@ -4731,6 +4879,60 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloaded_lyrics_are_embedded_and_read_from_mp3() {
+        let root = std::env::temp_dir().join(format!(
+            "michoplay-lyrics-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let audio = root.join("song.mp3");
+        let sidecar = root.join("song.en.lrc");
+        let lyrics = "[00:01.20]First line\n[00:03.40]Second line\n";
+        fs::write(&audio, include_bytes!("../fixtures/silence.mp3")).unwrap();
+        fs::write(&sidecar, lyrics).unwrap();
+
+        attach_downloaded_lyrics(&audio);
+        assert!(!sidecar.exists());
+        assert!(track_has_lyrics(&audio));
+        assert_eq!(embedded_lyrics(&audio).as_deref(), Some(lyrics));
+
+        let pending = pending_lyrics_path(&audio);
+        fs::write(&pending, "[00:05.00]Updated line\n").unwrap();
+        assert_eq!(
+            embed_downloaded_lyrics(vec![audio.to_string_lossy().into_owned()]),
+            vec![audio.to_string_lossy().into_owned()]
+        );
+        assert!(!pending.exists());
+        assert_eq!(
+            embedded_lyrics(&audio).as_deref(),
+            Some("[00:05.00]Updated line\n")
+        );
+
+        let vtt_audio = root.join("captions.mp3");
+        let vtt_sidecar = root.join("captions.en.vtt");
+        fs::write(&vtt_audio, include_bytes!("../fixtures/silence.mp3")).unwrap();
+        fs::write(&vtt_sidecar, "WEBVTT\n\n00:00:01.042 --> 00:00:04.045\n<c>First &amp; second</c>\nline\n\n00:00:07.257 --> 00:00:12.846\nNext line\n").unwrap();
+        attach_downloaded_lyrics(&vtt_audio);
+        assert!(!vtt_sidecar.exists());
+        assert_eq!(
+            embedded_lyrics(&vtt_audio).as_deref(),
+            Some("[00:01.04]First & second line\n[00:07.25]Next line\n")
+        );
+
+        let invalid_audio = root.join("invalid.mp3");
+        let retained_sidecar = root.join("invalid.en.lrc");
+        fs::write(&invalid_audio, b"not an MP3").unwrap();
+        fs::write(&retained_sidecar, lyrics).unwrap();
+        attach_downloaded_lyrics(&invalid_audio);
+        assert!(retained_sidecar.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(not(target_os = "android"))]
     #[test]

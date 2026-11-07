@@ -13,7 +13,7 @@ export type PlayerSnapshot = {
   sleepTimerRemainingMs: number | null; sleepTimerAtTrackEnd: boolean;
   equalizerBands: number[]; equalizerEnabled: boolean;
 };
-export type YoutubeSearchResult = { id: string; title: string; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean };
+export type YoutubeSearchResult = { id: string; title: string; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean; hasLyrics: boolean };
 export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string; filePaths?: string[] };
 export const api = {
   appDataLoad: () => invoke<Record<string, string>>("app_data_load"),
@@ -34,7 +34,7 @@ export const api = {
   shareText: (title: string, text: string, url: string) => invoke<void>("media_share_text", { title, text, url }),
   youtubeMusicDirectory: () => invoke<string>("youtube_music_directory"),
   pickMusicFolder: () => invoke<{ path: string; count: number; name: string }>("library_pick_music_folder"),
-  youtubeSearch: (query: string, limit = 15, offset = 0) => invoke<YoutubeSearchResult[]>("youtube_search", { query, limit, offset }),
+  youtubeSearch: (query: string, limit = 15, offset = 0, includeLyrics = false) => invoke<YoutubeSearchResult[]>("youtube_search", { query, limit, offset, includeLyrics }),
   youtubeDownloadsState: () => invoke<YoutubeDownload[]>("youtube_downloads_state"),
   youtubeDownloadEnqueue: (url: string, title: string, thumbnail: string | null, isPlaylist: boolean) => invoke<YoutubeDownload>("youtube_download_enqueue", { url, title, thumbnail, isPlaylist }),
   youtubeDownloadPause: (id: string) => invoke<void>("youtube_download_pause", { id }),
