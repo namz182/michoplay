@@ -298,6 +298,9 @@ export default function App() {
   const [mobileQueueOpen, setMobileQueueOpen] = useState(false);
   const [mobileQueueEditing, setMobileQueueEditing] = useState(false);
   const [queueExpanded, setQueueExpanded] = useState(false);
+  const [mobileQueueReorder, setMobileQueueReorder] = useState<{ from: number; to: number } | null>(null);
+  const mobileQueueReorderRef = useRef<{ from: number; to: number } | null>(null);
+  const mobileQueueListRef = useRef<HTMLDivElement>(null);
   const [mobileSleepTimerOpen, setMobileSleepTimerOpen] = useState(false);
   const [addSongsPlaylistId, setAddSongsPlaylistId] = useState<string | null>(null);
   const [addSongsSelected, setAddSongsSelected] = useState<number[]>([]);
@@ -1035,6 +1038,48 @@ export default function App() {
     mobileSheetDragState.current = null;
     setMobileSheetDrag((current) => current?.sheet === sheet ? { sheet, offset: 0, dragging: false } : current);
     window.setTimeout(() => setMobileSheetDrag((current) => current?.sheet === sheet ? null : current), 260);
+  }
+  function beginMobileQueueReorder(event: ReactPointerEvent<HTMLButtonElement>, index: number) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const reorder = { from: index, to: index };
+    mobileQueueReorderRef.current = reorder;
+    setMobileQueueReorder(reorder);
+  }
+  function moveMobileQueueReorder(event: ReactPointerEvent<HTMLButtonElement>) {
+    const reorder = mobileQueueReorderRef.current;
+    const list = mobileQueueListRef.current;
+    if (!reorder || !list) return;
+    const bounds = list.getBoundingClientRect();
+    if (event.clientY < bounds.top + 34) list.scrollTop -= 12;
+    else if (event.clientY > bounds.bottom - 34) list.scrollTop += 12;
+    const rows = Array.from(list.querySelectorAll<HTMLElement>("[data-queue-index]"));
+    const targetRow = rows.find((row) => {
+      const rect = row.getBoundingClientRect();
+      return event.clientY >= rect.top && event.clientY <= rect.bottom;
+    });
+    let to = reorder.to;
+    if (targetRow) to = Number(targetRow.dataset.queueIndex);
+    else if (rows.length) {
+      const first = rows[0].getBoundingClientRect();
+      const last = rows[rows.length - 1].getBoundingClientRect();
+      if (event.clientY < first.top) to = Number(rows[0].dataset.queueIndex);
+      else if (event.clientY > last.bottom) to = Number(rows[rows.length - 1].dataset.queueIndex);
+    }
+    const next = { ...reorder, to };
+    mobileQueueReorderRef.current = next;
+    setMobileQueueReorder(next);
+  }
+  function finishMobileQueueReorder() {
+    const reorder = mobileQueueReorderRef.current;
+    mobileQueueReorderRef.current = null;
+    setMobileQueueReorder(null);
+    if (reorder && reorder.from !== reorder.to) void run(() => api.queueMove(reorder.from, reorder.to));
+  }
+  function cancelMobileQueueReorder() {
+    mobileQueueReorderRef.current = null;
+    setMobileQueueReorder(null);
   }
   function beginMetadataSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const now = performance.now();
@@ -1895,7 +1940,11 @@ export default function App() {
     {isAndroid && mobileQueueOpen && <div className="mobile-sheet-layer" onPointerDown={(event) => { if (event.target === event.currentTarget) setMobileQueueOpen(false); }}>
       <section className="mobile-queue-sheet" style={mobileSheetStyle("queue")} role="dialog" aria-modal="true" aria-label="Playback queue">
         <div className="mobile-sheet-handle" role="presentation" onPointerDown={(event) => beginMobileSheetDrag(event, "queue")} onPointerMove={(event) => moveMobileSheetDrag(event, "queue")} onPointerUp={() => finishMobileSheetDrag("queue", () => setMobileQueueOpen(false))} onPointerCancel={() => cancelMobileSheetDrag("queue")}/><div className="mobile-queue-heading"><div><h2>Queue</h2><p>Playing {page.detail?.title ?? "from your library"}</p></div><div className="mobile-queue-heading-actions"><button className="mobile-edit-queue" onClick={() => setMobileQueueEditing((editing) => !editing)}>{mobileQueueEditing ? "Done" : "Edit"}</button><button className="mobile-close-sheet" aria-label="Close queue" onClick={() => setMobileQueueOpen(false)}><X size={20}/></button></div></div>
-        <div className="mobile-queue-list">{footerTrack && <div className="mobile-queue-row current"><Cover className="mobile-queue-cover" keys={[footerTrack.artworkKey]}/><span><strong>{footerTrack.title}</strong><small>{footerTrack.artist}</small></span><button className="mobile-queue-play" aria-label="Play current song" onClick={() => void run(current ? api.toggle : () => api.play(footerTrack.id))}>{player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button></div>}{visibleQueue.map((id, index) => { const track = trackMap.get(id); return track ? <div className="mobile-queue-row" key={`${id}-${index}`}><button className="mobile-queue-song" onClick={() => void run(() => api.play(id))}><Cover className="mobile-queue-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button><div className="mobile-queue-order">{mobileQueueEditing && <><button aria-label={`Move ${track.title} up`} disabled={index === 0} onClick={() => void run(() => api.queueMove(index, index - 1))}><ChevronUp size={16}/></button><button aria-label={`Move ${track.title} down`} disabled={index === player.queue.length - 1} onClick={() => void run(() => api.queueMove(index, index + 1))}><ChevronDown size={16}/></button></>}<GripVertical size={18}/></div></div> : null; })}{!queueExpanded && player.queue.length > visibleQueue.length && <button className="queue-expand-button" onClick={() => setQueueExpanded(true)}>Show all {player.queue.length} queued songs</button>}{queueExpanded && player.queue.length > 80 && <button className="queue-expand-button" onClick={() => setQueueExpanded(false)}>Show fewer queued songs</button>}{!footerTrack && !player.queue.length && <p className="mobile-queue-empty">Your queue is empty.</p>}</div>
+        <div className="mobile-queue-list" ref={mobileQueueListRef}>
+          {footerTrack && <div className="mobile-queue-row current"><Cover className="mobile-queue-cover" keys={[footerTrack.artworkKey]}/><span><strong>{footerTrack.title}</strong><small>{footerTrack.artist}</small></span><button className="mobile-queue-play" aria-label="Play current song" onClick={() => void run(current ? api.toggle : () => api.play(footerTrack.id))}>{player.isPlaying ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button></div>}
+          {visibleQueue.map((id, index) => { const track = trackMap.get(id); return track ? <div className={`mobile-queue-row ${mobileQueueReorder?.from === index ? "dragging" : ""} ${mobileQueueReorder?.to === index && mobileQueueReorder.from !== index ? "drop-target" : ""}`} data-queue-index={index} key={`${id}-${index}`}><button className="mobile-queue-song" onClick={() => void run(() => api.play(id))}><Cover className="mobile-queue-cover" keys={[track.artworkKey]}/><span><strong>{track.title}</strong><small>{track.artist}</small></span></button><div className="mobile-queue-order">{mobileQueueEditing && <><button aria-label={`Move ${track.title} up`} disabled={index === 0} onClick={() => void run(() => api.queueMove(index, index - 1))}><ChevronUp size={16}/></button><button aria-label={`Move ${track.title} down`} disabled={index === player.queue.length - 1} onClick={() => void run(() => api.queueMove(index, index + 1))}><ChevronDown size={16}/></button></>}<button className="mobile-queue-drag-handle" aria-label={`Drag to reorder ${track.title}`} onPointerDown={(event) => beginMobileQueueReorder(event, index)} onPointerMove={moveMobileQueueReorder} onPointerUp={finishMobileQueueReorder} onPointerCancel={cancelMobileQueueReorder}><GripVertical size={18}/></button></div></div> : null; })}
+          {!queueExpanded && player.queue.length > visibleQueue.length && <button className="queue-expand-button" onClick={() => setQueueExpanded(true)}>Show all {player.queue.length} queued songs</button>}{queueExpanded && player.queue.length > 80 && <button className="queue-expand-button" onClick={() => setQueueExpanded(false)}>Show fewer queued songs</button>}{!footerTrack && !player.queue.length && <p className="mobile-queue-empty">Your queue is empty.</p>}
+        </div>
         <div className="mobile-queue-tools"><button className={`shuffle-control ${player.shuffle ? "active" : ""}`} onClick={() => void run(api.shuffle)}><Shuffle size={22}/><span>Shuffle</span></button><button className={`repeat-control ${player.repeatMode !== "off" ? "active" : ""}`} onClick={() => void run(api.repeat)}><span className="repeat-symbol">↻{player.repeatMode === "one" && <small className="repeat-one-badge">1</small>}</span><span>Repeat</span></button><button className={`full-mode-control ${player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd ? "active" : ""}`} onClick={() => setMobileSleepTimerOpen(true)}><Timer size={22}/><span>{player.sleepTimerRemainingMs !== null ? sleepTimerLabel(player.sleepTimerRemainingMs) : player.sleepTimerAtTrackEnd ? "Track end" : "Timer"}</span></button></div>
       </section>
     </div>}
