@@ -1544,6 +1544,9 @@ body:has(.android-app), #root:has(.android-app) { min-width:0; min-height:0; ove
 .mobile-player-track > div { display:grid; min-width:0; gap:4px; }
 .mobile-player-track strong { overflow:hidden; font-size:21px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-player-track span { overflow:hidden; color:#c0bbc3; font-size:15px; text-overflow:ellipsis; white-space:nowrap; }
+.mobile-player-track .mobile-player-track-meta { display:flex; min-width:0; align-items:center; gap:7px; overflow:hidden; color:#c0bbc3; font-size:15px; white-space:nowrap; }
+.mobile-player-track .mobile-player-track-meta > .lyrics-badge { display:inline-grid; width:18px; height:18px; flex:0 0 18px; place-items:center; overflow:visible; margin:0; border-radius:3px; background:#d8d8d8; color:#252427; font-size:12px; font-weight:850; line-height:1; vertical-align:middle; }
+.mobile-player-track .mobile-player-track-meta > span:last-child { display:block; min-width:0; overflow:hidden; color:#c0bbc3; font-size:15px; text-overflow:ellipsis; white-space:nowrap; }
 .mobile-player-track button.favorite { color:#fff; }
 .mobile-player-track button.favorite svg path { fill:url(#michoplay-brand-gradient); stroke:url(#michoplay-brand-gradient); }
 .mobile-seek { display:grid; gap:7px; margin-top:16px; }
