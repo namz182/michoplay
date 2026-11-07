@@ -4,6 +4,7 @@ export type Folder = { path: string; name: string };
 export type Track = {
   id: number; path: string; title: string; artist: string; album: string; releaseDate: string; addedAt: number; durationMs: number;
   folderPath: string; folderName: string; rootPath: string; folders: Folder[]; artworkKey: string | null;
+  hasLyrics: boolean;
 };
 export type PlayerSnapshot = {
   currentTrackId: number | null; isPlaying: boolean; positionMs: number; durationMs: number;
@@ -49,6 +50,7 @@ export const api = {
     artworkDataUrl: artworkDataUrl ?? null,
   }),
   mediaStop: () => invoke<void>("media_stop"),
+  lyricsRead: (trackId: number) => invoke<string | null>("lyrics_read", { trackId }),
   mediaTakePendingActions: () => invoke<string[]>("media_take_pending_actions"),
   refresh: (folders: string[]) => invoke<Track[]>("library_refresh", { folders }),
   librarySavedRoots: () => invoke<string[]>("library_saved_roots"),

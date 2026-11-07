@@ -512,6 +512,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           if (item["status"] == "downloading") {
             val audioFiles = staging.walkTopDown().filter { it.isFile && it.extension.equals("mp3", ignoreCase = true) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
+            audioFiles.forEach { audio ->
+              val lyric = staging.listFiles()?.firstOrNull { file -> file.isFile && file.extension.equals("lrc", true) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
+              if (lyric != null) publishLyricsToMusic(audio, lyric)
+            }
             val filePaths = audioFiles.map(::publishAudioToMusic)
             val finalBytes = audioFiles.sumOf { it.length() }
             item["downloadedBytes"] = finalBytes; item["totalBytes"] = finalBytes
@@ -539,6 +543,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     // video+audio file that fails during MP3 conversion on some devices.
     request.addOption("-f", "bestaudio[acodec!=none]/bestaudio")
     request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
+    request.addOption("--write-subs"); request.addOption("--write-auto-subs"); request.addOption("--sub-langs", "en.*"); request.addOption("--convert-subs", "lrc")
     request.addOption("--embed-thumbnail")
     request.addOption("-o", File(staging, "%(title).180B.%(ext)s").absolutePath)
     val downloadProgress = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%")
@@ -561,6 +566,13 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       }
       kotlin.Unit
     }
+  }
+
+  private fun publishLyricsToMusic(audio: File, lyrics: File) {
+    val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
+    if (!directory.exists() && !directory.mkdirs()) return
+    val destination = File(directory, audio.nameWithoutExtension + ".lrc")
+    try { lyrics.copyTo(destination, overwrite = true) } catch (_: Exception) { }
   }
 
   private fun isYoutubeForbidden(error: Throwable): Boolean {

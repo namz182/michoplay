@@ -217,6 +217,8 @@ struct Track {
     root_path: String,
     folders: Vec<Folder>,
     artwork_key: Option<String>,
+    #[serde(default)]
+    has_lyrics: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -242,6 +244,58 @@ struct LibraryTrack {
     track: Track,
     path: PathBuf,
     artwork: Option<Arc<Artwork>>,
+}
+
+fn lyrics_path(audio_path: &Path) -> PathBuf {
+    let mut path = audio_path.to_path_buf();
+    path.set_extension("lrc");
+    path
+}
+
+fn attach_downloaded_lyrics(audio_path: &Path) {
+    let Some(parent) = audio_path.parent() else {
+        return;
+    };
+    let Some(stem) = audio_path.file_stem().and_then(|value| value.to_str()) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    let candidate = entries.flatten().map(|entry| entry.path()).find(|path| {
+        path.extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc"))
+            && path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name == stem || name.starts_with(&format!("{stem}.")))
+    });
+    if let Some(source) = candidate {
+        let target = lyrics_path(audio_path);
+        if source != target {
+            let _ = fs::rename(source, target);
+        }
+    }
+}
+
+#[tauri::command]
+fn lyrics_read(track_id: u64, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let core = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?;
+    let track = core
+        .tracks
+        .iter()
+        .find(|track| track.track.id == track_id)
+        .ok_or_else(|| "That song is no longer in the library.".to_owned())?;
+    let path = lyrics_path(&track.path);
+    match fs::read_to_string(path) {
+        Ok(contents) if !contents.trim().is_empty() => Ok(Some(contents)),
+        Ok(_) => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err("Could not read this song’s lyrics.".to_owned()),
+    }
 }
 
 #[derive(Serialize)]
@@ -870,6 +924,7 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
             root_path: root.to_string_lossy().into_owned(),
             folders,
             artwork_key,
+            has_lyrics: lyrics_path(path).is_file(),
         },
         path: path.to_owned(),
         artwork,
@@ -1860,6 +1915,10 @@ impl PlayerCore {
     }
 
     fn replace_library(&mut self, roots: Vec<PathBuf>, tracks: Vec<LibraryTrack>) -> Vec<Track> {
+        let mut tracks = tracks;
+        for item in &mut tracks {
+            item.track.has_lyrics = lyrics_path(&item.path).is_file();
+        }
         let views = tracks.iter().map(|track| track.track.clone()).collect();
         let current_id = self
             .current_queue_index
@@ -3329,6 +3388,12 @@ fn run_youtube_download(
         .arg("--audio-quality")
         .arg("0")
         .arg("--write-thumbnail")
+        .arg("--write-subs")
+        .arg("--write-auto-subs")
+        .arg("--sub-langs")
+        .arg("en.*")
+        .arg("--convert-subs")
+        .arg("lrc")
         .arg("--ffmpeg-location")
         .arg(ffmpeg)
         .arg("--js-runtimes")
@@ -3438,6 +3503,7 @@ fn run_youtube_download(
             // Verify the audio before optional artwork work so a bad path or
             // inaccessible file is reported without attempting to rewrite it.
             youtube_download_file_size(path)?;
+            attach_downloaded_lyrics(path);
             if let Some(thumbnail) = thumbnail_for_audio(path) {
                 if embed_thumbnail_in_mp3(path, &thumbnail).is_ok() {
                     let _ = std::fs::remove_file(thumbnail);
@@ -3712,7 +3778,9 @@ async fn library_update_track_metadata(
     {
         let path = {
             let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
-            core.tracks.get(core.find_track_index(track_id)?).map(|track| track.path.to_string_lossy().into_owned())
+            core.tracks
+                .get(core.find_track_index(track_id)?)
+                .map(|track| track.path.to_string_lossy().into_owned())
                 .ok_or_else(|| "The song is no longer in the library.".to_owned())?
         };
         let plugin = android_media_plugin(&bridge)?;
@@ -3720,7 +3788,8 @@ async fn library_update_track_metadata(
             plugin,
             "requestMetadataWriteAccess",
             serde_json::json!({ "path": path }),
-        ).await?;
+        )
+        .await?;
     }
     #[cfg(not(target_os = "android"))]
     let _ = &bridge;
@@ -3763,23 +3832,37 @@ async fn library_update_track_metadata(
     let saved_to_file = match tag.save_to_path(&path, WriteOptions::default()) {
         Ok(()) => true,
         Err(_direct_write_error) => {
-            let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("audio");
-            let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-            let temp_path = core.storage_dir.join(format!(".michoplay-metadata-{track_id}-{stamp}.{extension}"));
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("audio");
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let temp_path = core.storage_dir.join(format!(
+                ".michoplay-metadata-{track_id}-{stamp}.{extension}"
+            ));
             let prepared = (|| -> Result<(), String> {
-                fs::copy(&path, &temp_path).map_err(|error| format!("Could not prepare the song file: {error}"))?;
+                fs::copy(&path, &temp_path)
+                    .map_err(|error| format!("Could not prepare the song file: {error}"))?;
                 tag.save_to_path(&temp_path, WriteOptions::default())
                     .map_err(|error| format!("Could not edit song metadata: {error}"))?;
                 let plugin = android_media_plugin(&bridge)?;
-                plugin.run_mobile_plugin::<()>(
-                    "writeMetadataFile",
-                    serde_json::json!({ "path": path, "tempPath": temp_path }),
-                ).map_err(|error| error.to_string())
+                plugin
+                    .run_mobile_plugin::<()>(
+                        "writeMetadataFile",
+                        serde_json::json!({ "path": path, "tempPath": temp_path }),
+                    )
+                    .map_err(|error| error.to_string())
             })();
             let _ = fs::remove_file(&temp_path);
             match prepared {
                 Ok(()) => true,
-                Err(error) => { write_error = Some(error); false }
+                Err(error) => {
+                    write_error = Some(error);
+                    false
+                }
             }
         }
     };
@@ -4547,6 +4630,7 @@ pub fn run() {
             youtube_download_cancel,
             youtube_download_remove,
             library_scan_folder,
+            lyrics_read,
             library_cancel_scan,
             library_refresh,
             library_saved_roots,
@@ -4717,6 +4801,7 @@ mod tests {
                     root_path: "/music".into(),
                     folders: vec![],
                     artwork_key: None,
+                    has_lyrics: false,
                 },
                 path: PathBuf::from(format!("/music/{id}.wav")),
                 artwork: None,
