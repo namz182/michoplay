@@ -217,6 +217,8 @@ struct Track {
     root_path: String,
     folders: Vec<Folder>,
     artwork_key: Option<String>,
+    #[serde(default)]
+    has_lyrics: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -242,6 +244,252 @@ struct LibraryTrack {
     track: Track,
     path: PathBuf,
     artwork: Option<Arc<Artwork>>,
+}
+
+fn lyrics_path(audio_path: &Path) -> PathBuf {
+    let mut path = audio_path.to_path_buf();
+    path.set_extension("lrc");
+    path
+}
+
+fn pending_lyrics_path(audio_path: &Path) -> PathBuf {
+    let name = audio_path.file_name().unwrap_or_default().to_string_lossy();
+    audio_path.with_file_name(format!("{name}.lyrics-pending"))
+}
+
+fn embedded_lyrics(audio_path: &Path) -> Option<String> {
+    let tagged = Probe::open(audio_path).ok()?.read().ok()?;
+    let tag = tagged.primary_tag()?;
+    tag.get_string(ItemKey::Lyrics)
+        .or_else(|| tag.get_string(ItemKey::UnsyncLyrics))
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn track_has_lyrics(audio_path: &Path) -> bool {
+    lyrics_path(audio_path).is_file() || embedded_lyrics(audio_path).is_some()
+}
+
+fn embed_lyrics_file(audio_path: &Path, lyrics_file: &Path) -> Result<(), String> {
+    let contents = fs::read_to_string(lyrics_file)
+        .map_err(|_| "Could not read downloaded lyrics.".to_owned())?;
+    embed_lyrics_text(audio_path, &contents)
+}
+
+fn embed_lyrics_text(audio_path: &Path, contents: &str) -> Result<(), String> {
+    if contents.trim().is_empty() {
+        return Err("Downloaded lyrics were empty.".to_owned());
+    }
+    let mut tagged = Probe::open(audio_path)
+        .map_err(|error| format!("Could not read downloaded audio tags: {error}"))?
+        .read()
+        .map_err(|error| format!("Could not read downloaded audio tags: {error}"))?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::Id3v2));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .ok_or_else(|| "Could not prepare audio lyrics metadata.".to_owned())?;
+    // Keep the original LRC timestamp markup inside the audio's lyrics tag.
+    // This works for ID3 MP3 downloads and preserves timing for MichoPlay's renderer.
+    tag.insert_text(ItemKey::UnsyncLyrics, contents.to_owned());
+    tag.save_to_path(audio_path, WriteOptions::default())
+        .map_err(|error| format!("Could not embed downloaded lyrics: {error}"))
+}
+
+fn vtt_timestamp_ms(value: &str) -> Option<u64> {
+    let (time, fraction) = value.trim().split_once('.')?;
+    let parts = time
+        .split(':')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let seconds = match parts.as_slice() {
+        [minutes, seconds] => minutes.checked_mul(60)?.checked_add(*seconds)?,
+        [hours, minutes, seconds] => hours
+            .checked_mul(3600)?
+            .checked_add(minutes.checked_mul(60)?)?
+            .checked_add(*seconds)?,
+        _ => return None,
+    };
+    let millis = fraction.chars().take(3).collect::<String>();
+    let millis = millis.parse::<u64>().ok()? * 10_u64.pow(3 - millis.len() as u32);
+    seconds.checked_mul(1000)?.checked_add(millis)
+}
+
+fn append_vtt_cue(lyrics: &mut Vec<String>, start_ms: Option<u64>, cue: &mut Vec<String>) {
+    let Some(start_ms) = start_ms else {
+        cue.clear();
+        return;
+    };
+    let raw = cue.join(" ");
+    cue.clear();
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for character in raw.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => plain.push(character),
+            _ => {}
+        }
+    }
+    let plain = plain
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ");
+    let line = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty()
+        || lyrics.last().is_some_and(|previous| {
+            previous
+                .split_once(']')
+                .is_some_and(|(_, text)| text == line)
+        })
+    {
+        return;
+    }
+    lyrics.push(format!(
+        "[{:02}:{:02}.{:02}]{}",
+        start_ms / 60_000,
+        start_ms / 1000 % 60,
+        start_ms % 1000 / 10,
+        line
+    ));
+}
+
+fn vtt_to_lrc(vtt: &str) -> String {
+    let mut lyrics = Vec::new();
+    let mut cue = Vec::new();
+    let mut start_ms = None;
+    for row in vtt.lines().chain(std::iter::once("")) {
+        let row = row.trim();
+        if let Some((start, _)) = row.split_once("-->") {
+            append_vtt_cue(&mut lyrics, start_ms, &mut cue);
+            start_ms = vtt_timestamp_ms(start);
+        } else if row.is_empty() {
+            append_vtt_cue(&mut lyrics, start_ms, &mut cue);
+            start_ms = None;
+        } else if start_ms.is_some() {
+            cue.push(row.to_owned());
+        }
+    }
+    if lyrics.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lyrics.join("\n"))
+    }
+}
+
+fn attach_downloaded_lyrics(audio_path: &Path) {
+    let Some(parent) = audio_path.parent() else {
+        return;
+    };
+    let Some(stem) = audio_path.file_stem().and_then(|value| value.to_str()) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    let mut sources = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("lrc") || ext.eq_ignore_ascii_case("vtt")
+            }) && path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name == stem || name.starts_with(&format!("{stem}.")))
+        })
+        .collect::<Vec<_>>();
+    sources.sort_by_key(|path| {
+        !path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc"))
+    });
+    for source in &sources {
+        let result = if source
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc"))
+        {
+            embed_lyrics_file(audio_path, source)
+        } else {
+            fs::read_to_string(source)
+                .map_err(|_| "Could not read downloaded captions.".to_owned())
+                .and_then(|text| embed_lyrics_text(audio_path, &vtt_to_lrc(&text)))
+        };
+        if result.is_ok() {
+            for sidecar in &sources {
+                let _ = fs::remove_file(sidecar);
+            }
+            break;
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn has_downloaded_lyrics(audio_path: &Path) -> bool {
+    let Some(parent) = audio_path.parent() else {
+        return false;
+    };
+    let Some(stem) = audio_path.file_stem().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    fs::read_dir(parent)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let path = entry.path();
+            path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("lrc") || ext.eq_ignore_ascii_case("vtt")
+            }) && path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name == stem || name.starts_with(&format!("{stem}.")))
+        })
+}
+
+#[tauri::command]
+fn embed_downloaded_lyrics(paths: Vec<String>) -> Vec<String> {
+    let mut embedded = Vec::new();
+    for value in paths {
+        let audio_path = PathBuf::from(value);
+        let staging_path = pending_lyrics_path(&audio_path);
+        if staging_path.is_file() {
+            if embed_lyrics_file(&audio_path, &staging_path).is_ok() {
+                let _ = fs::remove_file(staging_path);
+                embedded.push(audio_path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    embedded
+}
+
+#[tauri::command]
+fn lyrics_read(track_id: u64, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let core = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?;
+    let track = core
+        .tracks
+        .iter()
+        .find(|track| track.track.id == track_id)
+        .ok_or_else(|| "That song is no longer in the library.".to_owned())?;
+    let path = lyrics_path(&track.path);
+    match fs::read_to_string(path) {
+        Ok(contents) if !contents.trim().is_empty() => Ok(Some(contents)),
+        Ok(_) => Ok(embedded_lyrics(&track.path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(embedded_lyrics(&track.path))
+        }
+        Err(_) => Err("Could not read this song’s lyrics.".to_owned()),
+    }
 }
 
 #[derive(Serialize)]
@@ -870,6 +1118,7 @@ fn read_track(path: &Path, id: u64, root: &Path, sidecar: Option<Arc<Artwork>>) 
             root_path: root.to_string_lossy().into_owned(),
             folders,
             artwork_key,
+            has_lyrics: track_has_lyrics(path),
         },
         path: path.to_owned(),
         artwork,
@@ -1092,9 +1341,48 @@ fn open_library_cache(storage_dir: &Path) -> rusqlite::Result<Connection> {
         CREATE INDEX IF NOT EXISTS tracks_by_title ON tracks(title COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS tracks_by_artist ON tracks(artist COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS tracks_by_album ON tracks(album COLLATE NOCASE);
-        CREATE INDEX IF NOT EXISTS tracks_by_folder ON tracks(folder_path);",
+        CREATE INDEX IF NOT EXISTS tracks_by_folder ON tracks(folder_path);
+        CREATE TABLE IF NOT EXISTS track_metadata_overrides (
+            path TEXT PRIMARY KEY NOT NULL,
+            title TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            album TEXT NOT NULL,
+            release_date TEXT NOT NULL
+        );",
     )?;
     Ok(connection)
+}
+
+fn load_metadata_overrides(storage_dir: &Path) -> HashMap<String, TrackMetadataEdit> {
+    let Ok(connection) = open_library_cache(storage_dir) else {
+        return HashMap::new();
+    };
+    let Ok(mut statement) = connection
+        .prepare("SELECT path, title, artist, album, release_date FROM track_metadata_overrides")
+    else {
+        return HashMap::new();
+    };
+    let Ok(rows) = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            TrackMetadataEdit {
+                title: row.get(1)?,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                release_date: row.get(4)?,
+            },
+        ))
+    }) else {
+        return HashMap::new();
+    };
+    rows.flatten().collect()
+}
+
+fn apply_metadata_edit(track: &mut Track, edit: &TrackMetadataEdit) {
+    track.title = edit.title.clone();
+    track.artist = edit.artist.clone();
+    track.album = edit.album.clone();
+    track.release_date = edit.release_date.clone();
 }
 
 fn load_library_cache(storage_dir: &Path) -> HashMap<String, CachedTrack> {
@@ -1595,6 +1883,12 @@ where
     progress("Finishing library index", jobs.len(), jobs.len());
 
     let mut result = result.into_iter().flatten().collect::<Vec<_>>();
+    let metadata_overrides = load_metadata_overrides(storage_dir);
+    for item in &mut result {
+        if let Some(edit) = metadata_overrides.get(&item.track.path) {
+            apply_metadata_edit(&mut item.track, edit);
+        }
+    }
     let mut shared_artwork = HashMap::<String, Arc<Artwork>>::new();
     for item in &mut result {
         if let (Some(key), Some(artwork)) = (&item.track.artwork_key, &item.artwork) {
@@ -2374,6 +2668,26 @@ struct YoutubeSearchResult {
     thumbnail: Option<String>,
     duration_seconds: Option<f64>,
     is_playlist: bool,
+    has_lyrics: bool,
+}
+
+#[cfg(not(target_os = "android"))]
+fn youtube_entry_has_lyrics(entry: &serde_json::Value) -> bool {
+    ["subtitles", "automatic_captions"].iter().any(|field| {
+        entry
+            .get(field)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|captions| {
+                captions.iter().any(|(language, formats)| {
+                    language.to_ascii_lowercase().starts_with("en")
+                        && formats.as_array().is_some_and(|formats| {
+                            formats.iter().any(|format| {
+                                format.get("ext").and_then(serde_json::Value::as_str) == Some("vtt")
+                            })
+                        })
+                })
+            })
+    })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2393,9 +2707,17 @@ struct YoutubeDownloadItem {
     thumbnail: Option<String>,
     is_playlist: bool,
     status: String,
+    #[serde(default)]
+    phase: String,
     percent: Option<f32>,
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
+    #[serde(default)]
+    total_bytes_estimated: bool,
+    #[serde(default)]
+    speed_bytes_per_second: Option<u64>,
+    #[serde(default)]
+    eta_seconds: Option<u64>,
     message: String,
     #[serde(default)]
     file_paths: Vec<String>,
@@ -2404,6 +2726,7 @@ struct YoutubeDownloadItem {
 struct YoutubeDownloadTask {
     item: YoutubeDownloadItem,
     process_id: Option<u32>,
+    in_flight: bool,
 }
 
 #[derive(Default)]
@@ -2411,6 +2734,7 @@ struct YoutubeDownloadManager {
     tasks: Vec<YoutubeDownloadTask>,
     next_id: u64,
     active_workers: usize,
+    last_progress_emit: Option<std::time::Instant>,
 }
 
 const MAX_CONCURRENT_YOUTUBE_DOWNLOADS: usize = 3;
@@ -2466,37 +2790,204 @@ fn youtube_progress_size(raw: &str) -> Option<u64> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) -> bool {
-    let Some(progress) = line.trim().strip_prefix("[download]").map(str::trim) else {
-        return false;
-    };
-    let Some((raw_percent, remainder)) = progress.split_once('%') else {
-        return false;
-    };
-    let Some(percent) = raw_percent
-        .trim()
-        .parse::<f32>()
-        .ok()
-        .filter(|value| value.is_finite())
-    else {
-        return false;
-    };
-    let percent = percent.clamp(0.0, 100.0);
-    let total_bytes = remainder
-        .trim_start()
-        .strip_prefix("of")
-        .and_then(youtube_progress_size);
-    let downloaded_bytes =
-        total_bytes.map(|total| (total as f64 * f64::from(percent) / 100.0) as u64);
+fn parse_youtube_eta(raw: &str) -> Option<u64> {
+    let parts = raw
+        .split(':')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    match parts.as_slice() {
+        [minutes, seconds] => minutes.checked_mul(60)?.checked_add(*seconds),
+        [hours, minutes, seconds] => hours
+            .checked_mul(3600)?
+            .checked_add(minutes.checked_mul(60)?)
+            .and_then(|value| value.checked_add(*seconds)),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn set_youtube_download_phase(app: &AppHandle, id: &str, phase: &str, message: &str) {
+    let mut changed = false;
     if let Ok(mut manager) = app.state::<YoutubeDownloadState>().0.lock() {
-        if let Some(task) = manager.tasks.iter_mut().find(|task| task.item.id == id) {
-            task.item.percent = Some(percent);
-            task.item.downloaded_bytes = downloaded_bytes.or(task.item.downloaded_bytes);
-            task.item.total_bytes = total_bytes.or(task.item.total_bytes);
-            task.item.message = progress.to_owned();
+        if let Some(task) = manager
+            .tasks
+            .iter_mut()
+            .find(|task| task.item.id == id && task.item.status == "downloading")
+        {
+            if task.item.phase != phase || task.item.message != message {
+                task.item.phase = phase.to_owned();
+                task.item.message = message.to_owned();
+                changed = true;
+            }
         }
     }
-    emit_youtube_downloads(app);
+    if changed {
+        emit_youtube_downloads(app);
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn report_youtube_progress(
+    app: &AppHandle,
+    id: &str,
+    line: &str,
+    is_audio_transfer: bool,
+    playlist_position: Option<(usize, usize)>,
+) -> bool {
+    let line = line.trim();
+    let custom_fields = line
+        .strip_prefix("__MICHOPLAY_PROGRESS__")
+        .map(|value| value.split('|').collect::<Vec<_>>());
+    let legacy = line.strip_prefix("[download]").map(str::trim);
+    if custom_fields.is_none() && legacy.is_none() {
+        return false;
+    }
+    let field = |index: usize| {
+        custom_fields
+            .as_ref()
+            .and_then(|fields| fields.get(index))
+            .copied()
+            .unwrap_or_default()
+            .trim()
+    };
+    let legacy_progress = legacy.unwrap_or_default();
+    let legacy_split = legacy_progress.split_once('%');
+    let progress_is_audio = Path::new(field(7))
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "webm" | "m4a" | "mp3" | "opus" | "ogg" | "aac" | "flac" | "wav"
+            )
+        });
+    let Some(percent) = custom_fields
+        .as_ref()
+        .and_then(|_| {
+            field(0)
+                .trim()
+                .trim_end_matches('%')
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .or_else(|| field(6).parse::<f32>().ok())
+        })
+        .or_else(|| legacy_split.and_then(|(value, _)| value.trim().parse::<f32>().ok()))
+        .filter(|value| value.is_finite())
+    else {
+        return true;
+    };
+    if !is_audio_transfer && !progress_is_audio {
+        return true;
+    }
+    // Completion is only reported after MP3 validation; this is transfer progress.
+    let track_percent = percent.clamp(0.0, 100.0);
+    let percent = playlist_position
+        .filter(|(_, total)| *total > 0)
+        .map(|(current, total)| {
+            (((current.saturating_sub(1) as f32 + track_percent / 100.0) / total as f32) * 100.0)
+                .clamp(0.0, 100.0)
+        })
+        .unwrap_or(track_percent);
+    let legacy_remainder = legacy_split
+        .map(|(_, remainder)| remainder)
+        .unwrap_or_default();
+    let total_bytes = field(2)
+        .parse::<u64>()
+        .ok()
+        .or_else(|| field(3).parse::<u64>().ok())
+        .or_else(|| {
+            legacy_remainder
+                .trim_start()
+                .strip_prefix("of")
+                .and_then(youtube_progress_size)
+        });
+    let downloaded_bytes = field(1).parse::<u64>().ok().or_else(|| {
+        total_bytes.map(|total| (total as f64 * f64::from(track_percent) / 100.0) as u64)
+    });
+    let speed_bytes_per_second = field(4)
+        .parse::<f64>()
+        .ok()
+        .map(|speed| speed as u64)
+        .or_else(|| {
+            legacy_remainder
+                .split_once(" at ")
+                .and_then(|(_, value)| youtube_progress_size(value.trim_start().split('/').next()?))
+        });
+    let eta_seconds = field(5).parse::<u64>().ok().or_else(|| {
+        legacy_remainder
+            .split_once("ETA ")
+            .and_then(|(_, eta)| parse_youtube_eta(eta.trim()))
+    });
+    let mut should_emit = false;
+    if let Ok(mut manager) = app.state::<YoutubeDownloadState>().0.lock() {
+        let mut updated = false;
+        let mut force_emit = false;
+        if let Some(task) = manager
+            .tasks
+            .iter_mut()
+            .find(|task| task.item.id == id && task.item.status == "downloading")
+        {
+            let previous_percent = task.item.percent;
+            let percent = percent.max(task.item.percent.unwrap_or(0.0));
+            task.item.percent = Some(percent);
+            task.item.phase = "downloading".to_owned();
+            if playlist_position.is_none() {
+                if let Some(total) = total_bytes {
+                    let estimated =
+                        field(2).parse::<u64>().is_err() && field(3).parse::<u64>().is_ok();
+                    if task
+                        .item
+                        .total_bytes
+                        .map_or(true, |previous| total >= previous)
+                    {
+                        task.item.total_bytes = Some(total);
+                        task.item.total_bytes_estimated = estimated;
+                    }
+                }
+                if let Some(downloaded) = downloaded_bytes {
+                    task.item.downloaded_bytes =
+                        Some(downloaded.max(task.item.downloaded_bytes.unwrap_or(0)));
+                    if !task.item.total_bytes_estimated {
+                        if let Some(total) = task.item.total_bytes {
+                            task.item.downloaded_bytes =
+                                task.item.downloaded_bytes.map(|value| value.min(total));
+                        }
+                    }
+                }
+                task.item.speed_bytes_per_second = speed_bytes_per_second;
+                task.item.eta_seconds = eta_seconds;
+            } else {
+                task.item.downloaded_bytes = None;
+                task.item.total_bytes = None;
+                task.item.speed_bytes_per_second = speed_bytes_per_second;
+                task.item.eta_seconds = eta_seconds;
+            }
+            task.item.message = playlist_position
+                .map(|(current, total)| {
+                    format!("Track {current} of {total} · {track_percent:.1}% of this track")
+                })
+                .unwrap_or_else(|| "Downloading audio…".to_owned());
+            updated = true;
+            force_emit = previous_percent.is_none()
+                || (percent >= 100.0 && previous_percent.is_some_and(|value| value < 100.0));
+        }
+        if updated {
+            let now = std::time::Instant::now();
+            if force_emit
+                || manager.last_progress_emit.map_or(true, |last| {
+                    now.duration_since(last) >= Duration::from_millis(250)
+                })
+            {
+                manager.last_progress_emit = Some(now);
+                should_emit = true;
+            }
+        }
+    }
+    if should_emit {
+        emit_youtube_downloads(app);
+    }
     true
 }
 
@@ -2669,6 +3160,7 @@ async fn youtube_search(
     query: String,
     limit: Option<usize>,
     offset: Option<usize>,
+    include_lyrics: Option<bool>,
     bridge: State<'_, MediaBridge>,
     app: AppHandle,
 ) -> Result<Vec<YoutubeSearchResult>, String> {
@@ -2682,7 +3174,7 @@ async fn youtube_search(
         call_android_media(
             plugin,
             "youtubeSearch",
-            serde_json::json!({ "query": query, "limit": limit, "offset": offset }),
+            serde_json::json!({ "query": query, "limit": limit, "offset": offset, "includeLyrics": include_lyrics.unwrap_or(false) }),
         )
         .await
     }
@@ -2709,10 +3201,12 @@ async fn youtube_search(
             } else {
                 format!("ytsearch{search_end}:{query}")
             };
-            let output = hidden_command(yt_dlp)
-                .arg("--ignore-config")
-                .arg("--no-warnings")
-                .arg("--flat-playlist")
+            let mut command = hidden_command(yt_dlp);
+            command.arg("--ignore-config").arg("--no-warnings");
+            if is_playlist_url || !include_lyrics.unwrap_or(false) {
+                command.arg("--flat-playlist");
+            }
+            let output = command
                 .arg("--dump-single-json")
                 .arg("--playlist-end")
                 .arg(search_end.to_string())
@@ -2764,6 +3258,7 @@ async fn youtube_search(
                     thumbnail,
                     duration_seconds: None,
                     is_playlist: true,
+                    has_lyrics: false,
                 }]);
             }
             let entries: Vec<&serde_json::Value> = document
@@ -2781,6 +3276,7 @@ async fn youtube_search(
                     if title.is_empty() {
                         return None;
                     }
+                    let has_lyrics = youtube_entry_has_lyrics(entry);
                     let url = entry
                         .get("webpage_url")
                         .and_then(serde_json::Value::as_str)
@@ -2807,6 +3303,7 @@ async fn youtube_search(
                         thumbnail,
                         duration_seconds: entry.get("duration").and_then(serde_json::Value::as_f64),
                         is_playlist: false,
+                        has_lyrics,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -2914,15 +3411,20 @@ async fn youtube_download_enqueue(
                 thumbnail,
                 is_playlist,
                 status: "queued".to_owned(),
+                phase: "queued".to_owned(),
                 percent: None,
                 downloaded_bytes: None,
                 total_bytes: None,
+                total_bytes_estimated: false,
+                speed_bytes_per_second: None,
+                eta_seconds: None,
                 message: "Waiting to download".to_owned(),
                 file_paths: Vec::new(),
             };
             manager.tasks.push(YoutubeDownloadTask {
                 item: item.clone(),
                 process_id: None,
+                in_flight: false,
             });
             item
         };
@@ -2966,6 +3468,7 @@ async fn youtube_download_pause(
                 return Ok(());
             }
             task.item.status = "paused".to_owned();
+            task.item.phase = "paused".to_owned();
             task.item.message = "Paused".to_owned();
             task.process_id
         };
@@ -3011,6 +3514,7 @@ async fn youtube_download_resume(
                 return Ok(());
             }
             task.item.status = "queued".to_owned();
+            task.item.phase = "queued".to_owned();
             task.item.message = "Waiting to resume".to_owned();
         }
         emit_youtube_downloads(&app);
@@ -3053,6 +3557,7 @@ async fn youtube_download_cancel(
                 return Ok(());
             }
             task.item.status = "cancelled".to_owned();
+            task.item.phase = "cancelled".to_owned();
             task.item.message = "Cancelled".to_owned();
             task.process_id
         };
@@ -3109,6 +3614,7 @@ fn start_youtube_download_workers(app: AppHandle) {
                 .tasks
                 .iter()
                 .filter(|task| task.item.status == "queued")
+                .filter(|task| !task.in_flight)
                 .count();
             let available = MAX_CONCURRENT_YOUTUBE_DOWNLOADS.saturating_sub(manager.active_workers);
             let count = queued.min(available);
@@ -3133,10 +3639,18 @@ fn youtube_download_worker(app: AppHandle) {
             if let Some(task) = manager
                 .tasks
                 .iter_mut()
-                .find(|task| task.item.status == "queued")
+                .find(|task| task.item.status == "queued" && !task.in_flight)
             {
+                task.in_flight = true;
                 task.item.status = "downloading".to_owned();
-                task.item.message.clear();
+                task.item.phase = "preparing".to_owned();
+                task.item.percent = None;
+                task.item.downloaded_bytes = None;
+                task.item.total_bytes = None;
+                task.item.total_bytes_estimated = false;
+                task.item.speed_bytes_per_second = None;
+                task.item.eta_seconds = None;
+                task.item.message = "Starting download…".to_owned();
                 Some((task.item.id.clone(), task.item.url.clone()))
             } else {
                 manager.active_workers = manager.active_workers.saturating_sub(1);
@@ -3167,20 +3681,25 @@ fn youtube_download_worker(app: AppHandle) {
             if let Ok(mut manager) = state.0.lock() {
                 if let Some(task) = manager.tasks.iter_mut().find(|task| task.item.id == id) {
                     task.process_id = None;
+                    task.in_flight = false;
                     if task.item.status == "downloading" {
                         match result {
                             Ok((final_bytes, file_paths)) => {
                                 task.item.status = "completed".to_owned();
+                                task.item.phase = "completed".to_owned();
                                 task.item.percent = Some(100.0);
+                                task.item.speed_bytes_per_second = None;
+                                task.item.eta_seconds = None;
                                 task.item.file_paths = file_paths;
                                 if let Some(bytes) = final_bytes {
                                     task.item.downloaded_bytes = Some(bytes);
                                     task.item.total_bytes = Some(bytes);
                                 }
-                                task.item.message = "Saved to Music/YouTube".to_owned();
+                                task.item.message = "Ready to play".to_owned();
                             }
                             Err(error) => {
                                 task.item.status = "failed".to_owned();
+                                task.item.phase = "failed".to_owned();
                                 task.item.message = error;
                             }
                         }
@@ -3252,6 +3771,22 @@ fn youtube_download_file_size(path: &Path) -> Result<u64, String> {
 }
 
 #[cfg(not(target_os = "android"))]
+fn youtube_download_is_active(app: &AppHandle, id: &str) -> bool {
+    app.state::<YoutubeDownloadState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|manager| {
+            manager
+                .tasks
+                .iter()
+                .find(|task| task.item.id == id)
+                .map(|task| task.item.status == "downloading")
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "android"))]
 fn run_youtube_download(
     app: &AppHandle,
     id: &str,
@@ -3262,13 +3797,22 @@ fn run_youtube_download(
     let yt_dlp = bundled_desktop_tool(app, "yt-dlp")?;
     let ffmpeg = desktop_mp3_ffmpeg(app)?;
     let deno = bundled_desktop_tool(app, "deno")?;
-    let output_template = directory.join("%(title).180B.%(ext)s");
-    let mut child = hidden_command(yt_dlp)
+    let output_template = directory.join("%(title).160B [%(id)s].%(ext)s");
+    let mut command = hidden_command(yt_dlp);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .arg("--ignore-config")
         .arg("--encoding")
         .arg("utf-8")
+        .arg("--no-colors")
         .arg("--newline")
         .arg("--progress")
+        .arg("--progress-template")
+        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
         .arg("--continue")
         .arg(if is_playlist {
             "--yes-playlist"
@@ -3284,6 +3828,12 @@ fn run_youtube_download(
         .arg("--audio-quality")
         .arg("0")
         .arg("--write-thumbnail")
+        .arg("--write-subs")
+        .arg("--write-auto-subs")
+        .arg("--sub-langs")
+        .arg("en.*")
+        .arg("--sub-format")
+        .arg("vtt")
         .arg("--ffmpeg-location")
         .arg(ffmpeg)
         .arg("--js-runtimes")
@@ -3338,9 +3888,75 @@ fn run_youtube_download(
     let tail = stderr_tail.clone();
     let app_for_stderr = app.clone();
     let task_id = id.to_owned();
+    let audio_transfer = Arc::new(AtomicBool::new(false));
+    let audio_transfer_stderr = audio_transfer.clone();
     let stderr_reader = std::thread::spawn(move || {
+        let mut playlist_position = None;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if !report_youtube_progress(&app_for_stderr, &task_id, &line) {
+            if let Some(position) = line.split_once("Downloading item").map(|(_, value)| value) {
+                let mut fields = position.split_whitespace();
+                let current = fields.next().and_then(|value| value.parse::<usize>().ok());
+                let is_of = fields.next() == Some("of");
+                let total = fields.next().and_then(|value| value.parse::<usize>().ok());
+                if is_of {
+                    playlist_position = current.zip(total).filter(|(_, total)| *total > 0);
+                }
+            }
+            if let Some(destination) = line.trim().strip_prefix("[download] Destination:") {
+                let extension = Path::new(destination.trim())
+                    .extension()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let current_is_audio = matches!(
+                    extension.as_str(),
+                    "webm" | "m4a" | "mp3" | "opus" | "ogg" | "aac" | "flac" | "wav"
+                );
+                audio_transfer_stderr.store(current_is_audio, Ordering::Relaxed);
+                if current_is_audio {
+                    set_youtube_download_phase(
+                        &app_for_stderr,
+                        &task_id,
+                        "downloading",
+                        "Downloading audio…",
+                    );
+                } else if extension == "vtt" {
+                    set_youtube_download_phase(
+                        &app_for_stderr,
+                        &task_id,
+                        "lyrics",
+                        "Fetching synced lyrics…",
+                    );
+                }
+            } else if line.starts_with("[youtube]") {
+                set_youtube_download_phase(
+                    &app_for_stderr,
+                    &task_id,
+                    "fetching",
+                    "Getting song information…",
+                );
+            } else if line.contains("[ExtractAudio]") {
+                set_youtube_download_phase(
+                    &app_for_stderr,
+                    &task_id,
+                    "processing",
+                    "Processing audio…",
+                );
+            } else if line.contains("[Metadata]") || line.contains("[EmbedThumbnail]") {
+                set_youtube_download_phase(
+                    &app_for_stderr,
+                    &task_id,
+                    "metadata",
+                    "Adding artwork and metadata…",
+                );
+            }
+            if !report_youtube_progress(
+                &app_for_stderr,
+                &task_id,
+                &line,
+                audio_transfer_stderr.load(Ordering::Relaxed),
+                playlist_position,
+            ) {
                 if let Ok(mut lines) = tail.lock() {
                     lines.push(line);
                     if lines.len() > 100 {
@@ -3352,6 +3968,7 @@ fn run_youtube_download(
     });
     let mut output_paths = Vec::<PathBuf>::new();
     let mut output_error = None;
+    let mut playlist_position = None;
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines() {
             let line = match line {
@@ -3363,10 +3980,40 @@ fn run_youtube_download(
                     break;
                 }
             };
+            if let Some(destination) = line.trim().strip_prefix("[download] Destination:") {
+                let extension = Path::new(destination.trim())
+                    .extension()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                audio_transfer.store(
+                    matches!(
+                        extension.as_str(),
+                        "webm" | "m4a" | "mp3" | "opus" | "ogg" | "aac" | "flac" | "wav"
+                    ),
+                    Ordering::Relaxed,
+                );
+            }
+            if let Some(position) = line.split_once("Downloading item").map(|(_, value)| value) {
+                let mut fields = position.split_whitespace();
+                let current = fields.next().and_then(|value| value.parse::<usize>().ok());
+                let is_of = fields.next() == Some("of");
+                let total = fields.next().and_then(|value| value.parse::<usize>().ok());
+                if is_of {
+                    playlist_position = current.zip(total).filter(|(_, total)| *total > 0);
+                }
+            }
+            let _ = report_youtube_progress(
+                app,
+                id,
+                &line,
+                audio_transfer.load(Ordering::Relaxed),
+                playlist_position,
+            );
             match youtube_download_file_path(&line) {
                 Ok(Some(path)) => output_paths.push(path),
                 Ok(None) => {
-                    report_youtube_progress(app, id, &line);
+                    // stdout carries the saved-file marker; transfer progress is read from stderr.
                 }
                 Err(error) => {
                     output_error.get_or_insert(error);
@@ -3379,6 +4026,10 @@ fn run_youtube_download(
     })?;
     let _ = stderr_reader.join();
     if status.success() {
+        if !youtube_download_is_active(app, id) {
+            return Err("The download was stopped.".to_owned());
+        }
+        set_youtube_download_phase(app, id, "verifying", "Verifying downloaded MP3…");
         if let Some(error) = output_error {
             return Err(error);
         }
@@ -3390,13 +4041,30 @@ fn run_youtube_download(
         }
         let mut final_bytes = 0_u64;
         for path in &output_paths {
+            if !youtube_download_is_active(app, id) {
+                return Err("The download was stopped.".to_owned());
+            }
             // Verify the audio before optional artwork work so a bad path or
             // inaccessible file is reported without attempting to rewrite it.
             youtube_download_file_size(path)?;
+            if has_downloaded_lyrics(path) {
+                set_youtube_download_phase(app, id, "lyrics", "Fetching and embedding lyrics…");
+            }
+            attach_downloaded_lyrics(path);
             if let Some(thumbnail) = thumbnail_for_audio(path) {
+                set_youtube_download_phase(
+                    app,
+                    id,
+                    "metadata",
+                    "Adding artwork and song information…",
+                );
                 if embed_thumbnail_in_mp3(path, &thumbnail).is_ok() {
                     let _ = std::fs::remove_file(thumbnail);
                 }
+            }
+            set_youtube_download_phase(app, id, "saving", "Adding song to your library…");
+            if !youtube_download_is_active(app, id) {
+                return Err("The download was stopped.".to_owned());
             }
             final_bytes = final_bytes.saturating_add(youtube_download_file_size(path)?);
         }
@@ -3450,7 +4118,8 @@ fn run_youtube_download(
 fn stop_download_process(pid: u32) {
     let _ = hidden_command("kill")
         .arg("-TERM")
-        .arg(pid.to_string())
+        .arg("--")
+        .arg(format!("-{pid}"))
         .status();
 }
 
@@ -3617,6 +4286,293 @@ fn library_cached_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Strin
             })
     })
     .collect()
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackMetadataEdit {
+    title: String,
+    artist: String,
+    album: String,
+    release_date: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackMetadataUpdateResult {
+    track: Track,
+    saved_to_file: bool,
+    write_error: Option<String>,
+}
+
+#[tauri::command]
+async fn library_update_track_metadata(
+    track_id: u64,
+    metadata: TrackMetadataEdit,
+    state: State<'_, AppState>,
+    bridge: State<'_, MediaBridge>,
+) -> Result<TrackMetadataUpdateResult, String> {
+    let title = metadata.title.trim();
+    let artist = metadata.artist.trim();
+    let album = metadata.album.trim();
+    let release_date = metadata.release_date.trim();
+    if title.is_empty() || artist.is_empty() || album.is_empty() {
+        return Err("Title, artist, and album are required.".to_owned());
+    }
+    if [title, artist, album, release_date]
+        .iter()
+        .any(|value| value.len() > 500 || value.chars().any(char::is_control))
+    {
+        return Err("Metadata contains unsupported characters or is too long.".to_owned());
+    }
+    let metadata = TrackMetadataEdit {
+        title: title.to_owned(),
+        artist: artist.to_owned(),
+        album: album.to_owned(),
+        release_date: release_date.to_owned(),
+    };
+
+    #[cfg(target_os = "android")]
+    {
+        let path = {
+            let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
+            core.tracks
+                .get(core.find_track_index(track_id)?)
+                .map(|track| track.path.to_string_lossy().into_owned())
+                .ok_or_else(|| "The song is no longer in the library.".to_owned())?
+        };
+        let plugin = android_media_plugin(&bridge)?;
+        let _: serde_json::Value = call_android_media(
+            plugin,
+            "requestMetadataWriteAccess",
+            serde_json::json!({ "path": path }),
+        )
+        .await?;
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = &bridge;
+
+    let mut core = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?;
+    let index = core.find_track_index(track_id)?;
+    let existing = &core.tracks[index];
+    let path = existing.path.clone();
+    if !path.is_file() {
+        return Err("This song's file is unavailable for editing.".to_owned());
+    }
+    let root = PathBuf::from(&existing.track.root_path);
+    let previous_added_at = existing.track.added_at;
+    let previous_artwork = existing.artwork.clone();
+    let mut tagged = Probe::open(&path)
+        .and_then(|probe| probe.read())
+        .map_err(|error| format!("Could not read song metadata: {error}"))?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(tagged.primary_tag_type()));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .ok_or("This audio format does not support editable tags.")?;
+    tag.insert_text(ItemKey::TrackTitle, title.to_owned());
+    tag.insert_text(ItemKey::TrackArtist, artist.to_owned());
+    tag.insert_text(ItemKey::AlbumTitle, album.to_owned());
+    tag.remove_key(ItemKey::ReleaseDate);
+    tag.remove_key(ItemKey::RecordingDate);
+    if !release_date.is_empty() {
+        tag.insert_text(ItemKey::ReleaseDate, release_date.to_owned());
+    }
+    #[cfg(target_os = "android")]
+    let mut write_error = None;
+    #[cfg(not(target_os = "android"))]
+    let write_error: Option<String> = None;
+    #[cfg(target_os = "android")]
+    let saved_to_file = match tag.save_to_path(&path, WriteOptions::default()) {
+        Ok(()) => true,
+        Err(_direct_write_error) => {
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("audio");
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let temp_path = core.storage_dir.join(format!(
+                ".michoplay-metadata-{track_id}-{stamp}.{extension}"
+            ));
+            let prepared = (|| -> Result<(), String> {
+                fs::copy(&path, &temp_path)
+                    .map_err(|error| format!("Could not prepare the song file: {error}"))?;
+                tag.save_to_path(&temp_path, WriteOptions::default())
+                    .map_err(|error| format!("Could not edit song metadata: {error}"))?;
+                let plugin = android_media_plugin(&bridge)?;
+                plugin
+                    .run_mobile_plugin::<()>(
+                        "writeMetadataFile",
+                        serde_json::json!({ "path": path, "tempPath": temp_path }),
+                    )
+                    .map_err(|error| error.to_string())
+            })();
+            let _ = fs::remove_file(&temp_path);
+            match prepared {
+                Ok(()) => true,
+                Err(error) => {
+                    write_error = Some(error);
+                    false
+                }
+            }
+        }
+    };
+    #[cfg(not(target_os = "android"))]
+    let saved_to_file = {
+        let _ = &bridge;
+        tag.save_to_path(&path, WriteOptions::default())
+            .map_err(|error| format!("Could not save song metadata: {error}"))?;
+        true
+    };
+
+    let mut refreshed = if saved_to_file {
+        read_track(&path, track_id, &root, previous_artwork)
+    } else {
+        existing.clone()
+    };
+    if !saved_to_file {
+        apply_metadata_edit(&mut refreshed.track, &metadata);
+    }
+    refreshed.track.added_at = previous_added_at;
+    let track = refreshed.track.clone();
+    let file_metadata =
+        fs::metadata(&path).map_err(|error| format!("Could not inspect edited song: {error}"))?;
+    let modified_at = file_metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|time| time.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default();
+    let artwork_mime = refreshed.artwork.as_ref().map(|art| art.mime.clone());
+    let track_json = serde_json::to_string(&track).map_err(|error| error.to_string())?;
+    let _cache_write = LIBRARY_CACHE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "The library cache is unavailable.".to_owned())?;
+    let mut connection = open_library_cache(&core.storage_dir)
+        .map_err(|error| format!("Could not update the library cache: {error}"))?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not update the library cache: {error}"))?;
+    if saved_to_file {
+        transaction
+            .execute(
+                "DELETE FROM track_metadata_overrides WHERE path = ?1",
+                [&track.path],
+            )
+            .map_err(|error| format!("Could not update the library cache: {error}"))?;
+    } else {
+        transaction
+            .execute(
+                "INSERT INTO track_metadata_overrides(path, title, artist, album, release_date)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(path) DO UPDATE SET title = excluded.title, artist = excluded.artist,
+               album = excluded.album, release_date = excluded.release_date",
+                params![
+                    track.path,
+                    track.title,
+                    track.artist,
+                    track.album,
+                    track.release_date
+                ],
+            )
+            .map_err(|error| format!("Could not save metadata in MichoPlay: {error}"))?;
+    }
+    transaction.execute(
+        "INSERT INTO tracks(path, root_path, title, artist, album, folder_path, file_size, modified_at, track_json, artwork_mime)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(path) DO UPDATE SET title = excluded.title, artist = excluded.artist,
+           album = excluded.album, file_size = excluded.file_size, modified_at = excluded.modified_at,
+           track_json = excluded.track_json, artwork_mime = excluded.artwork_mime",
+        params![track.path, track.root_path, track.title, track.artist, track.album,
+            track.folder_path, file_metadata.len().min(i64::MAX as u64) as i64,
+            modified_at, track_json, artwork_mime],
+    ).map_err(|error| format!("Could not update the library cache: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not update the library cache: {error}"))?;
+    if let (Some(key), Some(artwork)) = (&track.artwork_key, &refreshed.artwork) {
+        core.artwork_by_key.insert(key.clone(), artwork.clone());
+    }
+    core.tracks[index] = refreshed;
+    Ok(TrackMetadataUpdateResult {
+        track,
+        saved_to_file,
+        write_error,
+    })
+}
+
+#[tauri::command]
+async fn library_delete_track(
+    track_id: u64,
+    state: State<'_, AppState>,
+    bridge: State<'_, MediaBridge>,
+) -> Result<Vec<Track>, String> {
+    let (path, roots, storage_dir) = {
+        let core = state
+            .0
+            .lock()
+            .map_err(|_| "The library is unavailable.".to_owned())?;
+        let item = &core.tracks[core.find_track_index(track_id)?];
+        (
+            item.path.clone(),
+            core.roots.clone(),
+            core.storage_dir.clone(),
+        )
+    };
+    if !path.is_file() {
+        return Err("This song's file is no longer available.".to_owned());
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        let _: serde_json::Value = call_android_media(
+            plugin,
+            "deleteAudioFile",
+            serde_json::json!({ "path": path.to_string_lossy() }),
+        )
+        .await?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = &bridge;
+        fs::remove_file(&path)
+            .map_err(|error| format!("Could not delete the song file: {error}"))?;
+    }
+
+    let scan_roots = roots.clone();
+    let scan_storage = storage_dir.clone();
+    let tracks = tauri::async_runtime::spawn_blocking(move || {
+        scan_roots_with_progress(&scan_roots, &scan_storage, |_, _, _| {})
+    })
+    .await
+    .map_err(|_| "The library scan could not be completed.".to_owned())??;
+
+    let mut core = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?;
+    let playing_track = core
+        .current_queue_index
+        .and_then(|index| core.queue.get(index))
+        .copied();
+    if playing_track == Some(track_id) {
+        if let Some(sink) = core.sink.take() {
+            sink.stop();
+        }
+        core.output = None;
+        core.is_playing = false;
+        core.resume_after_interruption = false;
+        core.current_queue_index = None;
+    }
+    Ok(core.replace_library(roots, tracks))
 }
 
 #[cfg_attr(target_os = "android", tauri::command(async))]
@@ -4299,6 +5255,8 @@ pub fn run() {
             youtube_download_cancel,
             youtube_download_remove,
             library_scan_folder,
+            lyrics_read,
+            embed_downloaded_lyrics,
             library_cancel_scan,
             library_refresh,
             library_saved_roots,
@@ -4306,6 +5264,8 @@ pub fn run() {
             app_data_migrate,
             app_data_save,
             library_cached_tracks,
+            library_update_track_metadata,
+            library_delete_track,
             library_remove_folder,
             library_artwork,
             take_pending_audio_opens,
@@ -4340,6 +5300,60 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloaded_lyrics_are_embedded_and_read_from_mp3() {
+        let root = std::env::temp_dir().join(format!(
+            "michoplay-lyrics-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let audio = root.join("song.mp3");
+        let sidecar = root.join("song.en.lrc");
+        let lyrics = "[00:01.20]First line\n[00:03.40]Second line\n";
+        fs::write(&audio, include_bytes!("../fixtures/silence.mp3")).unwrap();
+        fs::write(&sidecar, lyrics).unwrap();
+
+        attach_downloaded_lyrics(&audio);
+        assert!(!sidecar.exists());
+        assert!(track_has_lyrics(&audio));
+        assert_eq!(embedded_lyrics(&audio).as_deref(), Some(lyrics));
+
+        let pending = pending_lyrics_path(&audio);
+        fs::write(&pending, "[00:05.00]Updated line\n").unwrap();
+        assert_eq!(
+            embed_downloaded_lyrics(vec![audio.to_string_lossy().into_owned()]),
+            vec![audio.to_string_lossy().into_owned()]
+        );
+        assert!(!pending.exists());
+        assert_eq!(
+            embedded_lyrics(&audio).as_deref(),
+            Some("[00:05.00]Updated line\n")
+        );
+
+        let vtt_audio = root.join("captions.mp3");
+        let vtt_sidecar = root.join("captions.en.vtt");
+        fs::write(&vtt_audio, include_bytes!("../fixtures/silence.mp3")).unwrap();
+        fs::write(&vtt_sidecar, "WEBVTT\n\n00:00:01.042 --> 00:00:04.045\n<c>First &amp; second</c>\nline\n\n00:00:07.257 --> 00:00:12.846\nNext line\n").unwrap();
+        attach_downloaded_lyrics(&vtt_audio);
+        assert!(!vtt_sidecar.exists());
+        assert_eq!(
+            embedded_lyrics(&vtt_audio).as_deref(),
+            Some("[00:01.04]First & second line\n[00:07.25]Next line\n")
+        );
+
+        let invalid_audio = root.join("invalid.mp3");
+        let retained_sidecar = root.join("invalid.en.lrc");
+        fs::write(&invalid_audio, b"not an MP3").unwrap();
+        fs::write(&retained_sidecar, lyrics).unwrap();
+        attach_downloaded_lyrics(&invalid_audio);
+        assert!(retained_sidecar.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(not(target_os = "android"))]
     #[test]
@@ -4468,6 +5482,7 @@ mod tests {
                     root_path: "/music".into(),
                     folders: vec![],
                     artwork_key: None,
+                    has_lyrics: false,
                 },
                 path: PathBuf::from(format!("/music/{id}.wav")),
                 artwork: None,

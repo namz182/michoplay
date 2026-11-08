@@ -1,5 +1,4 @@
 import { AudioLines, Disc3, FolderOpen, ListMusic, Pause, Play } from "lucide-react";
-import { useHorizontalDragScroll } from "./useHorizontalDragScroll";
 import type { Track } from "../../lib/api";
 import { Cover } from "../../app/Artwork";
 
@@ -9,8 +8,7 @@ const coverKeys = (tracks: Track[]) => tracks.map((track) => track.artworkKey);
 
 export function CollectionGrid({ collections, kind, onOpen, onPlay, isCurrentCollection, playingId, isPlaying = false }: { collections: Collection[]; kind: CollectionKind; onOpen: (collection: Collection) => void; onPlay?: (collection: Collection) => void; isCurrentCollection?: (collection: Collection) => boolean; playingId?: number | null; isPlaying?: boolean }) {
   const icon = kind === "folder" ? <FolderOpen size={30}/> : kind === "artist" ? <AudioLines size={30}/> : kind === "playlist" ? <ListMusic size={30}/> : <Disc3 size={30}/>;
-  const dragScroll = useHorizontalDragScroll();
-  return <div ref={dragScroll.scrollRef} className={`media-grid collection-grid ${kind}-grid`} onPointerDown={dragScroll.onPointerDown} onPointerMove={dragScroll.onPointerMove} onPointerUp={dragScroll.onPointerUp} onPointerCancel={dragScroll.onPointerCancel} onClickCapture={dragScroll.onClickCapture}>{collections.map((item) => {
+  return <div className={`media-grid collection-grid ${kind}-grid`}>{collections.map((item) => {
     const active = isCurrentCollection ? isCurrentCollection(item) : item.tracks.some((track) => track.id === playingId);
     return <article className={`media-card ${kind}-card ${active ? "playing" : ""}`} key={item.key}>
       <button className="collection-open" onClick={() => onOpen(item)} aria-label={`Open ${item.title}`}><Cover className="card-cover" keys={coverKeys(item.tracks)} icon={icon}/>{kind === "folder" && <span className="collection-kind-label">Folder</span>}<strong title={item.title}>{item.title}</strong><small>{item.subtitle && kind === "album" ? `${item.subtitle} · ` : ""}{item.tracks.length} songs</small></button>

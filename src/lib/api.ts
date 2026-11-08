@@ -4,6 +4,7 @@ export type Folder = { path: string; name: string };
 export type Track = {
   id: number; path: string; title: string; artist: string; album: string; releaseDate: string; addedAt: number; durationMs: number;
   folderPath: string; folderName: string; rootPath: string; folders: Folder[]; artworkKey: string | null;
+  hasLyrics: boolean;
 };
 export type PlayerSnapshot = {
   currentTrackId: number | null; isPlaying: boolean; positionMs: number; durationMs: number;
@@ -12,8 +13,9 @@ export type PlayerSnapshot = {
   sleepTimerRemainingMs: number | null; sleepTimerAtTrackEnd: boolean;
   equalizerBands: number[]; equalizerEnabled: boolean;
 };
-export type YoutubeSearchResult = { id: string; title: string; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean };
-export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string; filePaths?: string[] };
+export type YoutubeSearchResult = { id: string; title: string; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean; hasLyrics: boolean };
+export type YoutubeDownloadPhase = "queued" | "preparing" | "fetching" | "downloading" | "processing" | "metadata" | "lyrics" | "verifying" | "saving" | "paused" | "completed" | "failed" | "cancelled";
+export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; phase: YoutubeDownloadPhase; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; totalBytesEstimated: boolean; speedBytesPerSecond: number | null; etaSeconds: number | null; message: string; filePaths?: string[] };
 export const api = {
   appDataLoad: () => invoke<Record<string, string>>("app_data_load"),
   appDataMigrate: (entries: Record<string, string>) => invoke<void>("app_data_migrate", { entries }),
@@ -33,7 +35,7 @@ export const api = {
   shareText: (title: string, text: string, url: string) => invoke<void>("media_share_text", { title, text, url }),
   youtubeMusicDirectory: () => invoke<string>("youtube_music_directory"),
   pickMusicFolder: () => invoke<{ path: string; count: number; name: string }>("library_pick_music_folder"),
-  youtubeSearch: (query: string, limit = 15, offset = 0) => invoke<YoutubeSearchResult[]>("youtube_search", { query, limit, offset }),
+  youtubeSearch: (query: string, limit = 15, offset = 0, includeLyrics = false) => invoke<YoutubeSearchResult[]>("youtube_search", { query, limit, offset, includeLyrics }),
   youtubeDownloadsState: () => invoke<YoutubeDownload[]>("youtube_downloads_state"),
   youtubeDownloadEnqueue: (url: string, title: string, thumbnail: string | null, isPlaylist: boolean) => invoke<YoutubeDownload>("youtube_download_enqueue", { url, title, thumbnail, isPlaylist }),
   youtubeDownloadPause: (id: string) => invoke<void>("youtube_download_pause", { id }),
@@ -49,10 +51,14 @@ export const api = {
     artworkDataUrl: artworkDataUrl ?? null,
   }),
   mediaStop: () => invoke<void>("media_stop"),
+  lyricsRead: (trackId: number) => invoke<string | null>("lyrics_read", { trackId }),
+  embedDownloadedLyrics: (paths: string[]) => invoke<string[]>("embed_downloaded_lyrics", { paths }),
   mediaTakePendingActions: () => invoke<string[]>("media_take_pending_actions"),
   refresh: (folders: string[]) => invoke<Track[]>("library_refresh", { folders }),
   librarySavedRoots: () => invoke<string[]>("library_saved_roots"),
   cachedTracks: () => invoke<Track[]>("library_cached_tracks"),
+  updateTrackMetadata: (trackId: number, metadata: Pick<Track, "title" | "artist" | "album" | "releaseDate">) => invoke<{ track: Track; savedToFile: boolean; writeError?: string | null }>("library_update_track_metadata", { trackId, metadata }),
+  deleteTrack: (trackId: number) => invoke<Track[]>("library_delete_track", { trackId }),
   removeFolder: (folder: string) => invoke<Track[]>("library_remove_folder", { folder }),
   artwork: (artworkKey: string) => invoke<string | null>("library_artwork", { artworkKey }),
   state: () => invoke<PlayerSnapshot>("player_state"),
