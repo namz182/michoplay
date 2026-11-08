@@ -25,17 +25,34 @@ export function youtubeDownloadProgressText(item: YoutubeDownload) {
     return item.message.trim();
   }
   const percent = item.percent !== null ? `${Number(item.percent.toFixed(1))}%` : null;
-  if (totalBytes === null) return percent ? `${percent} · Pending` : "Pending";
+  const speed = item.speedBytesPerSecond !== null && item.speedBytesPerSecond > 0
+    ? `${formatYoutubeFileSize(item.speedBytesPerSecond)}/s` : null;
+  const eta = item.etaSeconds !== null && item.etaSeconds >= 0
+    ? `ETA ${formatDownloadEta(item.etaSeconds)}` : null;
+  if (item.status === "downloading" && /^Track \d+ of \d+ ·/.test(item.message)) {
+    return [percent, item.message, speed, eta].filter(Boolean).join(" · ");
+  }
+  if (totalBytes === null) {
+    return [percent, downloadedBytes === null ? null : `${formatYoutubeFileSize(downloadedBytes)} transferred`, speed, eta]
+      .filter(Boolean).join(" · ") || "Pending";
+  }
   const parts: string[] = [];
   if (percent) parts.push(percent);
   if (downloadedBytes !== null) {
-    parts.push(`${formatYoutubeFileSize(downloadedBytes)} / ${formatYoutubeFileSize(totalBytes)}`);
+    parts.push(`${formatYoutubeFileSize(downloadedBytes)} / ${item.totalBytesEstimated ? "~" : ""}${formatYoutubeFileSize(totalBytes)}`);
   } else {
     parts.push(formatYoutubeFileSize(totalBytes));
   }
-  const speed = item.message.match(/^\s*([\d.]+\s*(?:B|[KMGT]?i?B)\/s)\s*$/i)?.[1]?.replace(/\s+/g, "");
   if (speed) parts.push(speed);
+  if (eta) parts.push(eta);
   return parts.join(" · ");
+}
+
+function formatDownloadEta(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remaining = seconds % 60;
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}` : `${minutes}:${String(remaining).padStart(2, "0")}`;
 }
 
 const youtubeDownloadMessages = {

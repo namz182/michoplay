@@ -491,7 +491,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.reject("Allow storage access, then tap Download again.")
       return
     }
-    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>())
+    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "phase" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "totalBytesEstimated" to false, "speedBytesPerSecond" to null, "etaSeconds" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>())
     downloads.add(item); emitDownloads(); invoke.resolveObject(item); startQueuedDownloads()
   }
 
@@ -502,7 +502,14 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         else downloads.firstOrNull { it["status"] == "queued" }?.also {
           activeDownloads.incrementAndGet()
           it["status"] = "downloading"
-          it["message"] = ""
+          it["phase"] = "preparing"
+          it["percent"] = null
+          it["downloadedBytes"] = null
+          it["totalBytes"] = null
+          it["totalBytesEstimated"] = false
+          it["speedBytesPerSecond"] = null
+          it["etaSeconds"] = null
+          it["message"] = "Starting download…"
         }
       } ?: return
       emitDownloads()
@@ -525,28 +532,32 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
             executeYoutubeAudioDownload(item, staging)
           }
           if (item["status"] == "downloading") {
+            item["phase"] = "verifying"; item["message"] = "Checking the downloaded audio…"; emitDownloads()
             val audioFiles = staging.walkTopDown().filter { it.isFile && it.extension.equals("mp3", ignoreCase = true) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
             val filePaths = audioFiles.map { audio ->
               val lyric = staging.walkTopDown().firstOrNull { file -> file.isFile && (file.extension.equals("lrc", true) || file.extension.equals("vtt", true)) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
               if (lyric != null) {
+                item["phase"] = "lyrics"; item["message"] = "Fetching and embedding lyrics…"; emitDownloads()
                 val text = lyric.readText()
                 val synchronizedLyrics = if (lyric.extension.equals("vtt", true)) vttToLrc(text) else text
                 if (synchronizedLyrics.isNotBlank() && !embedLyricsInMp3(audio, synchronizedLyrics)) {
                   throw IllegalStateException("Could not embed the downloaded lyrics in the MP3.")
                 }
               }
+              item["phase"] = "saving"; item["message"] = "Saving audio to Music…"; emitDownloads()
               publishAudioToMusic(audio)
             }
             val finalBytes = audioFiles.sumOf { it.length() }
             item["downloadedBytes"] = finalBytes; item["totalBytes"] = finalBytes
+            item["speedBytesPerSecond"] = null; item["etaSeconds"] = null
             item["filePaths"] = filePaths
-            item["status"] = "completed"; item["percent"] = 100.0; item["message"] = "Saved to Music/MichoPlay/YouTube"
+            item["status"] = "completed"; item["phase"] = "completed"; item["percent"] = 100.0; item["message"] = "Ready to play"
           }
         } catch (error: Exception) {
           // A pause followed quickly by resume changes the item to queued before
           // this process exits. Do not let the old worker overwrite that request.
-          if (item["status"] == "downloading") { item["status"] = "failed"; item["message"] = error.message ?: "Download failed" }
+          if (item["status"] == "downloading") { item["status"] = "failed"; item["phase"] = "failed"; item["message"] = error.message ?: "Download failed" }
         } finally {
           if (item["status"] == "completed" || item["status"] == "cancelled") staging.deleteRecursively()
           activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads()
@@ -557,7 +568,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File) {
     val request = YoutubeDLRequest(item["url"] as String)
-    request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
+    request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
+    request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s")
     if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
     request.addOption("--playlist-end", "100")
     // The app only needs an audio stream; selecting `best` can return a
@@ -566,28 +578,71 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
     request.addOption("--write-subs"); request.addOption("--write-auto-subs"); request.addOption("--sub-langs", "en.*"); request.addOption("--sub-format", "vtt")
     request.addOption("--embed-thumbnail")
-    request.addOption("-o", File(staging, "%(title).180B.%(ext)s").absolutePath)
+    request.addOption("-o", File(staging, "%(title).160B [%(id)s].%(ext)s").absolutePath)
     val downloadProgress = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%")
     val sizeProgress = Regex("of\\s+~?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)", RegexOption.IGNORE_CASE)
+    val speedProgress = Regex("at\\s+([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)/s", RegexOption.IGNORE_CASE)
+    val etaProgress = Regex("ETA\\s+(\\d{1,2}:\\d{2}(?::\\d{2})?)")
+    val playlistItem = Regex("Downloading item\\s+(\\d+)\\s+of\\s+(\\d+)")
+    var playlistPosition: Pair<Int, Int>? = null
+    var isAudioTransfer = false
     YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
       if (item["status"] == "downloading") {
+        playlistItem.find(line)?.let { match ->
+          val current = match.groupValues[1].toIntOrNull()
+          val total = match.groupValues[2].toIntOrNull()
+          if (current != null && total != null && total > 0) playlistPosition = current to total
+        }
+        val destination = Regex("^\\[download\\] Destination:\\s*(.+)$").find(line)?.groupValues?.get(1)?.trim()
+        if (destination != null) {
+          val extension = destination.substringAfterLast('.', "").substringBefore('?').lowercase()
+          isAudioTransfer = extension in setOf("webm", "m4a", "mp3", "opus", "ogg", "aac", "flac", "wav")
+          if (isAudioTransfer) { item["phase"] = "downloading"; item["message"] = "Downloading audio…"; emitDownloads() }
+          else if (extension == "vtt") { item["phase"] = "lyrics"; item["message"] = "Fetching synced lyrics…"; emitDownloads() }
+        }
+        when {
+          line.startsWith("[youtube]") -> { item["phase"] = "fetching"; item["message"] = "Getting song information…"; emitDownloads() }
+          "[ExtractAudio]" in line -> { item["phase"] = "processing"; item["message"] = "Processing audio…"; emitDownloads() }
+          "[Metadata]" in line || "[EmbedThumbnail]" in line -> { item["phase"] = "metadata"; item["message"] = "Adding artwork and song information…"; emitDownloads() }
+        }
         val progressMatch = downloadProgress.find(line)
-        if (progressMatch != null) {
-          // yt-dlp can emit a new 0–100% sequence for subtitles, thumbnails,
-          // and the audio itself. Reserve completion for validated saved MP3s.
-          val reportedPercent = (progressMatch.groupValues[1].toDoubleOrNull() ?: progress.toDouble()).coerceIn(0.0, 99.0)
+        val template = line.substringAfter("__MICHOPLAY_PROGRESS__", "").takeIf { it != line && it.isNotEmpty() }
+        val fields = template?.split('|')
+        val percentValue = fields?.getOrNull(0)?.trim()?.removeSuffix("%")?.toDoubleOrNull()
+          ?: progressMatch?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+          ?: progress.takeIf { it.isFinite() }?.toDouble()
+        if (percentValue != null && isAudioTransfer) {
+          // Ignore caption/artwork transfers so the bar follows the audio stream.
+          val trackPercent = percentValue.coerceIn(0.0, 100.0)
+          val position = playlistPosition
+          val reportedPercent = if (item["isPlaylist"] == true && position != null) {
+            (((position.first - 1) + trackPercent / 100.0) / position.second * 100.0).coerceIn(0.0, 100.0)
+          } else trackPercent
           val percent = maxOf(reportedPercent, (item["percent"] as? Number)?.toDouble() ?: 0.0)
           item["percent"] = percent
           val totalMatch = sizeProgress.find(line)
-          val totalBytes = totalMatch?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
+          val actualTotal = fields?.getOrNull(2)?.toLongOrNull()
+          val estimatedTotal = fields?.getOrNull(3)?.toLongOrNull()
+          val totalBytes = actualTotal ?: estimatedTotal
+            ?: totalMatch?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
+          val estimated = actualTotal == null && (estimatedTotal != null || (fields == null && line.contains("of ~")))
           val previousTotal = (item["totalBytes"] as? Number)?.toLong() ?: 0L
-          if (totalBytes != null && totalBytes >= previousTotal) {
-            item["totalBytes"] = totalBytes
-            val estimate = (totalBytes * percent / 100.0).toLong()
+          if (item["isPlaylist"] == true) {
+            item["downloadedBytes"] = null; item["totalBytes"] = null
+            item["message"] = position?.let { "Track ${it.first} of ${it.second} · ${trackPercent.toInt()}% of this track" } ?: "Downloading audio…"
+          } else {
+            if (totalBytes != null && totalBytes >= previousTotal) {
+              item["totalBytes"] = totalBytes
+              item["totalBytesEstimated"] = estimated
+            }
+            val estimate = fields?.getOrNull(1)?.toLongOrNull() ?: (totalBytes?.let { (it * trackPercent / 100.0).toLong() } ?: 0L)
             val previousDownloaded = (item["downloadedBytes"] as? Number)?.toLong() ?: 0L
-            item["downloadedBytes"] = maxOf(previousDownloaded, estimate).coerceAtMost(totalBytes)
+            item["downloadedBytes"] = maxOf(previousDownloaded, estimate).let { value -> if (estimated || totalBytes == null) value else value.coerceAtMost(totalBytes) }
           }
-          item["message"] = line.substringAfter("[download]").trim()
+          item["speedBytesPerSecond"] = fields?.getOrNull(4)?.toDoubleOrNull()?.toLong()
+            ?: speedProgress.find(line)?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
+          item["etaSeconds"] = fields?.getOrNull(5)?.toLongOrNull() ?: etaProgress.find(line)?.groupValues?.getOrNull(1)?.let(::parseEtaSeconds)
+          if (item["isPlaylist"] != true) item["message"] = line.substringAfter("[download]").trim()
           emitDownloads()
         }
       }
@@ -765,6 +820,12 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     return ((value.toDoubleOrNull() ?: 0.0) * Math.pow(base, power)).toLong()
   }
 
+  private fun parseEtaSeconds(value: String): Long? {
+    val parts = value.split(':').mapNotNull(String::toLongOrNull)
+    if (parts.size !in 2..3) return null
+    return if (parts.size == 3) parts[0] * 3600 + parts[1] * 60 + parts[2] else parts[0] * 60 + parts[1]
+  }
+
   @Synchronized
   private fun initializeDownloader(): Boolean {
     if (downloaderReady) return true
@@ -843,8 +904,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     val id = invoke.parseArgs(YoutubeDownloadArgs::class.java).id
     val item = downloads.firstOrNull { it["id"] == id } ?: run { invoke.reject("Download was not found."); return }
     item["status"] = status
-    if (status == "queued") item["message"] = "Waiting to resume"
-    else if (stop) item["message"] = if (status == "paused") "Paused" else "Cancelled"
+    if (status == "queued") { item["phase"] = "queued"; item["message"] = "Waiting to resume" }
+    else if (stop) { item["phase"] = status; item["message"] = if (status == "paused") "Paused" else "Cancelled" }
     emitDownloads()
     invoke.resolve()
     if (status == "queued") io.execute { startQueuedDownloads() }

@@ -430,6 +430,30 @@ fn attach_downloaded_lyrics(audio_path: &Path) {
     }
 }
 
+#[cfg(not(target_os = "android"))]
+fn has_downloaded_lyrics(audio_path: &Path) -> bool {
+    let Some(parent) = audio_path.parent() else {
+        return false;
+    };
+    let Some(stem) = audio_path.file_stem().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    fs::read_dir(parent)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let path = entry.path();
+            path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("lrc") || ext.eq_ignore_ascii_case("vtt")
+            }) && path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name == stem || name.starts_with(&format!("{stem}.")))
+        })
+}
+
 #[tauri::command]
 fn embed_downloaded_lyrics(paths: Vec<String>) -> Vec<String> {
     let mut embedded = Vec::new();
@@ -2085,10 +2109,6 @@ impl PlayerCore {
     }
 
     fn replace_library(&mut self, roots: Vec<PathBuf>, tracks: Vec<LibraryTrack>) -> Vec<Track> {
-        let mut tracks = tracks;
-        for item in &mut tracks {
-            item.track.has_lyrics = track_has_lyrics(&item.path);
-        }
         let views = tracks.iter().map(|track| track.track.clone()).collect();
         let current_id = self
             .current_queue_index
@@ -2687,9 +2707,17 @@ struct YoutubeDownloadItem {
     thumbnail: Option<String>,
     is_playlist: bool,
     status: String,
+    #[serde(default)]
+    phase: String,
     percent: Option<f32>,
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
+    #[serde(default)]
+    total_bytes_estimated: bool,
+    #[serde(default)]
+    speed_bytes_per_second: Option<u64>,
+    #[serde(default)]
+    eta_seconds: Option<u64>,
     message: String,
     #[serde(default)]
     file_paths: Vec<String>,
@@ -2698,6 +2726,7 @@ struct YoutubeDownloadItem {
 struct YoutubeDownloadTask {
     item: YoutubeDownloadItem,
     process_id: Option<u32>,
+    in_flight: bool,
 }
 
 #[derive(Default)]
@@ -2705,6 +2734,7 @@ struct YoutubeDownloadManager {
     tasks: Vec<YoutubeDownloadTask>,
     next_id: u64,
     active_workers: usize,
+    last_progress_emit: Option<std::time::Instant>,
 }
 
 const MAX_CONCURRENT_YOUTUBE_DOWNLOADS: usize = 3;
@@ -2760,46 +2790,187 @@ fn youtube_progress_size(raw: &str) -> Option<u64> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn report_youtube_progress(app: &AppHandle, id: &str, line: &str) -> bool {
-    let Some(progress) = line.trim().strip_prefix("[download]").map(str::trim) else {
-        return false;
-    };
-    let Some((raw_percent, remainder)) = progress.split_once('%') else {
-        return false;
-    };
-    let Some(percent) = raw_percent
-        .trim()
-        .parse::<f32>()
-        .ok()
-        .filter(|value| value.is_finite())
-    else {
-        return false;
-    };
-    // yt-dlp may report separate 100% transfers for subtitles, thumbnails, and
-    // audio. Keep the task in its active state until the output MP3 is verified.
-    let percent = percent.clamp(0.0, 99.0);
-    let total_bytes = remainder
-        .trim_start()
-        .strip_prefix("of")
-        .and_then(youtube_progress_size);
-    let downloaded_bytes =
-        total_bytes.map(|total| (total as f64 * f64::from(percent) / 100.0) as u64);
+fn parse_youtube_eta(raw: &str) -> Option<u64> {
+    let parts = raw
+        .split(':')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    match parts.as_slice() {
+        [minutes, seconds] => minutes.checked_mul(60)?.checked_add(*seconds),
+        [hours, minutes, seconds] => hours
+            .checked_mul(3600)?
+            .checked_add(minutes.checked_mul(60)?)
+            .and_then(|value| value.checked_add(*seconds)),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn set_youtube_download_phase(app: &AppHandle, id: &str, phase: &str, message: &str) {
+    let mut changed = false;
     if let Ok(mut manager) = app.state::<YoutubeDownloadState>().0.lock() {
-        if let Some(task) = manager.tasks.iter_mut().find(|task| task.item.id == id) {
-            let percent = percent.max(task.item.percent.unwrap_or(0.0));
-            task.item.percent = Some(percent);
-            if let Some(total) = total_bytes.filter(|total| Some(*total) >= task.item.total_bytes) {
-                task.item.total_bytes = Some(total);
-                if let Some(downloaded) = downloaded_bytes {
-                    task.item.downloaded_bytes = Some(
-                        downloaded.max(task.item.downloaded_bytes.unwrap_or(0)).min(total),
-                    );
-                }
+        if let Some(task) = manager
+            .tasks
+            .iter_mut()
+            .find(|task| task.item.id == id && task.item.status == "downloading")
+        {
+            if task.item.phase != phase || task.item.message != message {
+                task.item.phase = phase.to_owned();
+                task.item.message = message.to_owned();
+                changed = true;
             }
-            task.item.message = progress.to_owned();
         }
     }
-    emit_youtube_downloads(app);
+    if changed {
+        emit_youtube_downloads(app);
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn report_youtube_progress(
+    app: &AppHandle,
+    id: &str,
+    line: &str,
+    is_audio_transfer: bool,
+    playlist_position: Option<(usize, usize)>,
+) -> bool {
+    let line = line.trim();
+    let custom_fields = line
+        .strip_prefix("__MICHOPLAY_PROGRESS__")
+        .map(|value| value.split('|').collect::<Vec<_>>());
+    let legacy = line.strip_prefix("[download]").map(str::trim);
+    if custom_fields.is_none() && legacy.is_none() {
+        return false;
+    }
+    let field = |index: usize| {
+        custom_fields
+            .as_ref()
+            .and_then(|fields| fields.get(index))
+            .copied()
+            .unwrap_or_default()
+            .trim()
+    };
+    let legacy_progress = legacy.unwrap_or_default();
+    let legacy_split = legacy_progress.split_once('%');
+    let Some(percent) = custom_fields
+        .as_ref()
+        .and_then(|_| field(0).trim_end_matches('%').parse::<f32>().ok())
+        .or_else(|| legacy_split.and_then(|(value, _)| value.trim().parse::<f32>().ok()))
+        .filter(|value| value.is_finite())
+    else {
+        return true;
+    };
+    if !is_audio_transfer {
+        return true;
+    }
+    // Completion is only reported after MP3 validation; this is transfer progress.
+    let track_percent = percent.clamp(0.0, 100.0);
+    let percent = playlist_position
+        .filter(|(_, total)| *total > 0)
+        .map(|(current, total)| {
+            (((current.saturating_sub(1) as f32 + track_percent / 100.0) / total as f32) * 100.0)
+                .clamp(0.0, 100.0)
+        })
+        .unwrap_or(track_percent);
+    let legacy_remainder = legacy_split
+        .map(|(_, remainder)| remainder)
+        .unwrap_or_default();
+    let total_bytes = field(2)
+        .parse::<u64>()
+        .ok()
+        .or_else(|| field(3).parse::<u64>().ok())
+        .or_else(|| {
+            legacy_remainder
+                .trim_start()
+                .strip_prefix("of")
+                .and_then(youtube_progress_size)
+        });
+    let downloaded_bytes = field(1).parse::<u64>().ok().or_else(|| {
+        total_bytes.map(|total| (total as f64 * f64::from(track_percent) / 100.0) as u64)
+    });
+    let speed_bytes_per_second = field(4)
+        .parse::<f64>()
+        .ok()
+        .map(|speed| speed as u64)
+        .or_else(|| {
+            legacy_remainder
+                .split_once(" at ")
+                .and_then(|(_, value)| youtube_progress_size(value.trim_start().split('/').next()?))
+        });
+    let eta_seconds = field(5).parse::<u64>().ok().or_else(|| {
+        legacy_remainder
+            .split_once("ETA ")
+            .and_then(|(_, eta)| parse_youtube_eta(eta.trim()))
+    });
+    let mut should_emit = false;
+    if let Ok(mut manager) = app.state::<YoutubeDownloadState>().0.lock() {
+        let mut updated = false;
+        let mut force_emit = false;
+        if let Some(task) = manager
+            .tasks
+            .iter_mut()
+            .find(|task| task.item.id == id && task.item.status == "downloading")
+        {
+            let previous_percent = task.item.percent;
+            let percent = percent.max(task.item.percent.unwrap_or(0.0));
+            task.item.percent = Some(percent);
+            task.item.phase = "downloading".to_owned();
+            if playlist_position.is_none() {
+                if let Some(total) = total_bytes {
+                    let estimated =
+                        field(2).parse::<u64>().is_err() && field(3).parse::<u64>().is_ok();
+                    if task
+                        .item
+                        .total_bytes
+                        .map_or(true, |previous| total >= previous)
+                    {
+                        task.item.total_bytes = Some(total);
+                        task.item.total_bytes_estimated = estimated;
+                    }
+                }
+                if let Some(downloaded) = downloaded_bytes {
+                    task.item.downloaded_bytes =
+                        Some(downloaded.max(task.item.downloaded_bytes.unwrap_or(0)));
+                    if !task.item.total_bytes_estimated {
+                        if let Some(total) = task.item.total_bytes {
+                            task.item.downloaded_bytes =
+                                task.item.downloaded_bytes.map(|value| value.min(total));
+                        }
+                    }
+                }
+                task.item.speed_bytes_per_second = speed_bytes_per_second;
+                task.item.eta_seconds = eta_seconds;
+            } else {
+                task.item.downloaded_bytes = None;
+                task.item.total_bytes = None;
+                task.item.speed_bytes_per_second = speed_bytes_per_second;
+                task.item.eta_seconds = eta_seconds;
+            }
+            task.item.message = playlist_position
+                .map(|(current, total)| {
+                    format!("Track {current} of {total} · {track_percent:.1}% of this track")
+                })
+                .unwrap_or_else(|| "Downloading audio…".to_owned());
+            updated = true;
+            force_emit = previous_percent.is_none()
+                || (percent >= 100.0 && previous_percent.is_some_and(|value| value < 100.0));
+        }
+        if updated {
+            let now = std::time::Instant::now();
+            if force_emit
+                || manager.last_progress_emit.map_or(true, |last| {
+                    now.duration_since(last) >= Duration::from_millis(250)
+                })
+            {
+                manager.last_progress_emit = Some(now);
+                should_emit = true;
+            }
+        }
+    }
+    if should_emit {
+        emit_youtube_downloads(app);
+    }
     true
 }
 
@@ -3223,15 +3394,20 @@ async fn youtube_download_enqueue(
                 thumbnail,
                 is_playlist,
                 status: "queued".to_owned(),
+                phase: "queued".to_owned(),
                 percent: None,
                 downloaded_bytes: None,
                 total_bytes: None,
+                total_bytes_estimated: false,
+                speed_bytes_per_second: None,
+                eta_seconds: None,
                 message: "Waiting to download".to_owned(),
                 file_paths: Vec::new(),
             };
             manager.tasks.push(YoutubeDownloadTask {
                 item: item.clone(),
                 process_id: None,
+                in_flight: false,
             });
             item
         };
@@ -3275,6 +3451,7 @@ async fn youtube_download_pause(
                 return Ok(());
             }
             task.item.status = "paused".to_owned();
+            task.item.phase = "paused".to_owned();
             task.item.message = "Paused".to_owned();
             task.process_id
         };
@@ -3320,6 +3497,7 @@ async fn youtube_download_resume(
                 return Ok(());
             }
             task.item.status = "queued".to_owned();
+            task.item.phase = "queued".to_owned();
             task.item.message = "Waiting to resume".to_owned();
         }
         emit_youtube_downloads(&app);
@@ -3362,6 +3540,7 @@ async fn youtube_download_cancel(
                 return Ok(());
             }
             task.item.status = "cancelled".to_owned();
+            task.item.phase = "cancelled".to_owned();
             task.item.message = "Cancelled".to_owned();
             task.process_id
         };
@@ -3418,6 +3597,7 @@ fn start_youtube_download_workers(app: AppHandle) {
                 .tasks
                 .iter()
                 .filter(|task| task.item.status == "queued")
+                .filter(|task| !task.in_flight)
                 .count();
             let available = MAX_CONCURRENT_YOUTUBE_DOWNLOADS.saturating_sub(manager.active_workers);
             let count = queued.min(available);
@@ -3442,10 +3622,18 @@ fn youtube_download_worker(app: AppHandle) {
             if let Some(task) = manager
                 .tasks
                 .iter_mut()
-                .find(|task| task.item.status == "queued")
+                .find(|task| task.item.status == "queued" && !task.in_flight)
             {
+                task.in_flight = true;
                 task.item.status = "downloading".to_owned();
-                task.item.message.clear();
+                task.item.phase = "preparing".to_owned();
+                task.item.percent = None;
+                task.item.downloaded_bytes = None;
+                task.item.total_bytes = None;
+                task.item.total_bytes_estimated = false;
+                task.item.speed_bytes_per_second = None;
+                task.item.eta_seconds = None;
+                task.item.message = "Starting download…".to_owned();
                 Some((task.item.id.clone(), task.item.url.clone()))
             } else {
                 manager.active_workers = manager.active_workers.saturating_sub(1);
@@ -3476,20 +3664,25 @@ fn youtube_download_worker(app: AppHandle) {
             if let Ok(mut manager) = state.0.lock() {
                 if let Some(task) = manager.tasks.iter_mut().find(|task| task.item.id == id) {
                     task.process_id = None;
+                    task.in_flight = false;
                     if task.item.status == "downloading" {
                         match result {
                             Ok((final_bytes, file_paths)) => {
                                 task.item.status = "completed".to_owned();
+                                task.item.phase = "completed".to_owned();
                                 task.item.percent = Some(100.0);
+                                task.item.speed_bytes_per_second = None;
+                                task.item.eta_seconds = None;
                                 task.item.file_paths = file_paths;
                                 if let Some(bytes) = final_bytes {
                                     task.item.downloaded_bytes = Some(bytes);
                                     task.item.total_bytes = Some(bytes);
                                 }
-                                task.item.message = "Saved to Music/YouTube".to_owned();
+                                task.item.message = "Ready to play".to_owned();
                             }
                             Err(error) => {
                                 task.item.status = "failed".to_owned();
+                                task.item.phase = "failed".to_owned();
                                 task.item.message = error;
                             }
                         }
@@ -3561,6 +3754,22 @@ fn youtube_download_file_size(path: &Path) -> Result<u64, String> {
 }
 
 #[cfg(not(target_os = "android"))]
+fn youtube_download_is_active(app: &AppHandle, id: &str) -> bool {
+    app.state::<YoutubeDownloadState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|manager| {
+            manager
+                .tasks
+                .iter()
+                .find(|task| task.item.id == id)
+                .map(|task| task.item.status == "downloading")
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "android"))]
 fn run_youtube_download(
     app: &AppHandle,
     id: &str,
@@ -3571,13 +3780,22 @@ fn run_youtube_download(
     let yt_dlp = bundled_desktop_tool(app, "yt-dlp")?;
     let ffmpeg = desktop_mp3_ffmpeg(app)?;
     let deno = bundled_desktop_tool(app, "deno")?;
-    let output_template = directory.join("%(title).180B.%(ext)s");
-    let mut child = hidden_command(yt_dlp)
+    let output_template = directory.join("%(title).160B [%(id)s].%(ext)s");
+    let mut command = hidden_command(yt_dlp);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .arg("--ignore-config")
         .arg("--encoding")
         .arg("utf-8")
+        .arg("--no-colors")
         .arg("--newline")
         .arg("--progress")
+        .arg("--progress-template")
+        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s")
         .arg("--continue")
         .arg(if is_playlist {
             "--yes-playlist"
@@ -3654,8 +3872,72 @@ fn run_youtube_download(
     let app_for_stderr = app.clone();
     let task_id = id.to_owned();
     let stderr_reader = std::thread::spawn(move || {
+        let mut current_is_audio = false;
+        let mut playlist_position = None;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if !report_youtube_progress(&app_for_stderr, &task_id, &line) {
+            if let Some(position) = line.split_once("Downloading item").map(|(_, value)| value) {
+                let mut fields = position.split_whitespace();
+                let current = fields.next().and_then(|value| value.parse::<usize>().ok());
+                let is_of = fields.next() == Some("of");
+                let total = fields.next().and_then(|value| value.parse::<usize>().ok());
+                if is_of {
+                    playlist_position = current.zip(total).filter(|(_, total)| *total > 0);
+                }
+            }
+            if let Some(destination) = line.trim().strip_prefix("[download] Destination:") {
+                let extension = Path::new(destination.trim())
+                    .extension()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                current_is_audio = matches!(
+                    extension.as_str(),
+                    "webm" | "m4a" | "mp3" | "opus" | "ogg" | "aac" | "flac" | "wav"
+                );
+                if current_is_audio {
+                    set_youtube_download_phase(
+                        &app_for_stderr,
+                        &task_id,
+                        "downloading",
+                        "Downloading audio…",
+                    );
+                } else if extension == "vtt" {
+                    set_youtube_download_phase(
+                        &app_for_stderr,
+                        &task_id,
+                        "lyrics",
+                        "Fetching synced lyrics…",
+                    );
+                }
+            } else if line.starts_with("[youtube]") {
+                set_youtube_download_phase(
+                    &app_for_stderr,
+                    &task_id,
+                    "fetching",
+                    "Getting song information…",
+                );
+            } else if line.contains("[ExtractAudio]") {
+                set_youtube_download_phase(
+                    &app_for_stderr,
+                    &task_id,
+                    "processing",
+                    "Processing audio…",
+                );
+            } else if line.contains("[Metadata]") || line.contains("[EmbedThumbnail]") {
+                set_youtube_download_phase(
+                    &app_for_stderr,
+                    &task_id,
+                    "metadata",
+                    "Adding artwork and metadata…",
+                );
+            }
+            if !report_youtube_progress(
+                &app_for_stderr,
+                &task_id,
+                &line,
+                current_is_audio,
+                playlist_position,
+            ) {
                 if let Ok(mut lines) = tail.lock() {
                     lines.push(line);
                     if lines.len() > 100 {
@@ -3681,7 +3963,7 @@ fn run_youtube_download(
             match youtube_download_file_path(&line) {
                 Ok(Some(path)) => output_paths.push(path),
                 Ok(None) => {
-                    report_youtube_progress(app, id, &line);
+                    // stdout carries the saved-file marker; transfer progress is read from stderr.
                 }
                 Err(error) => {
                     output_error.get_or_insert(error);
@@ -3694,6 +3976,10 @@ fn run_youtube_download(
     })?;
     let _ = stderr_reader.join();
     if status.success() {
+        if !youtube_download_is_active(app, id) {
+            return Err("The download was stopped.".to_owned());
+        }
+        set_youtube_download_phase(app, id, "verifying", "Verifying downloaded MP3…");
         if let Some(error) = output_error {
             return Err(error);
         }
@@ -3705,14 +3991,30 @@ fn run_youtube_download(
         }
         let mut final_bytes = 0_u64;
         for path in &output_paths {
+            if !youtube_download_is_active(app, id) {
+                return Err("The download was stopped.".to_owned());
+            }
             // Verify the audio before optional artwork work so a bad path or
             // inaccessible file is reported without attempting to rewrite it.
             youtube_download_file_size(path)?;
+            if has_downloaded_lyrics(path) {
+                set_youtube_download_phase(app, id, "lyrics", "Fetching and embedding lyrics…");
+            }
             attach_downloaded_lyrics(path);
             if let Some(thumbnail) = thumbnail_for_audio(path) {
+                set_youtube_download_phase(
+                    app,
+                    id,
+                    "metadata",
+                    "Adding artwork and song information…",
+                );
                 if embed_thumbnail_in_mp3(path, &thumbnail).is_ok() {
                     let _ = std::fs::remove_file(thumbnail);
                 }
+            }
+            set_youtube_download_phase(app, id, "saving", "Adding song to your library…");
+            if !youtube_download_is_active(app, id) {
+                return Err("The download was stopped.".to_owned());
             }
             final_bytes = final_bytes.saturating_add(youtube_download_file_size(path)?);
         }
@@ -3766,7 +4068,8 @@ fn run_youtube_download(
 fn stop_download_process(pid: u32) {
     let _ = hidden_command("kill")
         .arg("-TERM")
-        .arg(pid.to_string())
+        .arg("--")
+        .arg(format!("-{pid}"))
         .status();
 }
 

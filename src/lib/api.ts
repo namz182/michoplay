@@ -14,7 +14,8 @@ export type PlayerSnapshot = {
   equalizerBands: number[]; equalizerEnabled: boolean;
 };
 export type YoutubeSearchResult = { id: string; title: string; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean; hasLyrics: boolean };
-export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; message: string; filePaths?: string[] };
+export type YoutubeDownloadPhase = "queued" | "preparing" | "fetching" | "downloading" | "processing" | "metadata" | "lyrics" | "verifying" | "saving" | "paused" | "completed" | "failed" | "cancelled";
+export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; phase: YoutubeDownloadPhase; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; totalBytesEstimated: boolean; speedBytesPerSecond: number | null; etaSeconds: number | null; message: string; filePaths?: string[] };
 export const api = {
   appDataLoad: () => invoke<Record<string, string>>("app_data_load"),
   appDataMigrate: (entries: Record<string, string>) => invoke<void>("app_data_migrate", { entries }),
