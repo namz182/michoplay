@@ -42,6 +42,8 @@ static LIBRARY_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static LIBRARY_SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
 static LIBRARY_WATCHERS: OnceLock<Mutex<HashMap<PathBuf, RecommendedWatcher>>> = OnceLock::new();
 static LIBRARY_DIRTY_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+#[cfg(not(target_os = "android"))]
+static YOUTUBE_DOWNLOAD_PERSIST_LOCK: Mutex<()> = Mutex::new(());
 
 fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[cfg(windows)]
@@ -2735,6 +2737,9 @@ struct YoutubeDownloadManager {
     next_id: u64,
     active_workers: usize,
     last_progress_emit: Option<std::time::Instant>,
+    storage_path: Option<PathBuf>,
+    last_persist: Option<std::time::Instant>,
+    last_persisted_states: Vec<(String, String, String)>,
 }
 
 const MAX_CONCURRENT_YOUTUBE_DOWNLOADS: usize = 3;
@@ -2750,12 +2755,46 @@ impl YoutubeDownloadManager {
 
 #[cfg(not(target_os = "android"))]
 fn emit_youtube_downloads(app: &AppHandle) {
-    let items = app
+    let _persist_guard = YOUTUBE_DOWNLOAD_PERSIST_LOCK.lock().ok();
+    let (items, persistence) = app
         .state::<YoutubeDownloadState>()
         .0
         .lock()
-        .map(|manager| manager.snapshot())
+        .map(|mut manager| {
+            let items = manager.snapshot();
+            let states = items
+                .iter()
+                .map(|item| (item.id.clone(), item.status.clone(), item.phase.clone()))
+                .collect::<Vec<_>>();
+            let should_persist = states != manager.last_persisted_states
+                || manager
+                    .last_persist
+                    .is_none_or(|last| last.elapsed() >= Duration::from_secs(1));
+            let persistence = if should_persist {
+                manager.storage_path.clone()
+            } else {
+                None
+            };
+            if persistence.is_some() {
+                manager.last_persist = Some(std::time::Instant::now());
+                manager.last_persisted_states = states;
+            }
+            (items, persistence)
+        })
         .unwrap_or_default();
+    if let Some(path) = persistence {
+        if let Ok(bytes) = serde_json::to_vec(&items) {
+            let temporary = path.with_extension("json.tmp");
+            if fs::write(&temporary, &bytes).is_ok() {
+                if fs::rename(&temporary, &path).is_err() {
+                    // Windows does not replace an existing destination with rename.
+                    if fs::write(&path, &bytes).is_ok() {
+                        let _ = fs::remove_file(&temporary);
+                    }
+                }
+            }
+        }
+    }
     let _ = app.emit("youtube-downloads-updated", items);
 }
 
@@ -3766,6 +3805,14 @@ fn youtube_download_file_size(path: &Path) -> Result<u64, String> {
     }
     if metadata.len() == 0 {
         return Err("The downloaded song is empty. Try downloading it again.".to_owned());
+    }
+    let audio = Probe::open(path)
+        .and_then(|probe| probe.read())
+        .map_err(|_| {
+            "The downloaded audio couldn't be read. Try downloading it again.".to_owned()
+        })?;
+    if audio.properties().duration().is_zero() {
+        return Err("The downloaded audio couldn't be read. Try downloading it again.".to_owned());
     }
     Ok(metadata.len())
 }
@@ -4982,6 +5029,26 @@ pub fn run() {
                 }
             };
             fs::create_dir_all(&storage_dir)?;
+            #[cfg(not(target_os = "android"))]
+            {
+                let downloads_path = storage_dir.join("downloads.json");
+                let recovered = fs::read(&downloads_path).ok()
+                    .and_then(|bytes| serde_json::from_slice::<Vec<YoutubeDownloadItem>>(&bytes).ok())
+                    .unwrap_or_default();
+                if let Ok(mut manager) = app.state::<YoutubeDownloadState>().0.lock() {
+                    manager.storage_path = Some(downloads_path);
+                    for mut item in recovered {
+                        manager.next_id = manager.next_id.max(item.id.strip_prefix("youtube-")
+                            .and_then(|id| id.parse::<u64>().ok()).unwrap_or(0));
+                        if item.status == "downloading" {
+                            item.status = "queued".to_owned();
+                            item.phase = "queued".to_owned();
+                            item.message = "Resuming interrupted download…".to_owned();
+                        }
+                        manager.tasks.push(YoutubeDownloadTask { item, process_id: None, in_flight: false });
+                    }
+                }
+            }
             // Preserve saved roots and reusable cache data from the previous app-data location.
             let config_path = storage_dir.join("config.json");
             if let Ok(previous_dir) = app.path().app_local_data_dir() {
@@ -5236,6 +5303,8 @@ pub fn run() {
             }
             #[cfg(any(target_os = "android", target_os = "ios"))]
             let _ = app;
+            #[cfg(not(target_os = "android"))]
+            start_youtube_download_workers(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -5401,7 +5470,7 @@ mod tests {
         ));
         std::fs::create_dir(&root).unwrap();
         let actual = root.join("Café 🎵 100% (Visualizer).MP3");
-        // Only the filesystem handoff is under test; no decoder is invoked.
+        // The path handoff must preserve Unicode even if validation rejects bad audio.
         std::fs::write(&actual, b"audio fixture").unwrap();
         let json = serde_json::to_string(&actual.to_string_lossy())
             .unwrap()
@@ -5411,7 +5480,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(reported, actual);
-        assert_eq!(youtube_download_file_size(&reported).unwrap(), 13);
+        assert_eq!(
+            youtube_download_file_size(&reported).unwrap_err(),
+            "The downloaded audio couldn't be read. Try downloading it again."
+        );
 
         // The old plain-text protocol could silently lose these characters.
         assert!(youtube_download_file_size(&root.join("Caf  100% (Visualizer).mp3")).is_err());

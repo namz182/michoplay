@@ -12,6 +12,7 @@ import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.media.MediaScannerConnection
+import android.media.MediaMetadataRetriever
 import android.os.Environment
 import app.tauri.annotation.Command
 import app.tauri.annotation.ActivityCallback
@@ -35,6 +36,8 @@ import java.nio.charset.Charset
 import java.util.concurrent.Executors
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
+import java.util.Collections
 
 @InvokeArg
 class MediaUpdateArgs {
@@ -79,15 +82,18 @@ class MetadataFileWriteArgs { var path: String = ""; var tempPath: String = "" }
 class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private val io = Executors.newCachedThreadPool()
   private val downloads = CopyOnWriteArrayList<MutableMap<String, Any?>>()
+  private val jobGenerations = ConcurrentHashMap<String, AtomicInteger>()
   private val activeDownloads = AtomicInteger(0)
   private val downloadQueueLock = Any()
   // Keep native extraction and FFmpeg from starving the Android UI thread.
   private val maxConcurrentDownloads = 1
-  @Volatile private var nextDownloadId = 1
+  private val nextDownloadId = AtomicInteger(1)
   @Volatile private var downloaderReady = false
   @Volatile private var downloaderError: String? = null
-  @Volatile private var downloaderUpdateAttempted = false
   @Volatile private var downloader403RefreshAttempted = false
+  private var lastDownloadUpdateMs = 0L
+  private var lastDownloadPersistMs = 0L
+  private var lastDownloadStates = ""
   companion object {
     @Volatile private var notificationPermissionPrompted = false
     private val pendingActions = CopyOnWriteArrayList<String>()
@@ -101,7 +107,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   override fun load(webView: android.webkit.WebView) {
     super.load(webView)
-    io.execute { initializeDownloader() }
+    restoreDownloads()
+    io.execute { initializeDownloader(); startQueuedDownloads() }
   }
 
   @Command
@@ -555,7 +562,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   } catch (_: Exception) { false }
 
   @Command
-  fun youtubeDownloadsState(invoke: Invoke) = invoke.resolveObject(downloads.toList())
+  fun youtubeDownloadsState(invoke: Invoke) = invoke.resolveObject(downloads.map { synchronized(it) { it.toMap() } })
 
   @Command
   fun youtubeDownloadEnqueue(invoke: Invoke) {
@@ -566,8 +573,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.reject("Allow storage access, then tap Download again.")
       return
     }
-    val item = mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId++}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "phase" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "totalBytesEstimated" to false, "speedBytesPerSecond" to null, "etaSeconds" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>())
-    downloads.add(item); emitDownloads(); invoke.resolveObject(item); startQueuedDownloads()
+    val item = Collections.synchronizedMap(mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId.getAndIncrement()}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "phase" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "totalBytesEstimated" to false, "speedBytesPerSecond" to null, "etaSeconds" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>()))
+    downloads.add(item); jobGenerations[item["id"] as String] = AtomicInteger(0)
+    emitDownloads(true); invoke.resolveObject(item); startQueuedDownloads()
   }
 
   private fun startQueuedDownloads() {
@@ -587,16 +595,17 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           it["message"] = "Starting download…"
         }
       } ?: return
-      emitDownloads()
+      val generation = jobGenerations.getOrPut(item["id"] as String) { AtomicInteger(0) }.get()
+      emitDownloads(true)
       io.execute {
         val staging = File(activity.cacheDir, "youtube/${item["id"]}")
+        val published = mutableListOf<PublishedAudio>()
         try {
           try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) } catch (_: Exception) { }
           if (!downloaderReady && !initializeDownloader()) throw IllegalStateException(downloaderError ?: "YouTube tools couldn’t start.")
-          updateDownloaderIfNeeded(item)
           staging.mkdirs()
           try {
-            executeYoutubeAudioDownload(item, staging)
+            executeYoutubeAudioDownload(item, staging, generation)
           } catch (error: Exception) {
             if (!isYoutubeForbidden(error)) throw error
             if (item["status"] != "downloading") throw error
@@ -604,13 +613,15 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
             emitDownloads()
             if (!refreshDownloaderAfter403()) throw error
             if (item["status"] != "downloading") throw error
-            executeYoutubeAudioDownload(item, staging)
+            executeYoutubeAudioDownload(item, staging, generation)
           }
-          if (item["status"] == "downloading") {
+          if (jobIsActive(item, generation)) {
             item["phase"] = "verifying"; item["message"] = "Checking the downloaded audio…"; emitDownloads()
             val audioFiles = staging.walkTopDown().filter { it.isFile && it.extension.equals("mp3", ignoreCase = true) }.toList()
             if (audioFiles.isEmpty()) throw IllegalStateException("YouTube did not produce a playable audio file.")
             val filePaths = audioFiles.map { audio ->
+              requireActiveJob(item, generation)
+              requirePlayableAudio(audio)
               val lyric = staging.walkTopDown().firstOrNull { file -> file.isFile && (file.extension.equals("lrc", true) || file.extension.equals("vtt", true)) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
               if (lyric != null) {
                 item["phase"] = "lyrics"; item["message"] = "Fetching and embedding lyrics…"; emitDownloads()
@@ -620,28 +631,38 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
                   throw IllegalStateException("Could not embed the downloaded lyrics in the MP3.")
                 }
               }
+              requireActiveJob(item, generation)
               item["phase"] = "saving"; item["message"] = "Saving audio to Music…"; emitDownloads()
-              publishAudioToMusic(audio)
+              val saved = publishAudioToMusic(audio, item, generation)
+              published.add(saved)
+              requireActiveJob(item, generation)
+              saved.path
             }
             val finalBytes = audioFiles.sumOf { it.length() }
-            item["downloadedBytes"] = finalBytes; item["totalBytes"] = finalBytes
-            item["speedBytesPerSecond"] = null; item["etaSeconds"] = null
-            item["filePaths"] = filePaths
-            item["status"] = "completed"; item["phase"] = "completed"; item["percent"] = 100.0; item["message"] = "Ready to play"
+            synchronized(item) {
+              requireActiveJob(item, generation)
+              item["downloadedBytes"] = finalBytes; item["totalBytes"] = finalBytes
+              item["speedBytesPerSecond"] = null; item["etaSeconds"] = null
+              item["filePaths"] = filePaths
+              item["status"] = "completed"; item["phase"] = "completed"; item["percent"] = 100.0; item["message"] = "Ready to play"
+            }
           }
         } catch (error: Exception) {
+          published.filter { it.created }.forEach { saved ->
+            runCatching { if (saved.uri != null) activity.contentResolver.delete(saved.uri, null, null) else File(saved.path).delete() }
+          }
           // A pause followed quickly by resume changes the item to queued before
           // this process exits. Do not let the old worker overwrite that request.
-          if (item["status"] == "downloading") { item["status"] = "failed"; item["phase"] = "failed"; item["message"] = error.message ?: "Download failed" }
+          if (jobIsActive(item, generation)) { item["status"] = "failed"; item["phase"] = "failed"; item["message"] = error.message ?: "Download failed" }
         } finally {
           if (item["status"] == "completed" || item["status"] == "cancelled") staging.deleteRecursively()
-          activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads()
+          activeDownloads.decrementAndGet(); emitDownloads(true); startQueuedDownloads()
         }
       }
     }
   }
 
-  private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File) {
+  private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File, generation: Int) {
     val request = YoutubeDLRequest(item["url"] as String)
     request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
     request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
@@ -662,7 +683,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     var playlistPosition: Pair<Int, Int>? = null
     var isAudioTransfer = false
     YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
-      if (item["status"] == "downloading") {
+      if (jobIsActive(item, generation)) {
         playlistItem.find(line)?.let { match ->
           val current = match.groupValues[1].toIntOrNull()
           val total = match.groupValues[2].toIntOrNull()
@@ -890,7 +911,77 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun emitDownloads() = dispatch("youtube-downloads-updated")
+  private data class PublishedAudio(val path: String, val uri: Uri?, val created: Boolean)
+
+  private fun jobIsActive(item: Map<String, Any?>, generation: Int): Boolean =
+    item["status"] == "downloading" && jobGenerations[item["id"] as? String]?.get() == generation
+
+  private fun requireActiveJob(item: Map<String, Any?>, generation: Int) {
+    if (!jobIsActive(item, generation)) throw IllegalStateException("The download was stopped.")
+  }
+
+  private fun requirePlayableAudio(file: File) {
+    if (!file.isFile || file.length() == 0L) throw IllegalStateException("The downloaded audio couldn't be read.")
+    val retriever = MediaMetadataRetriever()
+    try {
+      retriever.setDataSource(file.absolutePath)
+      if ((retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) <= 0L)
+        throw IllegalStateException("The downloaded audio couldn't be read.")
+    } catch (error: Exception) {
+      throw IllegalStateException("The downloaded audio couldn't be read.", error)
+    } finally { retriever.release() }
+  }
+
+  private fun requirePlayableAudio(uri: Uri) {
+    val retriever = MediaMetadataRetriever()
+    try {
+      retriever.setDataSource(activity, uri)
+      if ((retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) <= 0L)
+        throw IllegalStateException("The saved audio couldn't be read.")
+    } catch (error: Exception) {
+      throw IllegalStateException("The saved audio couldn't be read.", error)
+    } finally { retriever.release() }
+  }
+
+  @Synchronized private fun emitDownloads(force: Boolean = false) {
+    val now = android.os.SystemClock.elapsedRealtime()
+    val states = downloads.joinToString("|") { "${it["id"]}:${it["status"]}:${it["phase"]}" }
+    val changed = states != lastDownloadStates
+    if (!force && !changed && now - lastDownloadUpdateMs < 250L) return
+    lastDownloadUpdateMs = now
+    lastDownloadStates = states
+    val snapshot = JSONArray().apply { downloads.forEach { item -> put(JSONObject(synchronized(item) { item.toMap() })) } }
+    runCatching { trigger("youtube-downloads-updated", JSObject().apply { put("items", snapshot) }) }
+    if (force || changed || now - lastDownloadPersistMs >= 1000L) {
+      lastDownloadPersistMs = now
+      val editor = activity.getSharedPreferences("michoplay_downloads", Activity.MODE_PRIVATE)
+        .edit().putString("jobs", snapshot.toString())
+      if (force || changed) editor.commit() else editor.apply()
+    }
+  }
+
+  private fun restoreDownloads() {
+    val raw = activity.getSharedPreferences("michoplay_downloads", Activity.MODE_PRIVATE).getString("jobs", null) ?: return
+    val saved = runCatching { JSONArray(raw) }.getOrNull() ?: return
+    for (index in 0 until saved.length()) {
+      val entry = saved.optJSONObject(index) ?: continue
+      val id = entry.optString("id")
+      val url = entry.optString("url")
+      if (id.isBlank() || url.isBlank()) continue
+      val item = Collections.synchronizedMap(mutableMapOf<String, Any?>())
+      for (key in listOf("id", "title", "url", "thumbnail", "isPlaylist", "status", "phase", "percent", "downloadedBytes", "totalBytes", "totalBytesEstimated", "speedBytesPerSecond", "etaSeconds", "message")) {
+        item[key] = entry.opt(key).takeUnless { it == JSONObject.NULL }
+      }
+      item["filePaths"] = entry.optJSONArray("filePaths")?.let { array -> (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) } } ?: emptyList<String>()
+      if (item["status"] == "downloading") {
+        item["status"] = "queued"; item["phase"] = "queued"; item["message"] = "Resuming interrupted download…"
+      }
+      downloads.add(item)
+      jobGenerations[id] = AtomicInteger(0)
+      nextDownloadId.updateAndGet { current -> maxOf(current, (id.removePrefix("youtube-").toIntOrNull() ?: 0) + 1) }
+    }
+    emitDownloads(true)
+  }
 
   private fun toByteCount(value: String, unit: String): Long {
     val base = if (unit.endsWith("iB")) 1024.0 else 1000.0
@@ -919,47 +1010,71 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  @Synchronized
-  private fun updateDownloaderIfNeeded(item: MutableMap<String, Any?>) {
-    if (downloaderUpdateAttempted) return
-    try {
-      YoutubeDL.getInstance().updateYoutubeDL(activity.applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
-    } catch (error: Exception) {
-      // The bundled extractor remains usable if the update server is unavailable.
-      downloaderError = "YouTube support update failed: ${error.message ?: "network unavailable"}"
-    } finally {
-      downloaderUpdateAttempted = true
+  private fun copyAudioToOutput(file: File, output: java.io.OutputStream, item: Map<String, Any?>, generation: Int) {
+    file.inputStream().use { input ->
+      val buffer = ByteArray(64 * 1024)
+      while (true) {
+        requireActiveJob(item, generation)
+        val count = input.read(buffer)
+        if (count < 0) break
+        output.write(buffer, 0, count)
+      }
     }
+    requireActiveJob(item, generation)
   }
 
-  private fun publishAudioToMusic(file: File): String {
+  private fun publishAudioToMusic(file: File, item: Map<String, Any?>, generation: Int): PublishedAudio {
     val destination = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube/${file.name}")
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
       val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
       if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("Android couldn’t create Music/MichoPlay/YouTube.")
-      file.copyTo(destination, overwrite = true)
-      return destination.absolutePath
+      if (destination.exists() && runCatching { requirePlayableAudio(destination) }.isSuccess)
+        return PublishedAudio(destination.absolutePath, null, false)
+      val created = !destination.exists() || destination.delete()
+      try {
+        destination.outputStream().use { output -> copyAudioToOutput(file, output, item, generation) }
+        requirePlayableAudio(destination)
+        return PublishedAudio(destination.absolutePath, null, created)
+      } catch (error: Exception) {
+        if (created) destination.delete()
+        throw error
+      }
+    }
+    val relativePath = "${Environment.DIRECTORY_MUSIC}/MichoPlay/YouTube/"
+    val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+    activity.contentResolver.query(collection, arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA),
+      "${MediaStore.Audio.Media.DISPLAY_NAME}=? AND ${MediaStore.Audio.Media.RELATIVE_PATH}=?",
+      arrayOf(file.name, relativePath), null)?.use { cursor ->
+      while (cursor.moveToNext()) {
+        val existing = ContentUris.withAppendedId(collection, cursor.getLong(0))
+        if (runCatching { requirePlayableAudio(existing) }.isSuccess) {
+          val path = cursor.getString(1) ?: destination.absolutePath
+          return PublishedAudio(path, existing, false)
+        }
+      }
     }
     val values = ContentValues().apply {
       put(MediaStore.Audio.Media.DISPLAY_NAME, file.name)
       put(MediaStore.Audio.Media.TITLE, file.nameWithoutExtension)
       put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
-      put(MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/MichoPlay/YouTube")
+      put(MediaStore.Audio.Media.RELATIVE_PATH, relativePath)
       put(MediaStore.Audio.Media.IS_PENDING, 1)
     }
     val uri = activity.contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
       ?: throw IllegalStateException("Android couldn’t create a file in the Music folder.")
     try {
-      activity.contentResolver.openOutputStream(uri, "w")?.use { output -> file.inputStream().use { input -> input.copyTo(output) } }
+      activity.contentResolver.openOutputStream(uri, "w")?.use { output -> copyAudioToOutput(file, output, item, generation) }
         ?: throw IllegalStateException("Android couldn’t open the new Music file.")
+      requireActiveJob(item, generation)
       ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }.also { activity.contentResolver.update(uri, it, null, null) }
+      requirePlayableAudio(uri)
       val storedPath = runCatching {
         activity.contentResolver.query(uri, arrayOf(MediaStore.Audio.Media.DATA), null, null, null)?.use { cursor ->
           val column = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
           if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
         }
       }.getOrNull()
-      return storedPath ?: destination.absolutePath
+      return PublishedAudio(storedPath ?: destination.absolutePath, uri, true)
     } catch (error: Exception) {
       activity.contentResolver.delete(uri, null, null)
       throw error
@@ -975,16 +1090,30 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun youtubeDownloadRemove(invoke: Invoke) {
     val id = invoke.parseArgs(YoutubeDownloadArgs::class.java).id
-    downloads.removeAll { it["id"] == id && it["status"] != "downloading" }
-    emitDownloads(); invoke.resolve()
+    val removed = downloads.removeAll { it["id"] == id && it["status"] != "downloading" }
+    if (removed) jobGenerations.remove(id)
+    emitDownloads(true); invoke.resolve()
   }
   private fun changeDownload(invoke: Invoke, status: String, stop: Boolean) {
     val id = invoke.parseArgs(YoutubeDownloadArgs::class.java).id
     val item = downloads.firstOrNull { it["id"] == id } ?: run { invoke.reject("Download was not found."); return }
-    item["status"] = status
-    if (status == "queued") { item["phase"] = "queued"; item["message"] = "Waiting to resume" }
-    else if (stop) { item["phase"] = status; item["message"] = if (status == "paused") "Paused" else "Cancelled" }
-    emitDownloads()
+    val changed = synchronized(item) {
+      val current = item["status"]
+      val allowed = when (status) {
+        "queued" -> current == "paused" || current == "failed"
+        "paused" -> current == "queued" || current == "downloading"
+        else -> current != "completed" && current != "cancelled"
+      }
+      if (allowed) {
+        jobGenerations.getOrPut(id) { AtomicInteger(0) }.incrementAndGet()
+        item["status"] = status
+        if (status == "queued") { item["phase"] = "queued"; item["message"] = "Waiting to resume" }
+        else if (stop) { item["phase"] = status; item["message"] = if (status == "paused") "Paused" else "Cancelled" }
+      }
+      allowed
+    }
+    if (!changed) { invoke.resolve(); return }
+    emitDownloads(true)
     invoke.resolve()
     if (status == "queued") io.execute { startQueuedDownloads() }
     else if (stop) io.execute { try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Exception) {} }

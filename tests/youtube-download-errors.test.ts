@@ -42,6 +42,7 @@ test("conversion failures explain the stage and distinguish missing encoders", (
     ["ERROR: ffmpeg: Unknown encoder 'libmp3lame'", "MichoPlay's audio tools can't create MP3 files. Update or reinstall the app."],
     ["ERROR: Unknown decoder 'sample_codec'", "This video's audio format isn't supported. Try another version of the song."],
     ["ERROR: ffmpeg: Invalid data found when processing input", "The downloaded audio couldn't be read. Try downloading it again."],
+    ["The saved audio couldn't be read.", "The downloaded audio couldn't be read. Try downloading it again."],
   ];
   for (const [error, expected] of cases) assert.equal(youtubeDownloadErrorText(error), expected);
 });

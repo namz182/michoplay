@@ -13,12 +13,11 @@ import type {
   CSSProperties,
   MouseEvent,
   PointerEvent as ReactPointerEvent,
-  ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { isTauri } from "@tauri-apps/api/core";
+import { addPluginListener, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion, onBackButtonPress } from "@tauri-apps/api/app";
 import {
@@ -26,7 +25,6 @@ import {
   ArrowRight,
   Disc3,
   Heart,
-  Home,
   ListMusic,
   Music2,
   Play,
@@ -36,8 +34,6 @@ import {
   Mic2,
   SkipBack,
   SkipForward,
-  Volume2,
-  VolumeX,
   Settings2,
   MoreHorizontal,
   FolderOpen,
@@ -58,7 +54,6 @@ import {
   List,
   AlignJustify,
   Check,
-  Library,
   Timer,
   Download,
   EyeOff,
@@ -91,557 +86,24 @@ import { SearchResultButton as GlobalSearchResultButton } from "../screens/searc
 import { Empty } from "../components/EmptyState";
 import { CollectionGrid } from "../components/library/CollectionGrid";
 import packageInfo from "../../package.json";
-import {
-  youtubeDownloadErrorText,
-  youtubeResultSizeText,
-} from "../lib/youtube-size";
+import { youtubeDownloadErrorText } from "../lib/youtube-size";
 import {
   youtubeDownloadDescription,
   youtubeDownloadIsPending,
   youtubeDownloadProgress,
 } from "../components/downloads/DownloadStatus";
 import { Cover, useArtwork } from "./Artwork";
+import { LyricsBadge } from "../components/LyricsBadge";
 import { LyricsView } from "../screens/lyrics/LyricsView";
-
-type Section =
-  | "Home"
-  | "Songs"
-  | "Albums"
-  | "Artists"
-  | "Playlists"
-  | "Folders"
-  | "Favorites"
-  | "Recently Played"
-  | "Settings";
-type Detail = {
-  kind: "folder" | "album" | "artist" | "playlist";
-  key: string;
-  title: string;
-};
-type Page = { section: Section; detail?: Detail };
-type Playlist = { id: string; name: string; trackIds: number[] };
-type Collection = {
-  key: string;
-  title: string;
-  subtitle: string;
-  tracks: Track[];
-};
-type TrackMenu = { track: Track; x: number; y: number };
-type DownloadFeedback = {
-  key: number;
-  label: string;
-  x: number;
-  y: number;
-  targetX: number;
-  targetY: number;
-};
-function playlistSubmenuPlacement(menuX: number) {
-  const menuWidth = 228;
-  const submenuWidth = 256;
-  const gap = 5;
-  const edge = 8;
-  if (menuX + menuWidth + gap + submenuWidth <= window.innerWidth - edge)
-    return "opens-right";
-  if (menuX - gap - submenuWidth >= edge) return "";
-  return "submenu-inline";
-}
-type ListeningRecord = {
-  trackId: number;
-  lastPlayedAt: number;
-  playCount: number;
-  positionMs: number;
-  durationMs: number;
-};
-type SavedPlaybackSession = {
-  currentTrackId: number | null;
-  queue: number[];
-  positionMs: number;
-  isPlaying: boolean;
-};
-type GlobalSearchResult = {
-  type: "Song" | "Folder" | "Album" | "Artist" | "Playlist";
-  title: string;
-  subtitle: string;
-  artworkKey: string | null;
-  trackId?: number;
-  hasLyrics?: boolean;
-  page?: Page;
-};
-type TrackSort =
-  | "titleAsc"
-  | "titleDesc"
-  | "recentlyAdded"
-  | "durationAsc"
-  | "durationDesc";
-const trackSortOptions: { key: TrackSort; label: string }[] = [
-  { key: "titleAsc", label: "Title A–Z" },
-  { key: "titleDesc", label: "Title Z–A" },
-  { key: "recentlyAdded", label: "Recently added" },
-  { key: "durationAsc", label: "Duration (short to long)" },
-  { key: "durationDesc", label: "Duration (long to short)" },
-];
-const latestReleaseApiUrl =
-  "https://api.github.com/repos/namz182/michoplay/releases/latest";
-const michoplayGithubUrl = "https://github.com/namz182/michoplay";
-const michoplayIssueUrl = "https://github.com/namz182/michoplay/issues/new";
-const michoplayDeveloperUrl = "https://mainza.dev";
-const michoplayWebsiteUrl = "https://michoplay.mainza.dev/";
-const youtubeSearchPageSize = 15;
-const youtubeGlobalInitialResultLimit = youtubeSearchPageSize;
-const youtubeFolderInitialResultLimit = youtubeSearchPageSize;
-function isNewerVersion(candidate: string, current: string) {
-  const parts = (version: string) => {
-    const normalized = version.trim().replace(/^v/i, "").split(/[+-]/, 1)[0];
-    if (!/^\d+(\.\d+)*$/.test(normalized)) return null;
-    return normalized.split(".").map(Number);
-  };
-  const latest = parts(candidate);
-  const installed = parts(current);
-  if (!latest || !installed) return false;
-  for (
-    let index = 0;
-    index < Math.max(latest.length, installed.length);
-    index += 1
-  ) {
-    const difference = (latest[index] ?? 0) - (installed[index] ?? 0);
-    if (difference !== 0) return difference > 0;
-  }
-  return false;
-}
-const navigation: { label: Section; icon: typeof Home }[] = [
-  { label: "Home", icon: Home },
-  { label: "Songs", icon: Music2 },
-  { label: "Playlists", icon: ListMusic },
-  { label: "Favorites", icon: Heart },
-];
-function defaultVolume() {
-  const mobile =
-    typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
-  return mobile ? 1 : 0.75;
-}
-const initialPlayer: PlayerSnapshot = {
-  currentTrackId: null,
-  isPlaying: false,
-  positionMs: 0,
-  durationMs: 0,
-  volume: defaultVolume(),
-  shuffle: false,
-  repeatMode: "off",
-  queue: [],
-  priorityQueue: [],
-  autoplay: true,
-  sleepTimerRemainingMs: null,
-  sleepTimerAtTrackEnd: false,
-  equalizerBands: Array(6).fill(0),
-  equalizerEnabled: false,
-};
-function storedLibraryRoots(): string[] {
-  const roots = stored<unknown>("library-roots", []);
-  return Array.isArray(roots)
-    ? roots.filter(
-        (root): root is string =>
-          typeof root === "string" && !root.startsWith("content://"),
-      )
-    : [];
-}
-function time(ms: number) {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
-function headingTime(ms: number) {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours) return `${hours}h${minutes ? ` ${minutes}min` : ""}`;
-  if (minutes) return `${minutes}min`;
-  return `${seconds}s`;
-}
-function sleepTimerLabel(ms: number) {
-  const seconds = Math.ceil(Math.max(0, ms) / 1000);
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainder = seconds % 60;
-  return hours
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
-    : `${minutes}:${String(remainder).padStart(2, "0")}`;
-}
-function durationLabel(seconds: number) {
-  const safeSeconds = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, "0")}`;
-}
-function normalizedAudioPath(path: string) {
-  const normalized = path.replaceAll("\\", "/").replace(/^\/\/\?\//, "");
-  return /^[a-z]:\//i.test(normalized)
-    ? normalized.toLocaleLowerCase()
-    : normalized;
-}
-function tracksForDownload(
-  item: YoutubeDownload,
-  tracks: Track[],
-  youtubeDirectory: string,
-) {
-  if (item.filePaths?.length) {
-    const byPath = new Map(
-      tracks.map((track) => [normalizedAudioPath(track.path), track]),
-    );
-    const seen = new Set<number>();
-    return item.filePaths.flatMap((path) => {
-      const track = byPath.get(normalizedAudioPath(path));
-      if (!track || seen.has(track.id)) return [];
-      seen.add(track.id);
-      return [track];
-    });
-  }
-  if (item.isPlaylist) return [];
-  const candidates = tracks.filter(
-    (track) =>
-      normalizedAudioPath(track.rootPath) ===
-      normalizedAudioPath(youtubeDirectory),
-  );
-  const title = item.title.trim().toLocaleLowerCase();
-  const match =
-    candidates.find(
-      (track) =>
-        normalizedAudioPath(track.path)
-          .split("/")
-          .pop()
-          ?.replace(/\.mp3$/i, "")
-          .trim()
-          .toLocaleLowerCase() === title,
-    ) ??
-    candidates.find(
-      (track) => track.title.trim().toLocaleLowerCase() === title,
-    );
-  return match ? [match] : [];
-}
-function isFinishedYoutubeDownload(item: YoutubeDownload) {
-  return (
-    item.status === "completed" ||
-    item.status === "failed" ||
-    item.status === "cancelled"
-  );
-}
-function sameYoutubeDownloads(
-  current: YoutubeDownload[],
-  next: YoutubeDownload[],
-) {
-  return (
-    current.length === next.length &&
-    current.every((item, index) => {
-      const other = next[index];
-      return (
-        item.id === other.id &&
-        item.title === other.title &&
-        item.url === other.url &&
-        item.thumbnail === other.thumbnail &&
-        item.isPlaylist === other.isPlaylist &&
-        item.status === other.status &&
-        item.percent === other.percent &&
-        item.downloadedBytes === other.downloadedBytes &&
-        item.totalBytes === other.totalBytes &&
-        item.totalBytesEstimated === other.totalBytesEstimated &&
-        item.speedBytesPerSecond === other.speedBytesPerSecond &&
-        item.etaSeconds === other.etaSeconds &&
-        item.phase === other.phase &&
-        item.message === other.message &&
-        item.filePaths?.length === other.filePaths?.length &&
-        (item.filePaths ?? []).every(
-          (path, pathIndex) => path === other.filePaths?.[pathIndex],
-        )
-      );
-    })
-  );
-}
-function youtubeResultSize(result: YoutubeSearchResult) {
-  return youtubeResultSizeText(result.durationSeconds, result.isPlaylist);
-}
-function youtubeSearchCanContinue(query: string, count: number) {
-  return count > 0 && !/^https?:\/\//i.test(query.trim());
-}
-
-function DesktopGlobalSearch({
-  value,
-  open,
-  content,
-  onChange,
-  onOpenChange,
-}: {
-  value: string;
-  open: boolean;
-  content: ReactNode;
-  onChange: (value: string) => void;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const [draft, setDraft] = useState(value);
-  const timer = useRef<number | null>(null);
-  useEffect(() => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = null;
-    setDraft(value);
-  }, [value]);
-  useEffect(
-    () => () => {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-    },
-    [],
-  );
-  const update = (next: string) => {
-    setDraft(next);
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      timer.current = null;
-      onChange(next);
-    }, 80);
-  };
-  const clear = () => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = null;
-    setDraft("");
-    onChange("");
-    onOpenChange(true);
-  };
-  return (
-    <div
-      className={`search-box global-search ${open ? "expanded" : ""}`}
-      role="search"
-    >
-      <Search size={17} />
-      <input
-        aria-label="Search all music"
-        aria-expanded={open}
-        aria-controls="global-search-results"
-        placeholder="What do you want to play?"
-        value={draft}
-        onFocus={() => onOpenChange(true)}
-        onChange={(event) => {
-          update(event.target.value);
-          onOpenChange(true);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") onOpenChange(false);
-          else if (event.key === "ArrowDown") {
-            event.preventDefault();
-            document
-              .querySelector<HTMLButtonElement>(".global-search-result")
-              ?.focus();
-          } else if (event.key === "Enter") event.preventDefault();
-        }}
-      />
-      {draft && (
-        <button
-          className="icon-button"
-          aria-label="Clear search"
-          onClick={clear}
-        >
-          <X size={15} />
-        </button>
-      )}
-      {open && (
-        <div
-          className="global-search-popover"
-          id="global-search-results"
-          role="listbox"
-          aria-label="Search results"
-        >
-          {content}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BufferedYoutubeSearch({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const [draft, setDraft] = useState(value);
-  const timer = useRef<number | null>(null);
-  useEffect(() => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = null;
-    setDraft(value);
-  }, [value]);
-  useEffect(
-    () => () => {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-    },
-    [],
-  );
-  const update = (next: string) => {
-    setDraft(next);
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      timer.current = null;
-      onChange(next);
-    }, 100);
-  };
-  const clear = () => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = null;
-    setDraft("");
-    onChange("");
-  };
-  return (
-    <label className="search-box youtube-global-search">
-      <Search size={17} />
-      <input
-        type="text"
-        aria-label="Search YouTube"
-        placeholder="Song, artist, or paste a link"
-        value={draft}
-        onChange={(event) => update(event.target.value)}
-      />
-      {draft && (
-        <button type="button" aria-label="Clear search" onClick={clear}>
-          <X size={15} />
-        </button>
-      )}
-    </label>
-  );
-}
-function normalizeZoom(value: number) {
-  return Math.max(70, Math.min(130, Math.round(value / 10) * 10));
-}
-function initialZoomLevel() {
-  const android = /android/i.test(navigator.userAgent);
-  const saved = stored<number | null>("zoom-level", null);
-  const userSelected =
-    localStorage.getItem("michoplay-zoom-level-customized") === "true";
-  // Older builds persisted the implicit 100% default, so migrate that value once
-  // on Android while preserving any zoom preference saved by the user.
-  if (android && !userSelected && (saved === null || saved === 100)) return 120;
-  return normalizeZoom(saved ?? (android ? 120 : 100));
-}
-function SleepTimerControl({
-  player,
-  onSet,
-  placement,
-}: {
-  player: PlayerSnapshot;
-  onSet: (minutes: number | null, atTrackEnd: boolean) => void;
-  placement: "bar" | "full-mode";
-}) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  const active =
-    player.sleepTimerAtTrackEnd || player.sleepTimerRemainingMs !== null;
-  const currentMinutes =
-    player.sleepTimerRemainingMs === null
-      ? null
-      : Math.ceil(player.sleepTimerRemainingMs / 900_000) * 15;
-  const label = player.sleepTimerAtTrackEnd
-    ? "Track end"
-    : player.sleepTimerRemainingMs !== null
-      ? sleepTimerLabel(player.sleepTimerRemainingMs)
-      : "Sleep";
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: globalThis.PointerEvent) => {
-      if (
-        root.current &&
-        event.target instanceof Node &&
-        !root.current.contains(event.target)
-      )
-        setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-  useEffect(() => {
-    if (placement === "bar" && player.sleepTimerRemainingMs === null)
-      setOpen(false);
-  }, [placement, player.sleepTimerRemainingMs]);
-  if (placement === "bar" && player.sleepTimerRemainingMs === null) return null;
-  const choose = (minutes: number | null, atTrackEnd = false) => {
-    onSet(minutes, atTrackEnd);
-    setOpen(false);
-  };
-  return (
-    <div className={`sleep-timer-control ${placement}`} ref={root}>
-      <button
-        className={`sleep-timer-trigger ${active ? "active" : ""}`}
-        aria-label={active ? `Sleep timer: ${label}` : "Set sleep timer"}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={active ? `Sleep timer: ${label}` : "Set sleep timer"}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <Timer size={15} />
-        <span>{label}</span>
-      </button>
-      {open && (
-        <div
-          className="sleep-timer-menu"
-          role="menu"
-          aria-label="Sleep timer options"
-        >
-          <strong>{active ? `Sleep in ${label}` : "Stop playback"}</strong>
-          <button
-            role="menuitemradio"
-            aria-checked={!active}
-            onClick={() => choose(null)}
-          >
-            Off
-          </button>
-          {[
-            [15, "15 minutes"],
-            [30, "30 minutes"],
-            [45, "45 minutes"],
-            [60, "1 hour"],
-            [90, "1.5 hours"],
-            [120, "2 hours"],
-          ].map(([minutes, text]) => (
-            <button
-              key={minutes}
-              role="menuitemradio"
-              aria-checked={
-                !player.sleepTimerAtTrackEnd && currentMinutes === minutes
-              }
-              onClick={() => choose(Number(minutes))}
-            >
-              {text}
-            </button>
-          ))}
-          <button
-            role="menuitemradio"
-            aria-checked={player.sleepTimerAtTrackEnd}
-            disabled={!player.currentTrackId}
-            onClick={() => choose(null, true)}
-          >
-            End of current song
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-function albumKey(track: Track) {
-  return `${track.album}\u0000${track.artist}`;
-}
-const coverKeys = (tracks: Track[]) => tracks.map((track) => track.artworkKey);
-function fileToBase64(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = String(reader.result ?? "");
-      const comma = value.indexOf(",");
-      resolve(comma < 0 ? value : value.slice(comma + 1));
-    };
-    reader.onerror = () =>
-      reject(reader.error ?? new Error(`Could not read ${file.name}.`));
-    reader.readAsDataURL(file);
-  });
-}
+import { BufferedYoutubeSearch, DesktopGlobalSearch } from "./components/SearchInputs";
+import { SleepTimerControl, sleepTimerLabel } from "./components/SleepTimerControl";
+import { VolumeControl } from "./components/VolumeControl";
+import { MobileNav } from "./components/MobileNav";
+import { TransportControls } from "./components/TransportControls";
+import { useYoutubeSearch } from "./useYoutubeSearch";
+import type { Collection, Detail, DownloadFeedback, GlobalSearchResult, ListeningRecord, Page, Playlist, SavedPlaybackSession, Section, TrackMenu, TrackSort } from "./types";
+import { trackSortOptions } from "./types";
+import { albumKey, coverKeys, durationLabel, fileToBase64, headingTime, initialPlayer, initialZoomLevel, isFinishedYoutubeDownload, isNewerVersion, navigation, normalizeZoom, playlistSubmenuPlacement, sameYoutubeDownloads, storedLibraryRoots, time, tracksForDownload, youtubeFolderInitialResultLimit, youtubeGlobalInitialResultLimit, youtubeResultSize, youtubeSearchPageSize, latestReleaseApiUrl, michoplayDeveloperUrl, michoplayGithubUrl, michoplayIssueUrl, michoplayWebsiteUrl, defaultVolume } from "./utils";
 
 export default function App() {
   const [history, setHistory] = useState({
@@ -726,11 +188,6 @@ export default function App() {
     () => stored("global-youtube-search-enabled", true),
   );
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
-  const [globalYoutubeResults, setGlobalYoutubeResults] = useState<
-    YoutubeSearchResult[]
-  >([]);
-  const [globalYoutubeSearching, setGlobalYoutubeSearching] = useState(false);
-  const [globalYoutubeError, setGlobalYoutubeError] = useState("");
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
     const saved = stored<unknown>("recent-searches", []);
     return Array.isArray(saved)
@@ -891,16 +348,6 @@ export default function App() {
   const [youtubeDirectory, setYoutubeDirectory] = useState("");
   const [youtubeFolderScanned, setYoutubeFolderScanned] = useState(false);
   const [youtubeQuery, setYoutubeQuery] = useState("");
-  const [youtubeSearching, setYoutubeSearching] = useState(false);
-  const [youtubeSearchError, setYoutubeSearchError] = useState("");
-  const [youtubeResults, setYoutubeResults] = useState<YoutubeSearchResult[]>(
-    [],
-  );
-  const [youtubeVisibleLimit, setYoutubeVisibleLimit] = useState(
-    youtubeFolderInitialResultLimit,
-  );
-  const [youtubeHasMore, setYoutubeHasMore] = useState(false);
-  const [youtubeLoadingMore, setYoutubeLoadingMore] = useState(false);
   const [youtubeDownloads, setYoutubeDownloads] = useState<YoutubeDownload[]>(
     [],
   );
@@ -911,12 +358,6 @@ export default function App() {
     useState<DownloadFeedback | null>(null);
   const [globalYoutubeDownloadRequested, setGlobalYoutubeDownloadRequested] =
     useState<string[]>([]);
-  const [globalYoutubeVisibleLimit, setGlobalYoutubeVisibleLimit] = useState(
-    youtubeGlobalInitialResultLimit,
-  );
-  const [globalYoutubeHasMore, setGlobalYoutubeHasMore] = useState(false);
-  const [globalYoutubeLoadingMore, setGlobalYoutubeLoadingMore] =
-    useState(false);
   const [zoomLevel, setZoomLevel] = useState(initialZoomLevel);
   const [draggedQueue, setDraggedQueue] = useState<number | null>(null);
   const [queueDrop, setQueueDrop] = useState<number | null>(null);
@@ -928,8 +369,6 @@ export default function App() {
   const playbackRestoreComplete = useRef(false);
   const lastPlaybackSaveAt = useRef(0);
   const latestPlayerSnapshot = useRef<PlayerSnapshot>(initialPlayer);
-  const youtubeSearchVersion = useRef(0);
-  const globalYoutubeSearchVersion = useRef(0);
   const youtubeSearchCache = useRef(
     new Map<
       string,
@@ -1032,6 +471,49 @@ export default function App() {
   );
   const isYoutubePlaylist =
     selectedPlaylist?.name.trim().toLocaleLowerCase() === "youtube";
+
+  const folderYoutubeSearch = useYoutubeSearch({
+    query: youtubeQuery,
+    enabled: isYoutubePlaylist,
+    online: browserOnline,
+    cache: youtubeSearchCache,
+    initialLimit: youtubeFolderInitialResultLimit,
+    pageSize: youtubeSearchPageSize,
+    minimumQueryLength: 1,
+    debounceMs: 500,
+    offlineMessage: "YouTube search needs an internet connection.",
+    requestErrorMessage: "Couldn't search YouTube. Try again.",
+    onEnrich: enrichYoutubeLyrics,
+    onLoadMoreError: () => setMessage("Couldn't load more YouTube results. Try again."),
+  });
+  const globalYoutubeSearch = useYoutubeSearch({
+    query: search,
+    enabled: isTauri() && globalYoutubeSearchEnabled,
+    online: browserOnline,
+    cache: youtubeSearchCache,
+    initialLimit: youtubeGlobalInitialResultLimit,
+    pageSize: youtubeSearchPageSize,
+    minimumQueryLength: 2,
+    debounceMs: 450,
+    offlineMessage: "YouTube search is unavailable offline. Your local matches are still shown.",
+    requestErrorMessage: "YouTube search couldn't load. Check your connection and try again.",
+    onEnrich: enrichYoutubeLyrics,
+    onLoadMoreError: () => setMessage("Couldn't load more YouTube results. Try again."),
+  });
+  const youtubeResults = folderYoutubeSearch.results;
+  const setYoutubeResults = folderYoutubeSearch.setResults;
+  const youtubeSearching = folderYoutubeSearch.searching;
+  const youtubeSearchError = folderYoutubeSearch.error;
+  const youtubeVisibleLimit = folderYoutubeSearch.visibleLimit;
+  const youtubeHasMore = folderYoutubeSearch.hasMore;
+  const youtubeLoadingMore = folderYoutubeSearch.loadingMore;
+  const globalYoutubeResults = globalYoutubeSearch.results;
+  const setGlobalYoutubeResults = globalYoutubeSearch.setResults;
+  const globalYoutubeSearching = globalYoutubeSearch.searching;
+  const globalYoutubeError = globalYoutubeSearch.error;
+  const globalYoutubeVisibleLimit = globalYoutubeSearch.visibleLimit;
+  const globalYoutubeHasMore = globalYoutubeSearch.hasMore;
+  const globalYoutubeLoadingMore = globalYoutubeSearch.loadingMore;
 
   const navigate = useCallback((next: Page) => {
     setHistory((prior) => ({
@@ -1511,7 +993,16 @@ export default function App() {
         void refresh();
       }, 1200);
     }
-    if (!isAndroid) {
+    if (isAndroid) {
+      void addPluginListener<{ items: YoutubeDownload[] }>(
+        "michoplay-media",
+        "youtube-downloads-updated",
+        ({ items }) => { if (active && Array.isArray(items)) void applyDownloads(items); },
+      ).then((listener) => {
+        if (active) unlisten = () => { void listener.unregister(); };
+        else void listener.unregister();
+      }).catch(() => {});
+    } else {
       void listen<YoutubeDownload[]>(
         "youtube-downloads-updated",
         ({ payload }) => applyDownloads(payload),
@@ -1526,80 +1017,6 @@ export default function App() {
     };
   }, [isAndroid, hasActiveYoutubeDownloads, syncYoutubeLibrary]);
   useEffect(() => {
-    if (!isYoutubePlaylist) return;
-    const query = youtubeQuery.trim();
-    const version = ++youtubeSearchVersion.current;
-    if (!query) {
-      setYoutubeResults([]);
-      setYoutubeVisibleLimit(youtubeFolderInitialResultLimit);
-      setYoutubeHasMore(false);
-      setYoutubeSearchError("");
-      setYoutubeSearching(false);
-      return;
-    }
-    const cached = youtubeSearchCache.current.get(query.toLocaleLowerCase());
-    if (cached && Date.now() - cached.savedAt < 60_000) {
-      const hasMore =
-        cached.hasMore ??
-        youtubeSearchCanContinue(query, cached.results.length);
-      setYoutubeResults(cached.results);
-      setYoutubeVisibleLimit(
-        hasMore ? youtubeFolderInitialResultLimit : cached.results.length,
-      );
-      setYoutubeHasMore(hasMore);
-      setYoutubeSearchError("");
-      setYoutubeSearching(false);
-      return;
-    }
-    if (!browserOnline) {
-      setYoutubeResults([]);
-      setYoutubeVisibleLimit(youtubeFolderInitialResultLimit);
-      setYoutubeHasMore(false);
-      setYoutubeSearchError("YouTube search needs an internet connection.");
-      setYoutubeSearching(false);
-      return;
-    }
-    setYoutubeSearching(true);
-    setYoutubeSearchError("");
-    setYoutubeResults([]);
-    setYoutubeVisibleLimit(youtubeFolderInitialResultLimit);
-    setYoutubeHasMore(false);
-    const timer = window.setTimeout(() => {
-      void api
-        .youtubeSearch(query, youtubeSearchPageSize, 0)
-        .then((results) => {
-          if (youtubeSearchVersion.current !== version) return;
-          const hasMore = youtubeSearchCanContinue(query, results.length);
-          setYoutubeResults(results);
-          setYoutubeVisibleLimit(youtubeFolderInitialResultLimit);
-          setYoutubeHasMore(hasMore);
-          youtubeSearchCache.current.set(query.toLocaleLowerCase(), {
-            results,
-            hasMore,
-            savedAt: Date.now(),
-          });
-          enrichYoutubeLyrics(query, 0, results);
-        })
-        .catch(() => {
-          if (youtubeSearchVersion.current === version) {
-            setYoutubeResults([]);
-            setYoutubeVisibleLimit(youtubeFolderInitialResultLimit);
-            setYoutubeHasMore(false);
-            setYoutubeSearchError(
-              navigator.onLine
-                ? "Couldn't search YouTube. Try again."
-                : "YouTube search needs an internet connection.",
-            );
-          }
-        })
-        .finally(() => {
-          if (youtubeSearchVersion.current === version)
-            setYoutubeSearching(false);
-        });
-    }, 500);
-    return () => window.clearTimeout(timer);
-  }, [youtubeQuery, isYoutubePlaylist, browserOnline]);
-  useEffect(() => {
     const update = () => setBrowserOnline(navigator.onLine);
     window.addEventListener("online", update);
     window.addEventListener("offline", update);
@@ -1608,82 +1025,6 @@ export default function App() {
       window.removeEventListener("offline", update);
     };
   }, []);
-  useEffect(() => {
-    const query = search.trim();
-    const version = ++globalYoutubeSearchVersion.current;
-    if (!isTauri() || !globalYoutubeSearchEnabled || query.length < 2) {
-      setGlobalYoutubeResults([]);
-      setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit);
-      setGlobalYoutubeHasMore(false);
-      setGlobalYoutubeError("");
-      setGlobalYoutubeSearching(false);
-      return;
-    }
-    const cacheKey = query.toLocaleLowerCase();
-    const cached = youtubeSearchCache.current.get(cacheKey);
-    if (cached && Date.now() - cached.savedAt < 60_000) {
-      const hasMore =
-        cached.hasMore ??
-        youtubeSearchCanContinue(query, cached.results.length);
-      setGlobalYoutubeResults(cached.results);
-      setGlobalYoutubeVisibleLimit(
-        hasMore ? youtubeGlobalInitialResultLimit : cached.results.length,
-      );
-      setGlobalYoutubeHasMore(hasMore);
-      setGlobalYoutubeError("");
-      setGlobalYoutubeSearching(false);
-      return;
-    }
-    if (!browserOnline) {
-      setGlobalYoutubeResults([]);
-      setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit);
-      setGlobalYoutubeHasMore(false);
-      setGlobalYoutubeError(
-        "YouTube search is unavailable offline. Your local matches are still shown.",
-      );
-      setGlobalYoutubeSearching(false);
-      return;
-    }
-    setGlobalYoutubeResults([]);
-    setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit);
-    setGlobalYoutubeHasMore(false);
-    setGlobalYoutubeError("");
-    setGlobalYoutubeSearching(true);
-    const timer = window.setTimeout(() => {
-      void api
-        .youtubeSearch(query, youtubeSearchPageSize, 0)
-        .then((results) => {
-          if (globalYoutubeSearchVersion.current !== version) return;
-          const hasMore = youtubeSearchCanContinue(query, results.length);
-          setGlobalYoutubeResults(results);
-          setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit);
-          setGlobalYoutubeHasMore(hasMore);
-          youtubeSearchCache.current.set(cacheKey, {
-            results,
-            hasMore,
-            savedAt: Date.now(),
-          });
-          enrichYoutubeLyrics(query, 0, results);
-        })
-        .catch(() => {
-          if (globalYoutubeSearchVersion.current === version) {
-            setGlobalYoutubeResults([]);
-            setGlobalYoutubeVisibleLimit(youtubeGlobalInitialResultLimit);
-            setGlobalYoutubeHasMore(false);
-            setGlobalYoutubeError(
-              navigator.onLine
-                ? "YouTube search couldn't load. Check your connection and try again."
-                : "YouTube search is unavailable offline. Your local matches are still shown.",
-            );
-          }
-        })
-        .finally(() => {
-          if (globalYoutubeSearchVersion.current === version)
-            setGlobalYoutubeSearching(false);
-        });
-    }, 450);
-    return () => window.clearTimeout(timer);
-  }, [search, globalYoutubeSearchEnabled, browserOnline, isAndroid]);
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
@@ -2811,6 +2152,7 @@ export default function App() {
       detail: { kind: "playlist", key: youtube.id, title: youtube.name },
     });
   }
+
   async function removeFolder(folder: string) {
     try {
       const remaining = await api.removeFolder(folder);
@@ -3802,85 +3144,6 @@ export default function App() {
       }
     />
   );
-  async function loadMoreYoutubeFolderResults() {
-    const query = youtubeQuery.trim();
-    if (!query || youtubeSearching || youtubeLoadingMore || !youtubeHasMore)
-      return;
-    const version = youtubeSearchVersion.current;
-    const offset = youtubeResults.length;
-    setYoutubeLoadingMore(true);
-    try {
-      const next = await api.youtubeSearch(
-        query,
-        youtubeSearchPageSize,
-        offset,
-      );
-      if (youtubeSearchVersion.current !== version) return;
-      setYoutubeResults((current) => {
-        const known = new Set(current.map((result) => result.id));
-        const merged = [
-          ...current,
-          ...next.filter((result) => !known.has(result.id)),
-        ];
-        youtubeSearchCache.current.set(query.toLocaleLowerCase(), {
-          results: merged,
-          hasMore: youtubeSearchCanContinue(query, next.length),
-          savedAt: Date.now(),
-        });
-        return merged;
-      });
-      setYoutubeHasMore(youtubeSearchCanContinue(query, next.length));
-      setYoutubeVisibleLimit((limit) => limit + youtubeSearchPageSize);
-      enrichYoutubeLyrics(query, offset, next);
-    } catch {
-      if (youtubeSearchVersion.current === version)
-        setMessage("Couldn't load more YouTube results. Try again.");
-    } finally {
-      setYoutubeLoadingMore(false);
-    }
-  }
-  async function loadMoreGlobalYoutubeResults() {
-    const query = search.trim();
-    if (
-      !query ||
-      globalYoutubeSearching ||
-      globalYoutubeLoadingMore ||
-      !globalYoutubeHasMore
-    )
-      return;
-    const version = globalYoutubeSearchVersion.current;
-    const offset = globalYoutubeResults.length;
-    setGlobalYoutubeLoadingMore(true);
-    try {
-      const next = await api.youtubeSearch(
-        query,
-        youtubeSearchPageSize,
-        offset,
-      );
-      if (globalYoutubeSearchVersion.current !== version) return;
-      setGlobalYoutubeResults((current) => {
-        const known = new Set(current.map((result) => result.id));
-        const merged = [
-          ...current,
-          ...next.filter((result) => !known.has(result.id)),
-        ];
-        youtubeSearchCache.current.set(query.toLocaleLowerCase(), {
-          results: merged,
-          hasMore: youtubeSearchCanContinue(query, next.length),
-          savedAt: Date.now(),
-        });
-        return merged;
-      });
-      setGlobalYoutubeHasMore(youtubeSearchCanContinue(query, next.length));
-      setGlobalYoutubeVisibleLimit((limit) => limit + youtubeSearchPageSize);
-      enrichYoutubeLyrics(query, offset, next);
-    } catch {
-      if (globalYoutubeSearchVersion.current === version)
-        setMessage("Couldn't load more YouTube results. Try again.");
-    } finally {
-      setGlobalYoutubeLoadingMore(false);
-    }
-  }
   const globalSearchContent = search.trim() ? (
     <>
       {!isAndroid &&
@@ -3943,13 +3206,7 @@ export default function App() {
                             <strong>{result.title}</strong>
                             <small>
                               {result.hasLyrics && (
-                                <span
-                                  className="lyrics-badge"
-                                  aria-label="Lyrics available"
-                                  title="English captions available"
-                                >
-                                  E
-                                </span>
+                                <LyricsBadge />
                               )}
                               YouTube ·{" "}
                               {result.isPlaylist
@@ -3988,7 +3245,7 @@ export default function App() {
                   <button
                     className="youtube-load-more global-youtube-load-more"
                     disabled={globalYoutubeLoadingMore}
-                    onClick={() => void loadMoreGlobalYoutubeResults()}
+                    onClick={() => void globalYoutubeSearch.loadMore()}
                   >
                     {globalYoutubeLoadingMore
                       ? "Loading YouTube results…"
@@ -4653,7 +3910,7 @@ export default function App() {
                       requestYoutubeDownload(result, query, source)
                     }
                     onLoadMoreYoutube={() =>
-                      void loadMoreGlobalYoutubeResults()
+                      void globalYoutubeSearch.loadMore()
                     }
                     searchResults={searchResults}
                     recentSearchResults={recentSearchResults}
@@ -4868,12 +4125,7 @@ export default function App() {
                                           <strong>{track.title}</strong>
                                           <small>
                                             {track.hasLyrics && (
-                                              <span
-                                                className="lyrics-badge"
-                                                aria-label="Lyrics available"
-                                              >
-                                                E
-                                              </span>
+                                              <LyricsBadge />
                                             )}
                                             {track.artist}
                                           </small>
@@ -4997,13 +4249,7 @@ export default function App() {
                                               <strong>{result.title}</strong>
                                               <small>
                                                 {result.hasLyrics && (
-                                                  <span
-                                                    className="lyrics-badge"
-                                                    aria-label="Lyrics available"
-                                                    title="English captions available"
-                                                  >
-                                                    E
-                                                  </span>
+                                                  <LyricsBadge />
                                                 )}
                                                 {result.isPlaylist
                                                   ? "Playlist · MP3 audio"
@@ -5061,7 +4307,7 @@ export default function App() {
                                     className="youtube-load-more"
                                     disabled={youtubeLoadingMore}
                                     onClick={() =>
-                                      void loadMoreYoutubeFolderResults()
+                                      void folderYoutubeSearch.loadMore()
                                     }
                                   >
                                     {youtubeLoadingMore
@@ -5304,7 +4550,9 @@ export default function App() {
                         availableTracks={availableTracks}
                         folders={folders}
                         isScanning={scanning}
-                        navigate={(section) => navigate({ section })}
+                        navigate={(section) => {
+                          navigate({ section });
+                        }}
                         openYoutube={openYoutubePage}
                         chooseLibrarySource={chooseLibrarySource}
                         openFolder={(item) =>
@@ -5663,12 +4911,7 @@ export default function App() {
                             <strong>{nowPlayingTrack.title}</strong>
                             <span>
                               {nowPlayingTrack.hasLyrics && (
-                                <span
-                                  className="lyrics-badge"
-                                  aria-label="Lyrics available"
-                                >
-                                  E
-                                </span>
+                                <LyricsBadge />
                               )}
                               {nowPlayingTrack.artist}
                             </span>
@@ -5771,12 +5014,7 @@ export default function App() {
                                 </span>
                                 <span className="queue-label queue-label-artist">
                                   {track.hasLyrics && (
-                                    <span
-                                      className="lyrics-badge"
-                                      aria-label="Lyrics available"
-                                    >
-                                      E
-                                    </span>
+                                    <LyricsBadge />
                                   )}
                                   {track.artist}
                                 </span>
@@ -5860,9 +5098,7 @@ export default function App() {
               </span>
               <span className="track-artist">
                 {footerTrack?.hasLyrics && (
-                  <span className="lyrics-badge" aria-label="Lyrics available">
-                    E
-                  </span>
+                  <LyricsBadge />
                 )}
                 {footerTrack?.artist ?? ""}
               </span>
@@ -5883,60 +5119,16 @@ export default function App() {
             )}
           </div>
           <div className="transport">
-            <div className="transport-buttons">
-              <button
-                className={`transport-button shuffle-control ${player.shuffle ? "active" : ""}`}
-                aria-label="Shuffle"
-                disabled={!tracks.length}
-                onClick={() => void run(api.shuffle)}
-              >
-                <Shuffle size={15} />
-              </button>
-              <button
-                className="transport-button"
-                aria-label="Previous track"
-                disabled={!tracks.length}
-                onClick={() => void run(api.previous)}
-              >
-                <SkipBack size={17} fill="currentColor" />
-              </button>
-              <button
-                className={`play-button ${player.isPlaying ? "is-playing" : ""}`}
-                aria-label={player.isPlaying ? "Pause" : "Play"}
-                disabled={!tracks.length}
-                onClick={() =>
-                  void run(
-                    current
-                      ? api.toggle
-                      : footerTrack
-                        ? () => api.play(footerTrack.id)
-                        : api.toggle,
-                  )
-                }
-              >
-                {player.isPlaying ? (
-                  <Pause size={16} fill="currentColor" />
-                ) : (
-                  <Play size={15} fill="currentColor" />
-                )}
-              </button>
-              <button
-                className="transport-button"
-                aria-label="Next track"
-                disabled={!tracks.length}
-                onClick={() => void run(api.next)}
-              >
-                <SkipForward size={17} fill="currentColor" />
-              </button>
-              <button
-                className={`transport-button repeat-button repeat-control ${player.repeatMode !== "off" ? "active" : ""}`}
-                aria-label={`Repeat ${player.repeatMode}`}
-                disabled={!tracks.length}
-                onClick={() => void run(api.repeat)}
-              >
-                ↻{player.repeatMode === "one" && <small>1</small>}
-              </button>
-            </div>
+            <TransportControls
+              layout="bar"
+              player={player}
+              disabled={!tracks.length}
+              onShuffle={() => void run(api.shuffle)}
+              onPrevious={() => void run(api.previous)}
+              onToggle={() => void run(current ? api.toggle : footerTrack ? () => api.play(footerTrack.id) : api.toggle)}
+              onNext={() => void run(api.next)}
+              onRepeat={() => void run(api.repeat)}
+            />
             <div className="seek-row">
               <span>{time(seekPreviewMs ?? player.positionMs)}</span>
               <input
@@ -6003,30 +5195,7 @@ export default function App() {
                 <PanelRightOpen size={17} />
               )}
             </button>
-            <button
-              className="volume-mute-button"
-              aria-label={player.volume === 0 ? "Unmute" : "Mute"}
-              title={player.volume === 0 ? "Unmute" : "Mute"}
-              onClick={toggleMute}
-            >
-              {player.volume === 0 ? (
-                <VolumeX size={17} />
-              ) : (
-                <Volume2 size={17} />
-              )}
-            </button>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={player.volume}
-              style={
-                { "--range-value": `${player.volume * 100}%` } as CSSProperties
-              }
-              aria-label="Volume"
-              onChange={(event) => setVolume(Number(event.target.value))}
-            />
+            <VolumeControl volume={player.volume} onChange={setVolume} onToggleMute={toggleMute} />
             <button
               className={`transport-button full-mode-trigger ${fullMode ? "active" : ""}`}
               aria-label={fullMode ? "Exit full mode" : "Open full mode"}
@@ -6179,65 +5348,17 @@ export default function App() {
                   )}
                 </div>
                 <div className="full-mode-controls">
-                  <div className="full-mode-transport">
-                    <button
-                      className={`full-mode-control ${player.shuffle ? "active" : ""}`}
-                      aria-label="Shuffle"
-                      onClick={() => void run(api.shuffle)}
-                    >
-                      <Shuffle size={19} />
-                    </button>
-                    <button
-                      className="full-mode-control"
-                      aria-label="Previous track"
-                      onClick={() => void run(api.previous)}
-                    >
-                      <SkipBack size={22} fill="currentColor" />
-                    </button>
-                    <button
-                      className="full-mode-play"
-                      aria-label={player.isPlaying ? "Pause" : "Play"}
-                      onClick={() =>
-                        void run(
-                          current
-                            ? api.toggle
-                            : footerTrack
-                              ? () => api.play(footerTrack.id)
-                              : api.toggle,
-                        )
-                      }
-                    >
-                      {player.isPlaying ? (
-                        <Pause size={23} fill="currentColor" />
-                      ) : (
-                        <Play size={23} fill="currentColor" />
-                      )}
-                    </button>
-                    <button
-                      className="full-mode-control"
-                      aria-label="Next track"
-                      onClick={() => void run(api.next)}
-                    >
-                      <SkipForward size={22} fill="currentColor" />
-                    </button>
-                    <button
-                      className={`full-mode-control ${player.repeatMode !== "off" ? "active" : ""}`}
-                      aria-label={`Repeat ${player.repeatMode}`}
-                      onClick={() => void run(api.repeat)}
-                    >
-                      ↻{player.repeatMode === "one" && <small>1</small>}
-                    </button>
-                    <button
-                      className={`full-mode-control ${fullModeLyrics ? "active" : ""}`}
-                      aria-label={
-                        fullModeLyrics ? "Show artwork" : "Show lyrics"
-                      }
-                      title={fullModeLyrics ? "Show artwork" : "Lyrics"}
-                      onClick={() => setFullModeLyrics((open) => !open)}
-                    >
-                      <Mic2 size={19} />
-                    </button>
-                  </div>
+                  <TransportControls
+                    layout="full"
+                    player={player}
+                    onShuffle={() => void run(api.shuffle)}
+                    onPrevious={() => void run(api.previous)}
+                    onToggle={() => void run(current ? api.toggle : footerTrack ? () => api.play(footerTrack.id) : api.toggle)}
+                    onNext={() => void run(api.next)}
+                    onRepeat={() => void run(api.repeat)}
+                    lyricsActive={fullModeLyrics}
+                    onLyrics={() => setFullModeLyrics((open) => !open)}
+                  />
                   <div className="full-mode-seek">
                     <span>{time(seekPreviewMs ?? player.positionMs)}</span>
                     <input
@@ -6268,29 +5389,7 @@ export default function App() {
                     <span>{time(player.durationMs)}</span>
                   </div>
                   <div className="full-mode-volume">
-                    <button
-                      className="volume-mute-button"
-                      aria-label={player.volume === 0 ? "Unmute" : "Mute"}
-                      title={player.volume === 0 ? "Unmute" : "Mute"}
-                      onClick={toggleMute}
-                    >
-                      {player.volume === 0 ? (
-                        <VolumeX size={17} />
-                      ) : (
-                        <Volume2 size={17} />
-                      )}
-                    </button>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={player.volume}
-                      aria-label="Volume"
-                      onChange={(event) =>
-                        setVolume(Number(event.target.value))
-                      }
-                    />
+                    <VolumeControl volume={player.volume} onChange={setVolume} onToggleMute={toggleMute} />
                   </div>
                 </div>
               </div>
@@ -6354,12 +5453,7 @@ export default function App() {
                             <strong>{track.title}</strong>
                             <small>
                               {track.hasLyrics && (
-                                <span
-                                  className="lyrics-badge"
-                                  aria-label="Lyrics available"
-                                >
-                                  E
-                                </span>
+                                <LyricsBadge />
                               )}
                               {track.artist}
                             </small>
@@ -6407,12 +5501,7 @@ export default function App() {
                                 <strong>{track.title}</strong>
                                 <small>
                                   {track.hasLyrics && (
-                                    <span
-                                      className="lyrics-badge"
-                                      aria-label="Lyrics available"
-                                    >
-                                      E
-                                    </span>
+                                    <LyricsBadge />
                                   )}
                                   {track.artist}
                                 </small>
@@ -6538,12 +5627,7 @@ export default function App() {
                                     <strong>{track.title}</strong>
                                     <small>
                                       {track.hasLyrics && (
-                                        <span
-                                          className="lyrics-badge"
-                                          aria-label="Lyrics available"
-                                        >
-                                          E
-                                        </span>
+                                        <LyricsBadge />
                                       )}
                                       {track.artist}
                                     </small>
@@ -6603,12 +5687,7 @@ export default function App() {
                 <strong>{footerTrack?.title ?? "Nothing playing"}</strong>
                 <small>
                   {footerTrack?.hasLyrics && (
-                    <span
-                      className="lyrics-badge"
-                      aria-label="Lyrics available"
-                    >
-                      E
-                    </span>
+                    <LyricsBadge />
                   )}
                   {footerTrack?.artist ?? "Choose a song to start"}
                 </small>
@@ -6680,75 +5759,23 @@ export default function App() {
               />
             </div>
           </div>
-          <nav
-            className={`mobile-bottom-nav ${page.section === "Settings" ? "settings-open" : ""}`}
-            aria-label="Main navigation"
-          >
-            <button
-              className={
-                mobileTab === "home" && page.section !== "Settings"
-                  ? "active"
-                  : ""
-              }
-              onClick={() => {
-                setMobileTab("home");
-                if (page.section !== "Home" || page.detail)
-                  navigate({ section: "Home" });
-              }}
-            >
-              <Home size={22} />
-              <span>Home</span>
-            </button>
-            <button
-              className={mobileTab === "library" ? "active" : ""}
-              onClick={() => {
-                setMobileTab("library");
-                if (page.section !== "Home" || page.detail)
-                  navigate({ section: "Home" });
-              }}
-            >
-              <Library size={22} />
-              <span>Library</span>
-            </button>
-            <button
-              className={mobileTab === "youtube" ? "active" : ""}
-              onClick={openYoutubePage}
-            >
-              <Youtube size={22} />
-              <span>YouTube</span>
-            </button>
-            <button
-              ref={downloadNavRef}
-              className={`mobile-downloads-nav ${mobileTab === "downloads" ? "active" : ""}`}
-              aria-label={
-                mobileDownloadBadgeCount
-                  ? `Downloads, ${mobileDownloadBadgeCount} active or new`
-                  : "Downloads"
-              }
-              onClick={openMobileDownloads}
-            >
-              <Download size={22} />
-              {mobileDownloadBadgeCount > 0 && (
-                <span className="mobile-download-badge" aria-hidden="true">
-                  {mobileDownloadBadgeCount > 99
-                    ? "99+"
-                    : mobileDownloadBadgeCount}
-                </span>
-              )}
-              <span>Downloads</span>
-            </button>
-          </nav>
-          <button
-            className={`mobile-nav-search ${mobileTab === "search" ? "active" : ""} ${page.section === "Settings" ? "settings-open" : ""}`}
-            aria-label="Search"
-            aria-pressed={mobileTab === "search"}
-            onClick={() => {
-              setMobileTab("search");
-              setSearch("");
+          <MobileNav
+            mobileTab={mobileTab}
+            section={page.section}
+            downloadCount={mobileDownloadBadgeCount}
+            downloadNavRef={downloadNavRef}
+            onHome={() => {
+              setMobileTab("home");
+              if (page.section !== "Home" || page.detail) navigate({ section: "Home" });
             }}
-          >
-            <Search size={24} />
-          </button>
+            onLibrary={() => {
+              setMobileTab("library");
+              if (page.section !== "Home" || page.detail) navigate({ section: "Home" });
+            }}
+            onYoutube={openYoutubePage}
+            onDownloads={openMobileDownloads}
+            onSearch={() => { setMobileTab("search"); setSearch(""); }}
+          />
           {downloadFeedback && (
             <>
               <span
@@ -6948,12 +5975,7 @@ export default function App() {
                   <strong>{footerTrack.title}</strong>
                   <span className="mobile-player-track-meta">
                     {footerTrack.hasLyrics && (
-                      <span
-                        className="lyrics-badge"
-                        aria-label="Lyrics available"
-                      >
-                        E
-                      </span>
+                      <LyricsBadge />
                     )}
                     <span>{footerTrack.artist}</span>
                   </span>
@@ -7306,12 +6328,7 @@ export default function App() {
                         <strong>{track.title}</strong>
                         <small>
                           {track.hasLyrics && (
-                            <span
-                              className="lyrics-badge"
-                              aria-label="Lyrics available"
-                            >
-                              E
-                            </span>
+                            <LyricsBadge />
                           )}
                           {track.artist}
                         </small>
@@ -8076,12 +7093,7 @@ export default function App() {
                       <strong>{track.title}</strong>
                       <small>
                         {track.hasLyrics && (
-                          <span
-                            className="lyrics-badge"
-                            aria-label="Lyrics available"
-                          >
-                            E
-                          </span>
+                          <LyricsBadge />
                         )}
                         {track.artist}
                       </small>

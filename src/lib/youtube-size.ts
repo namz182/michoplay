@@ -142,7 +142,7 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
   if (/no video formats|requested format|audio format|unsupported url/.test(detail)) {
     return "Audio isn't available for this video. Try another song.";
   }
-  if (/invalid data found|could not find codec parameters/.test(detail)) {
+  if (/invalid data found|could not find codec parameters|(?:downloaded|saved) audio couldn't be read/.test(detail)) {
     return "The downloaded audio couldn't be read. Try downloading it again.";
   }
   if (/ffmpeg|ffprobe|postprocess|audio conversion|convert.*mp3|codec|playable audio file|couldn.t prepare this song for playback/.test(detail)) {
