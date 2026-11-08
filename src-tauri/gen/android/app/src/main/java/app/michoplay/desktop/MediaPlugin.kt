@@ -569,7 +569,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File) {
     val request = YoutubeDLRequest(item["url"] as String)
     request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
-    request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s")
+    request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
     if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
     request.addOption("--playlist-end", "100")
     // The app only needs an audio stream; selecting `best` can return a
@@ -608,10 +608,13 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         val progressMatch = downloadProgress.find(line)
         val template = line.substringAfter("__MICHOPLAY_PROGRESS__", "").takeIf { it != line && it.isNotEmpty() }
         val fields = template?.split('|')
+        val progressExtension = fields?.getOrNull(7)?.substringAfterLast('.', "")?.substringBefore('?')?.lowercase()
+        val progressIsAudio = progressExtension in setOf("webm", "m4a", "mp3", "opus", "ogg", "aac", "flac", "wav")
         val percentValue = fields?.getOrNull(0)?.trim()?.removeSuffix("%")?.toDoubleOrNull()
+          ?: fields?.getOrNull(6)?.trim()?.toDoubleOrNull()
           ?: progressMatch?.groupValues?.getOrNull(1)?.toDoubleOrNull()
           ?: progress.takeIf { it.isFinite() }?.toDouble()
-        if (percentValue != null && isAudioTransfer) {
+        if (percentValue != null && (isAudioTransfer || progressIsAudio)) {
           // Ignore caption/artwork transfers so the bar follows the audio stream.
           val trackPercent = percentValue.coerceIn(0.0, 100.0)
           val position = playlistPosition

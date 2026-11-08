@@ -2853,15 +2853,32 @@ fn report_youtube_progress(
     };
     let legacy_progress = legacy.unwrap_or_default();
     let legacy_split = legacy_progress.split_once('%');
+    let progress_is_audio = Path::new(field(7))
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "webm" | "m4a" | "mp3" | "opus" | "ogg" | "aac" | "flac" | "wav"
+            )
+        });
     let Some(percent) = custom_fields
         .as_ref()
-        .and_then(|_| field(0).trim_end_matches('%').parse::<f32>().ok())
+        .and_then(|_| {
+            field(0)
+                .trim()
+                .trim_end_matches('%')
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .or_else(|| field(6).parse::<f32>().ok())
+        })
         .or_else(|| legacy_split.and_then(|(value, _)| value.trim().parse::<f32>().ok()))
         .filter(|value| value.is_finite())
     else {
         return true;
     };
-    if !is_audio_transfer {
+    if !is_audio_transfer && !progress_is_audio {
         return true;
     }
     // Completion is only reported after MP3 validation; this is transfer progress.
@@ -3795,7 +3812,7 @@ fn run_youtube_download(
         .arg("--newline")
         .arg("--progress")
         .arg("--progress-template")
-        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s")
+        .arg("download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
         .arg("--continue")
         .arg(if is_playlist {
             "--yes-playlist"
@@ -3871,8 +3888,9 @@ fn run_youtube_download(
     let tail = stderr_tail.clone();
     let app_for_stderr = app.clone();
     let task_id = id.to_owned();
+    let audio_transfer = Arc::new(AtomicBool::new(false));
+    let audio_transfer_stderr = audio_transfer.clone();
     let stderr_reader = std::thread::spawn(move || {
-        let mut current_is_audio = false;
         let mut playlist_position = None;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if let Some(position) = line.split_once("Downloading item").map(|(_, value)| value) {
@@ -3890,10 +3908,11 @@ fn run_youtube_download(
                     .and_then(std::ffi::OsStr::to_str)
                     .unwrap_or_default()
                     .to_ascii_lowercase();
-                current_is_audio = matches!(
+                let current_is_audio = matches!(
                     extension.as_str(),
                     "webm" | "m4a" | "mp3" | "opus" | "ogg" | "aac" | "flac" | "wav"
                 );
+                audio_transfer_stderr.store(current_is_audio, Ordering::Relaxed);
                 if current_is_audio {
                     set_youtube_download_phase(
                         &app_for_stderr,
@@ -3935,7 +3954,7 @@ fn run_youtube_download(
                 &app_for_stderr,
                 &task_id,
                 &line,
-                current_is_audio,
+                audio_transfer_stderr.load(Ordering::Relaxed),
                 playlist_position,
             ) {
                 if let Ok(mut lines) = tail.lock() {
@@ -3949,6 +3968,7 @@ fn run_youtube_download(
     });
     let mut output_paths = Vec::<PathBuf>::new();
     let mut output_error = None;
+    let mut playlist_position = None;
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines() {
             let line = match line {
@@ -3960,6 +3980,36 @@ fn run_youtube_download(
                     break;
                 }
             };
+            if let Some(destination) = line.trim().strip_prefix("[download] Destination:") {
+                let extension = Path::new(destination.trim())
+                    .extension()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                audio_transfer.store(
+                    matches!(
+                        extension.as_str(),
+                        "webm" | "m4a" | "mp3" | "opus" | "ogg" | "aac" | "flac" | "wav"
+                    ),
+                    Ordering::Relaxed,
+                );
+            }
+            if let Some(position) = line.split_once("Downloading item").map(|(_, value)| value) {
+                let mut fields = position.split_whitespace();
+                let current = fields.next().and_then(|value| value.parse::<usize>().ok());
+                let is_of = fields.next() == Some("of");
+                let total = fields.next().and_then(|value| value.parse::<usize>().ok());
+                if is_of {
+                    playlist_position = current.zip(total).filter(|(_, total)| *total > 0);
+                }
+            }
+            let _ = report_youtube_progress(
+                app,
+                id,
+                &line,
+                audio_transfer.load(Ordering::Relaxed),
+                playlist_position,
+            );
             match youtube_download_file_path(&line) {
                 Ok(Some(path)) => output_paths.push(path),
                 Ok(None) => {
