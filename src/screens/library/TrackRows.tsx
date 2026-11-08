@@ -12,41 +12,85 @@ export const TrackRows = memo(function TrackRows({ items, player, favorites, com
   const [dismissedPlayControl, setDismissedPlayControl] = useState<number | null>(null);
   const [range, setRange] = useState({ start: 0, end: 80 });
   const listRef = useRef<HTMLDivElement>(null);
+  const listTopRef = useRef(0);
+  const listZoomRef = useRef(1);
   const rowHeight = rowHeightOverride ?? (compact ? 43 : 54);
   const overscan = rowHeightOverride ? 24 : 12;
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
     const root = list.closest<HTMLElement>(".content-scroll");
-    const update = () => {
+    const measureListTop = () => {
       const rect = list.getBoundingClientRect();
-      const rootTop = root?.getBoundingClientRect().top ?? 0;
-      const height = root ? root.clientHeight : window.innerHeight;
-      // Measure the list and viewport in the same coordinate space. This stays
-      // correct during Android WebView fling scrolling, when scroll events can
-      // be coalesced and scrollTop may lag behind the painted position.
-      const relativeTop = rootTop - rect.top;
-      const firstVisible = Math.max(0, Math.floor(relativeTop / rowHeight));
-      const lastVisible = Math.min(items.length, Math.ceil((relativeTop + height) / rowHeight));
+      const rootRect = root?.getBoundingClientRect();
+      const zoom = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue("--app-zoom"),
+      ) || 1;
+      listZoomRef.current = zoom;
+      const rootTop = rootRect?.top ?? 0;
+      listTopRef.current = root
+        ? (rect.top - rootTop) / zoom + root.scrollTop
+        : rect.top / zoom + window.scrollY;
+    };
+    const update = () => {
+      const scrollTop = root?.scrollTop ?? window.scrollY;
+      const zoom = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue("--app-zoom"),
+      ) || 1;
+      if (zoom !== listZoomRef.current) measureListTop();
+      const viewportHeight = root
+        ? (root.getBoundingClientRect().height / zoom)
+        : window.innerHeight;
+      const firstVisible = Math.max(0, Math.min(items.length, Math.floor((scrollTop - listTopRef.current) / rowHeight)));
+      const lastVisible = Math.max(firstVisible, Math.min(items.length, Math.ceil((scrollTop + viewportHeight - listTopRef.current) / rowHeight)));
       const next = {
-        start: Math.max(0, firstVisible - overscan),
-        end: Math.min(items.length, Math.max(firstVisible, lastVisible) + overscan),
+        start: Math.max(0, Math.min(items.length, firstVisible - overscan)),
+        end: Math.max(0, Math.min(items.length, Math.max(firstVisible, lastVisible) + overscan)),
       };
       setRange((prior) => prior.start === next.start && prior.end === next.end ? prior : next);
     };
+    measureListTop();
     update();
-    const scrollTarget: HTMLElement | Window = root ?? window;
-    scrollTarget.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update, { passive: true });
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    let frame = 0;
+    let settleTimer = 0;
+    const scheduleUpdate = () => {
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => {
+        // Recalibrate after a fling settles. This handles layout shifts while
+        // content was moving without making every scroll frame depend on rects.
+        measureListTop();
+        update();
+      }, 140);
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        update();
+      });
+    };
+    root?.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("scroll", scheduleUpdate, { passive: true, capture: true });
+    window.addEventListener("resize", scheduleUpdate, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      measureListTop();
+      scheduleUpdate();
+    });
     if (root) observer?.observe(root);
     observer?.observe(list);
     return () => {
-      scrollTarget.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
+      if (frame) window.cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+      root?.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("scroll", scheduleUpdate, true);
+      window.removeEventListener("resize", scheduleUpdate);
       observer?.disconnect();
     };
   }, [items, overscan, rowHeight]);
-  const visibleItems = items.slice(range.start, range.end);
-  return <div className="track-table" role="table" aria-label="Songs"><div className="table-head" role="row"><span role="columnheader">#</span><span role="columnheader">Title</span><span role="columnheader">Album</span><span role="columnheader">Artist</span><span role="columnheader"><Clock3 size={13}/></span></div>{items.length ? <div ref={listRef} className="track-list virtual-track-list" role="rowgroup" style={{ height: items.length * rowHeight, position: "relative" }}>{visibleItems.map((track, offset) => { const index = range.start + offset; const active = player.currentTrackId === track.id && player.isPlaying; const playCount = playCounts?.get(track.id) ?? 0; const playControlDismissed = dismissedPlayControl === track.id; const playTrack = () => { setDismissedPlayControl(track.id); onPlay(track); }; const favorite = favorites.has(track.id); return <div role="row" key={track.id} className={`track-row ${player.currentTrackId === track.id ? "playing" : ""} ${playControlDismissed ? "suppress-row-play" : ""}`} style={{ position: "absolute", top: index * rowHeight, left: 0, right: 0, height: rowHeight }} onMouseLeave={() => { if (playControlDismissed) setDismissedPlayControl(null); }} onContextMenu={(event) => onMenu(track, event)}><button className="track-number" aria-label={`${active ? "Pause" : "Play"} ${track.title}`} onClick={playTrack}>{active ? <span className="playing-animation" aria-label="Playing"><i/><i/><i/></span> : <span className="row-index">{index + 1}</span>}{active ? <Pause className="row-play" size={15} fill="currentColor"/> : <Play className="row-play" size={15} fill="currentColor"/>}</button><div className="track-title-cell" role="cell"><Cover className="row-cover" keys={[track.artworkKey]}/><button className="track-name" onClick={playTrack}><strong>{track.title}</strong><small>{track.hasLyrics && <LyricsBadge />}{track.artist}{showPlayCount && playCount > 0 && <span className="track-play-count"> · {playCount} {playCount === 1 ? "play" : "plays"}</span>}</small></button></div><span className="track-album" role="cell">{track.album}</span><span className="track-artist-cell" role="cell">{track.artist}</span><span className="track-actions" role="cell"><button className={`row-action favorite-action ${favorite ? "selected" : ""}`} aria-label={favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => onFavorite(track.id)}><Heart size={15} fill={favorite ? "currentColor" : "none"}/></button><span className="track-duration">{time(track.durationMs)}</span><button className="row-action menu-trigger" aria-label={`Actions for ${track.title}`} onClick={(event) => onMenu(track, event)}><MoreHorizontal size={17}/></button></span></div>;})}</div> : <Empty title={emptyTitle} description={emptyMessage} action={emptyAction}/>}</div>;
+  // The collection can shrink while the user is flinging or while a scan
+  // updates the library. Keep the old virtual window inside the new bounds
+  // until the next measured scroll range lands.
+  const windowSize = Math.max(1, range.end - range.start);
+  const visibleStart = Math.min(range.start, Math.max(0, items.length - windowSize));
+  const visibleEnd = Math.min(items.length, visibleStart + windowSize);
+  const visibleItems = items.slice(visibleStart, visibleEnd);
+  return <div className="track-table" role="table" aria-label="Songs"><div className="table-head" role="row"><span role="columnheader">#</span><span role="columnheader">Title</span><span role="columnheader">Album</span><span role="columnheader">Artist</span><span role="columnheader"><Clock3 size={13}/></span></div>{items.length ? <div ref={listRef} className="track-list virtual-track-list" role="rowgroup" style={{ height: items.length * rowHeight, position: "relative" }}>{visibleItems.map((track, offset) => { const index = visibleStart + offset; const active = player.currentTrackId === track.id && player.isPlaying; const playCount = playCounts?.get(track.id) ?? 0; const playControlDismissed = dismissedPlayControl === track.id; const playTrack = () => { setDismissedPlayControl(track.id); onPlay(track); }; const favorite = favorites.has(track.id); return <div role="row" key={track.id} className={`track-row ${player.currentTrackId === track.id ? "playing" : ""} ${playControlDismissed ? "suppress-row-play" : ""}`} style={{ position: "absolute", top: index * rowHeight, left: 0, right: 0, height: rowHeight }} onMouseLeave={() => { if (playControlDismissed) setDismissedPlayControl(null); }} onContextMenu={(event) => onMenu(track, event)}><button className="track-number" aria-label={`${active ? "Pause" : "Play"} ${track.title}`} onClick={playTrack}>{active ? <span className="playing-animation" aria-label="Playing"><i/><i/><i/></span> : <span className="row-index">{index + 1}</span>}{active ? <Pause className="row-play" size={15} fill="currentColor"/> : <Play className="row-play" size={15} fill="currentColor"/>}</button><div className="track-title-cell" role="cell"><Cover className="row-cover" keys={[track.artworkKey]}/><button className="track-name" onClick={playTrack}><strong>{track.title}</strong><small>{track.hasLyrics && <LyricsBadge />}{track.artist}{showPlayCount && playCount > 0 && <span className="track-play-count"> · {playCount} {playCount === 1 ? "play" : "plays"}</span>}</small></button></div><span className="track-album" role="cell">{track.album}</span><span className="track-artist-cell" role="cell">{track.artist}</span><span className="track-actions" role="cell"><button className={`row-action favorite-action ${favorite ? "selected" : ""}`} aria-label={favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => onFavorite(track.id)}><Heart size={15} fill={favorite ? "currentColor" : "none"}/></button><span className="track-duration">{time(track.durationMs)}</span><button className="row-action menu-trigger" aria-label={`Actions for ${track.title}`} onClick={(event) => onMenu(track, event)}><MoreHorizontal size={17}/></button></span></div>;})}</div> : <Empty title={emptyTitle} description={emptyMessage} action={emptyAction}/>}</div>;
 });
