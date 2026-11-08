@@ -2857,7 +2857,8 @@ export default function App() {
       setMessage(`Deleted “${track.title}” from your device.`);
       return true;
     } catch (error) {
-      setConfirmationError(String(error));
+      if (isAndroid) setMessage(String(error));
+      else setConfirmationError(String(error));
       return false;
     }
   }
@@ -2865,9 +2866,9 @@ export default function App() {
     setMenu(null);
     setConfirmationError(null);
     setConfirmation({
-      title: "Delete audio file?",
-      message: `“${track.title}” will be permanently deleted from your device and removed from your library.`,
-      label: "Delete audio",
+      title: "Delete from device?",
+      message: `“${track.title}” will be permanently deleted from your device.`,
+      label: "Delete from device",
       confirm: () => deleteAudioTrack(track),
     });
   }
@@ -6931,6 +6932,15 @@ export default function App() {
                   </button>
                 )}
               </div>
+              {footerTrack.hasLyrics && !mobilePlayerLyricsOpen && (
+                <LyricsView
+                  track={footerTrack}
+                  text={lyricsText ?? ""}
+                  positionMs={player.positionMs}
+                  preview
+                  onExpand={() => setMobilePlayerLyricsOpen(true)}
+                />
+              )}
               <div className="mobile-player-track">
                 <div>
                   <strong>{footerTrack.title}</strong>
@@ -7067,7 +7077,7 @@ export default function App() {
                     className="mobile-lyrics-trigger"
                     aria-label="Show lyrics"
                     title="Lyrics"
-                    onClick={() => setMobileLyricsExpanded(true)}
+                    onClick={() => setMobilePlayerLyricsOpen(true)}
                   >
                     <Mic2 size={22} />
                   </button>
@@ -7109,7 +7119,7 @@ export default function App() {
               title="Close lyrics"
               onClick={() => setMobileLyricsExpanded(false)}
             >
-              <X size={23} />
+              <ChevronDown size={23} />
             </button>
             <span>
               <strong>{footerTrack.title}</strong>
@@ -7524,14 +7534,6 @@ export default function App() {
                 <Pencil size={15} />
                 Edit metadata
               </button>
-              <button
-                className="action-danger"
-                role="menuitem"
-                onClick={() => confirmDeleteAudioTrack(menu.track)}
-              >
-                <Trash2 size={15} />
-                Delete audio file
-              </button>
               <div
                 className="playlist-menu-wrap"
                 onMouseEnter={() => {
@@ -7647,6 +7649,19 @@ export default function App() {
               <button role="menuitem" onClick={() => hideTrack(menu.track)}>
                 <EyeOff size={15} />
                 Hide song
+              </button>
+              <button
+                className="action-danger"
+                role="menuitem"
+                onClick={() => {
+                  if (isAndroid) {
+                    setMenu(null);
+                    void deleteAudioTrack(menu.track);
+                  } else confirmDeleteAudioTrack(menu.track);
+                }}
+              >
+                <Trash2 size={15} />
+                Delete from device
               </button>
               <div className="menu-separator" />
               <button

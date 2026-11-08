@@ -8938,6 +8938,30 @@ body:has(.android-app),
 .mobile-player-art-swipe.is-dragging .mobile-player-cover-button {
   transition: none;
 }
+.mobile-player-screen > .lyrics-current-preview {
+  display: -webkit-box;
+  width: 100%;
+  min-width: 0;
+  max-height: 40px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  margin: 5px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #f0c0b8;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.3;
+  text-align: left;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.mobile-player-screen > .lyrics-current-preview:active {
+  color: #fff;
+}
 .mobile-player-cover-button .mobile-player-cover {
   width: 100%;
   height: 100%;

@@ -71,6 +71,19 @@ export function LyricsView({
   const visibleLines = preview
     ? lines.slice(Math.max(0, active), Math.max(0, active) + 1)
     : lines;
+  if (preview) {
+    const currentLine = lines[Math.max(0, active)];
+    return (
+      <button
+        className="lyrics-current-preview"
+        type="button"
+        aria-label={`Open lyrics for ${track.title}`}
+        onClick={onExpand}
+      >
+        {currentLine?.text ?? "Lyrics available · Tap to open"}
+      </button>
+    );
+  }
   return (
     <section
       className={`lyrics-view ${expanded ? "expanded" : ""} ${preview ? "preview" : ""}`}
