@@ -2849,6 +2849,28 @@ export default function App() {
       confirm: () => removeFolder(folder),
     });
   }
+  async function deleteAudioTrack(track: Track) {
+    try {
+      const remaining = await api.deleteTrack(track.id);
+      setTracks(remaining);
+      setPlayer(await api.state());
+      setMessage(`Deleted “${track.title}” from your device.`);
+      return true;
+    } catch (error) {
+      setConfirmationError(String(error));
+      return false;
+    }
+  }
+  function confirmDeleteAudioTrack(track: Track) {
+    setMenu(null);
+    setConfirmationError(null);
+    setConfirmation({
+      title: "Delete audio file?",
+      message: `“${track.title}” will be permanently deleted from your device and removed from your library.`,
+      label: "Delete audio",
+      confirm: () => deleteAudioTrack(track),
+    });
+  }
   function confirmDeletePlaylist(playlist: Playlist) {
     setConfirmationError(null);
     setConfirmation({
@@ -5745,6 +5767,8 @@ export default function App() {
                               <span className="queue-song-copy">
                                 <span className="queue-label queue-label-title">
                                   {track.title}
+                                </span>
+                                <span className="queue-label queue-label-artist">
                                   {track.hasLyrics && (
                                     <span
                                       className="lyrics-badge"
@@ -5753,8 +5777,6 @@ export default function App() {
                                       E
                                     </span>
                                   )}
-                                </span>
-                                <span className="queue-label queue-label-artist">
                                   {track.artist}
                                 </span>
                               </span>
@@ -7501,6 +7523,14 @@ export default function App() {
               >
                 <Pencil size={15} />
                 Edit metadata
+              </button>
+              <button
+                className="action-danger"
+                role="menuitem"
+                onClick={() => confirmDeleteAudioTrack(menu.track)}
+              >
+                <Trash2 size={15} />
+                Delete audio file
               </button>
               <div
                 className="playlist-menu-wrap"

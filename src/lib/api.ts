@@ -58,6 +58,7 @@ export const api = {
   librarySavedRoots: () => invoke<string[]>("library_saved_roots"),
   cachedTracks: () => invoke<Track[]>("library_cached_tracks"),
   updateTrackMetadata: (trackId: number, metadata: Pick<Track, "title" | "artist" | "album" | "releaseDate">) => invoke<{ track: Track; savedToFile: boolean; writeError?: string | null }>("library_update_track_metadata", { trackId, metadata }),
+  deleteTrack: (trackId: number) => invoke<Track[]>("library_delete_track", { trackId }),
   removeFolder: (folder: string) => invoke<Track[]>("library_remove_folder", { folder }),
   artwork: (artworkKey: string) => invoke<string | null>("library_artwork", { artworkKey }),
   state: () => invoke<PlayerSnapshot>("player_state"),

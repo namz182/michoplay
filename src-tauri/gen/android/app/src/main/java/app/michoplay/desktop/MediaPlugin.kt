@@ -376,6 +376,81 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  @Command
+  fun deleteAudioFile(invoke: Invoke) {
+    val args = invoke.parseArgs(MetadataFileAccessArgs::class.java)
+    val expectedPath = try { File(args.path).canonicalPath } catch (_: Exception) {
+      invoke.reject("This song's file path is unavailable."); return
+    }
+    val mainActivity = activity as? MainActivity
+    fun finishDelete() {
+      activity.getSharedPreferences("michoplay_metadata", Activity.MODE_PRIVATE)
+        .edit().remove(expectedPath).apply()
+      MediaScannerConnection.scanFile(activity, arrayOf(expectedPath), null, null)
+      invoke.resolve()
+    }
+    fun deleteLegacyFile() {
+      io.execute {
+        try {
+          if (!File(expectedPath).delete()) throw IllegalStateException("Android could not delete this song file.")
+          finishDelete()
+        } catch (error: Exception) { invoke.reject(error.message ?: "Could not delete this song file.") }
+      }
+    }
+
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+        ContextCompat.checkSelfPermission(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+        if (mainActivity == null) { invoke.reject("Android could not request permission to delete this song."); return }
+        mainActivity.requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) { granted ->
+          if (granted == true) deleteLegacyFile()
+          else invoke.reject("Allow storage access to delete this song file.")
+        }
+      } else deleteLegacyFile()
+      return
+    }
+
+    val mediaUri = try { mediaStoreAudioUri(expectedPath) } catch (_: Exception) { null }
+    if (mediaUri == null) {
+      invoke.reject("Android could not find this song in its audio library, so it cannot delete it.")
+      return
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val pendingIntent = try { MediaStore.createDeleteRequest(activity.contentResolver, listOf(mediaUri)) }
+      catch (error: Exception) { invoke.reject(error.message ?: "Android could not request permission to delete this song."); return }
+      if (mainActivity == null) { invoke.reject("Android could not open the media delete permission prompt."); return }
+      activity.runOnUiThread {
+        mainActivity.requestMediaWriteAccess(pendingIntent.intentSender) { approved ->
+          if (approved) finishDelete()
+          else invoke.reject("Android did not approve deleting this song.")
+        }
+      }
+      return
+    }
+
+    io.execute {
+      try {
+        val deleted = activity.contentResolver.delete(mediaUri, null, null)
+        if (deleted <= 0) throw IllegalStateException("Android could not delete this song file.")
+        finishDelete()
+      } catch (error: android.app.RecoverableSecurityException) {
+        if (mainActivity == null) { invoke.reject("Android could not open the media delete permission prompt."); return@execute }
+        activity.runOnUiThread {
+          mainActivity.requestMediaWriteAccess(error.userAction.actionIntent.intentSender) { approved ->
+            if (!approved) { invoke.reject("Android did not approve deleting this song."); return@requestMediaWriteAccess }
+            io.execute {
+              try {
+                val deleted = activity.contentResolver.delete(mediaUri, null, null)
+                if (deleted <= 0) throw IllegalStateException("Android could not delete this song file.")
+                finishDelete()
+              } catch (retryError: Exception) { invoke.reject(retryError.message ?: "Could not delete this song file.") }
+            }
+          }
+        }
+      } catch (error: Exception) { invoke.reject(error.message ?: "Could not delete this song file.") }
+    }
+  }
+
   private fun copyEditedSong(source: File, uri: Uri) {
     if (uri.scheme == "file") {
       val target = File(uri.path ?: throw IllegalArgumentException("The song file path is unavailable."))

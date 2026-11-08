@@ -5169,6 +5169,17 @@ body.resizing {
 .action-menu button:hover svg {
   color: var(--brand-highlight);
 }
+.action-menu button.action-danger {
+  color: #f0b0b0;
+}
+.action-menu button.action-danger svg {
+  color: #e99a9a;
+}
+.action-menu button.action-danger:hover,
+.action-menu button.action-danger:focus-visible {
+  background: rgba(227, 91, 91, 0.13);
+  color: #ffd0d0;
+}
 .track-menu > .menu-separator {
   margin: 6px 8px;
 }

@@ -4508,6 +4508,73 @@ async fn library_update_track_metadata(
     })
 }
 
+#[tauri::command]
+async fn library_delete_track(
+    track_id: u64,
+    state: State<'_, AppState>,
+    bridge: State<'_, MediaBridge>,
+) -> Result<Vec<Track>, String> {
+    let (path, roots, storage_dir) = {
+        let core = state
+            .0
+            .lock()
+            .map_err(|_| "The library is unavailable.".to_owned())?;
+        let item = &core.tracks[core.find_track_index(track_id)?];
+        (
+            item.path.clone(),
+            core.roots.clone(),
+            core.storage_dir.clone(),
+        )
+    };
+    if !path.is_file() {
+        return Err("This song's file is no longer available.".to_owned());
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        let _: serde_json::Value = call_android_media(
+            plugin,
+            "deleteAudioFile",
+            serde_json::json!({ "path": path.to_string_lossy() }),
+        )
+        .await?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = &bridge;
+        fs::remove_file(&path)
+            .map_err(|error| format!("Could not delete the song file: {error}"))?;
+    }
+
+    let scan_roots = roots.clone();
+    let scan_storage = storage_dir.clone();
+    let tracks = tauri::async_runtime::spawn_blocking(move || {
+        scan_roots_with_progress(&scan_roots, &scan_storage, |_, _, _| {})
+    })
+    .await
+    .map_err(|_| "The library scan could not be completed.".to_owned())??;
+
+    let mut core = state
+        .0
+        .lock()
+        .map_err(|_| "The library is unavailable.".to_owned())?;
+    let playing_track = core
+        .current_queue_index
+        .and_then(|index| core.queue.get(index))
+        .copied();
+    if playing_track == Some(track_id) {
+        if let Some(sink) = core.sink.take() {
+            sink.stop();
+        }
+        core.output = None;
+        core.is_playing = false;
+        core.resume_after_interruption = false;
+        core.current_queue_index = None;
+    }
+    Ok(core.replace_library(roots, tracks))
+}
+
 #[cfg_attr(target_os = "android", tauri::command(async))]
 #[cfg_attr(not(target_os = "android"), tauri::command)]
 fn player_play_track(track_id: u64, state: State<'_, AppState>) -> Result<(), String> {
@@ -5198,6 +5265,7 @@ pub fn run() {
             app_data_save,
             library_cached_tracks,
             library_update_track_metadata,
+            library_delete_track,
             library_remove_folder,
             library_artwork,
             take_pending_audio_opens,
