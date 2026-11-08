@@ -5694,9 +5694,11 @@ body.resizing {
   min-height: 0;
   align-content: start;
   gap: 0;
+  padding-right: 12px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-x: none;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: #514c54 transparent;
 }
