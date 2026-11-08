@@ -8192,13 +8192,13 @@ body:has(.android-app),
   font-size: 11px;
 }
 .android-app .mobile-bottom-nav {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .android-app .mobile-bottom-nav button {
-  min-height: 51px;
+  min-height: 44px;
 }
 .android-app .mobile-bottom-nav button.active {
-  color: var(--brand-highlight);
+  color: #fff;
 }
 .android-app .youtube-downloader {
   padding: 13px 13px 5px;
@@ -8669,19 +8669,34 @@ body:has(.android-app),
   position: fixed;
   z-index: 49;
   right: 10px;
-  bottom: calc(66px + env(safe-area-inset-bottom));
+  bottom: calc(78px + env(safe-area-inset-bottom));
   left: 10px;
   display: flex;
   min-height: 66px;
   align-items: center;
   gap: 2px;
   margin: 0;
-  padding: 5px 7px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
-  background: rgba(36, 33, 36, 0.97);
-  box-shadow: 0 7px 24px rgba(0, 0, 0, 0.42);
+  padding: 5px 10px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(12, 12, 13, 0.97);
+  box-shadow: none;
   backdrop-filter: blur(16px);
+}
+.mobile-bottom-scrim {
+  position: fixed;
+  z-index: 48;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: min(34vh, 260px);
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0),
+    rgba(0, 0, 0, 0.72) 42%,
+    rgba(0, 0, 0, 0.94)
+  );
 }
 .mobile-mini-player.settings-open {
   bottom: calc(10px + env(safe-area-inset-bottom));
@@ -8743,33 +8758,39 @@ body:has(.android-app),
 }
 .mobile-mini-progress {
   position: absolute;
-  right: 10px;
-  bottom: 0;
-  left: 10px;
-  height: 2px;
+  right: 16px;
+  bottom: 6px;
+  left: 16px;
+  height: 3px;
   overflow: hidden;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(245, 238, 232, 0.3);
 }
 .mobile-mini-progress span {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, var(--blush), #f5eee8, var(--accent));
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f5c7c5, #fff1e8);
+  box-shadow: 0 0 5px rgba(255, 228, 220, 0.45);
   transition: width 0.25s linear;
 }
 .mobile-bottom-nav {
   position: fixed;
   z-index: 50;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  right: 76px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  left: 10px;
   display: grid !important;
-  min-height: calc(62px + env(safe-area-inset-bottom));
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  padding: 5px 8px calc(5px + env(safe-area-inset-bottom));
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(17, 17, 19, 0.98);
-  box-shadow: 0 -7px 20px rgba(0, 0, 0, 0.25);
+  height: 56px;
+  min-height: 56px;
+  box-sizing: border-box;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  padding: 5px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(12, 12, 13, 0.96);
+  box-shadow: none;
   backdrop-filter: blur(16px);
 }
 .mobile-bottom-nav.settings-open {
@@ -8778,22 +8799,50 @@ body:has(.android-app),
 .mobile-bottom-nav button {
   display: grid;
   min-width: 0;
+  min-height: 0;
   align-content: center;
   justify-items: center;
-  gap: 3px;
+  gap: 2px;
   border: 0;
+  border-radius: 999px;
   background: transparent;
-  color: #aaa6af;
+  color: #e1dde4;
 }
 .mobile-bottom-nav button.active {
-  color: var(--brand-highlight);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 .mobile-bottom-nav button span {
   overflow: hidden;
   max-width: 100%;
-  font-size: 10px;
+  font-size: 9px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.mobile-nav-search {
+  position: fixed;
+  z-index: 50;
+  right: 10px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  display: grid;
+  width: 56px;
+  height: 56px;
+  box-sizing: border-box;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(12, 12, 13, 0.96);
+  color: #f3f0f4;
+  backdrop-filter: blur(16px);
+}
+.mobile-nav-search.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.mobile-nav-search.settings-open {
+  display: none;
 }
 .mobile-player-screen {
   position: fixed;
@@ -10332,15 +10381,15 @@ body:has(.android-app),
   min-height: 62px;
 }
 .android-app .mobile-bottom-nav {
-  height: calc(63px + env(safe-area-inset-bottom));
+  height: 56px;
 }
 .android-app .mobile-bottom-nav button {
   gap: 4px;
-  min-height: 48px;
+  min-height: 44px;
   color: #aaa6af;
 }
 .android-app .mobile-bottom-nav button.active {
-  color: var(--brand-highlight);
+  color: #fff;
 }
 .android-app .mobile-bottom-nav button svg {
   width: 21px;

@@ -6584,6 +6584,7 @@ export default function App() {
       </section>
       {isAndroid && !mobilePlayerOpen && (
         <>
+          <div className="mobile-bottom-scrim" aria-hidden="true" />
           <div
             className={`mobile-mini-player ${page.section === "Settings" ? "settings-open" : ""}`}
           >
@@ -6699,16 +6700,6 @@ export default function App() {
               <span>Home</span>
             </button>
             <button
-              className={mobileTab === "search" ? "active" : ""}
-              onClick={() => {
-                setMobileTab("search");
-                setSearch("");
-              }}
-            >
-              <Search size={22} />
-              <span>Search</span>
-            </button>
-            <button
               className={mobileTab === "library" ? "active" : ""}
               onClick={() => {
                 setMobileTab("library");
@@ -6717,7 +6708,7 @@ export default function App() {
               }}
             >
               <Library size={22} />
-              <span>Your Library</span>
+              <span>Library</span>
             </button>
             <button
               className={mobileTab === "youtube" ? "active" : ""}
@@ -6747,6 +6738,17 @@ export default function App() {
               <span>Downloads</span>
             </button>
           </nav>
+          <button
+            className={`mobile-nav-search ${mobileTab === "search" ? "active" : ""} ${page.section === "Settings" ? "settings-open" : ""}`}
+            aria-label="Search"
+            aria-pressed={mobileTab === "search"}
+            onClick={() => {
+              setMobileTab("search");
+              setSearch("");
+            }}
+          >
+            <Search size={24} />
+          </button>
           {downloadFeedback && (
             <>
               <span
