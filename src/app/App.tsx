@@ -255,6 +255,7 @@ export default function App() {
     velocity: number;
   } | null>(null);
   const appFrameRef = useRef<HTMLElement>(null);
+  const contentScrollRef = useRef<HTMLElement>(null);
   const trackMenuRef = useRef<HTMLDivElement>(null);
   const playlistSubmenuRef = useRef<HTMLDivElement>(null);
   const [playlistSubmenu, setPlaylistSubmenu] = useState(false);
@@ -383,6 +384,15 @@ export default function App() {
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const completedYoutubeDownloads = useRef(new Set<string>());
   const isAndroid = useMemo(() => /android/i.test(navigator.userAgent), []);
+  useLayoutEffect(() => {
+    if (!isAndroid) return;
+    const content = contentScrollRef.current;
+    if (content) {
+      content.scrollTop = 0;
+      content.scrollLeft = 0;
+    }
+  }, [isAndroid, mobileTab, page.section, page.detail]);
+
   function enrichYoutubeLyrics(
     query: string,
     offset: number,
@@ -3833,7 +3843,11 @@ export default function App() {
         <div
           className={`work-area ${showPanel ? "with-panel" : "without-panel"}`}
         >
-          <section className="content-scroll" aria-label={heading}>
+          <section
+            ref={contentScrollRef}
+            className="content-scroll"
+            aria-label={heading}
+          >
             {!isAndroid && lyricsOpen && footerTrack?.hasLyrics ? (
               <div className="desktop-lyrics-stage">
                 <LyricsView
