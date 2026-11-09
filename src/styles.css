@@ -11080,27 +11080,26 @@ body:has(.android-app),
 
 .playlist-download-groups { display: grid; gap: 8px; margin-bottom: 10px; }
 .playlist-download-group { overflow: hidden; border-radius: 12px; background: rgb(255 255 255 / 4%); }
-.playlist-download-group > summary { display: flex; min-height: 68px; align-items: center; gap: 11px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.playlist-download-group > summary { display: flex; min-height: 68px; align-items: center; gap: 7px; padding: 9px 9px; cursor: pointer; list-style: none; }
 .playlist-download-group > summary::-webkit-details-marker { display: none; }
-.playlist-download-icon { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: var(--accent, #25cf83); background: rgb(255 255 255 / 7%); }
+.playlist-download-icon { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: var(--accent, #25cf83); background: rgb(255 255 255 / 7%); }
 .playlist-download-summary-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
-.playlist-download-summary-copy strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.playlist-download-summary-copy strong { display: -webkit-box; overflow: hidden; font-size: 13px; line-height: 1.2; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .playlist-download-summary-copy small { color: var(--muted, #a5a0a7); font-size: 11px; }
 .playlist-download-progress { display: block; height: 3px; overflow: hidden; border-radius: 9px; background: rgb(255 255 255 / 12%); }
 .playlist-download-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent, #25cf83); transition: width 180ms ease; }
 .playlist-download-progress i.is-pending { width: 38% !important; background: linear-gradient(90deg, transparent, var(--accent, #25cf83), transparent); animation: download-pending-sweep 1.15s ease-in-out infinite alternate; }
 .playlist-download-chevron { flex: 0 0 auto; color: var(--muted, #a5a0a7); transition: transform 160ms ease; }
 .playlist-download-group[open] .playlist-download-chevron { transform: rotate(180deg); }
-.playlist-download-tracks { display: grid; gap: 2px; padding: 0 10px 10px; }
-.playlist-download-track { display: flex; align-items: center; gap: 9px; min-height: 52px; padding: 6px 4px; border-top: 1px solid rgb(255 255 255 / 5%); }
-.playlist-download-track-index { width: 24px; color: var(--muted, #a5a0a7); font-size: 11px; text-align: center; }
+.playlist-download-tracks { display: grid; gap: 2px; padding: 0 7px 10px; }
+.playlist-download-track { display: flex; align-items: center; gap: 5px; min-height: 52px; padding: 6px 2px; border-top: 1px solid rgb(255 255 255 / 5%); }
+.playlist-download-track-index { width: 18px; flex: 0 0 18px; color: var(--muted, #a5a0a7); font-size: 11px; text-align: center; }
 .playlist-download-track-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
-.playlist-download-track-copy strong { overflow: hidden; font-size: 12px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.playlist-download-track-copy strong { display: -webkit-box; overflow: hidden; font-size: 12px; font-weight: 550; line-height: 1.2; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .playlist-download-track-copy small { overflow: hidden; color: var(--muted, #a5a0a7); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.playlist-download-track-actions { display: flex; align-items: center; gap: 7px; }
-.playlist-download-track-actions button { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 50%; color: var(--muted, #a5a0a7); background: transparent; cursor: pointer; }
+.playlist-download-track-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; }
+.playlist-download-track-actions button { display: grid; width: 24px; height: 28px; place-items: center; border: 0; border-radius: 50%; color: var(--muted, #a5a0a7); background: transparent; cursor: pointer; }
 .playlist-download-track-actions button:hover { color: var(--text, white); background: rgb(255 255 255 / 9%); }
-.playlist-download-done { color: var(--accent, #25cf83); font-size: 14px; }
 
 @media (max-width: 700px) {
   .playlist-selection-backdrop { align-items: end; padding: 0; }

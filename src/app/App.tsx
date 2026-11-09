@@ -5707,10 +5707,12 @@ export default function App() {
       </section>
       {isAndroid && !mobilePlayerOpen && (
         <>
-          <div className="mobile-bottom-scrim" aria-hidden="true" />
-          <div
-            className={`mobile-mini-player ${page.section === "Settings" ? "settings-open" : ""}`}
-          >
+          {current && (
+            <>
+              <div className="mobile-bottom-scrim" aria-hidden="true" />
+              <div
+                className={`mobile-mini-player ${page.section === "Settings" ? "settings-open" : ""}`}
+              >
             <button
               className="mobile-mini-track"
               onClick={() => setMobilePlayerOpen(true)}
@@ -5797,7 +5799,9 @@ export default function App() {
                 }}
               />
             </div>
-          </div>
+              </div>
+            </>
+          )}
           <MobileNav
             mobileTab={mobileTab}
             section={page.section}
