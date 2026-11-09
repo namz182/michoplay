@@ -9048,6 +9048,9 @@ body:has(.android-app),
   flex: 1 1 auto;
   border-radius: inherit;
 }
+.mobile-player-inline-lyrics .lyrics-actions button[aria-label="Expand lyrics"] {
+  order: -1;
+}
 .mobile-player-inline-lyrics > .lyrics-view.expanded {
   background: transparent;
 }
