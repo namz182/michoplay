@@ -58,7 +58,7 @@ function formatDownloadEta(seconds: number) {
 const youtubeDownloadMessages = {
   locationUnreadable: "MichoPlay couldn't read where the song was saved. Try downloading it again.",
   locationMissing: "The download finished without a saved song location. Try downloading it again.",
-  fileMissing: "The downloaded song is missing from Music/YouTube. Try downloading it again.",
+  fileMissing: "The downloaded song is missing from Music/MichoPlay. Try downloading it again.",
   readPermission: "MichoPlay doesn't have permission to read the downloaded song. Allow access to your Music folder and try again.",
   folderUnavailable: "The downloaded song's folder is no longer available. Restore the folder or download the song again.",
   folderTimeout: "Your Music folder took too long to respond. Check that the drive is connected and try again.",

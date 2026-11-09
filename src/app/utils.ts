@@ -160,6 +160,10 @@ export function sameYoutubeDownloads(
         item.url === other.url &&
         item.thumbnail === other.thumbnail &&
         item.isPlaylist === other.isPlaylist &&
+        item.playlist?.id === other.playlist?.id &&
+        item.playlist?.title === other.playlist?.title &&
+        item.playlist?.index === other.playlist?.index &&
+        item.playlist?.total === other.playlist?.total &&
         item.status === other.status &&
         item.percent === other.percent &&
         item.downloadedBytes === other.downloadedBytes &&

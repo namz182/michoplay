@@ -54,7 +54,7 @@ class MediaUpdateArgs {
 }
 
 @InvokeArg
-class YoutubeSearchArgs { var query: String = ""; var limit: Int = 15; var offset: Int = 0; var includeLyrics: Boolean = false }
+class YoutubeSearchArgs { var query: String = ""; var limit: Int = 15; var offset: Int = 0; var includeLyrics: Boolean = false; var playlistItems: Boolean = false }
 
 @InvokeArg
 class YoutubeDownloadArgs {
@@ -62,6 +62,10 @@ class YoutubeDownloadArgs {
   var title: String = ""
   var thumbnail: String? = null
   var isPlaylist: Boolean = false
+  var playlistId: String? = null
+  var playlistTitle: String? = null
+  var playlistIndex: Int = 0
+  var playlistTotal: Int = 0
   var id: String = ""
 }
 
@@ -220,7 +224,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun youtubeMusicDirectory(invoke: Invoke) {
-    val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
+    val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay")
     invoke.resolve(JSObject().apply { put("path", directory.absolutePath) })
   }
 
@@ -510,9 +514,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   fun youtubeSearch(invoke: Invoke) {
     val args = invoke.parseArgs(YoutubeSearchArgs::class.java)
     val query = args.query.trim()
-    val limit = args.limit.coerceIn(1, 30)
-    val offset = args.offset.coerceIn(0, 50)
-    val searchEnd = (offset + limit).coerceAtMost(50)
+    val limit = args.limit.coerceIn(1, if (args.playlistItems) 100 else 30)
+    val offset = args.offset.coerceIn(0, if (args.playlistItems) 5000 else 50)
+    val searchEnd = (offset + limit).coerceAtMost(if (args.playlistItems) 5000 else 50)
     if (query.isEmpty() || query.length > 200) { invoke.reject("Enter a YouTube search or link (up to 200 characters)."); return }
     io.execute {
       try {
@@ -525,7 +529,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         request.addOption("--dump-single-json"); request.addOption("--playlist-end", searchEnd.toString()); request.addOption("--skip-download")
         val json = JSONObject(YoutubeDL.getInstance().execute(request).out)
         val results = mutableListOf<Map<String, Any?>>()
-        if (isPlaylist) {
+        if (isPlaylist && !args.playlistItems) {
           val id = json.optString("id", "playlist")
           results.add(mapOf("id" to id, "title" to json.optString("title", "YouTube playlist"), "url" to query, "thumbnail" to json.optString("thumbnail").takeIf { it.startsWith("https://") }, "durationSeconds" to null, "isPlaylist" to true, "hasLyrics" to false))
         } else {
@@ -573,7 +577,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.reject("Allow storage access, then tap Download again.")
       return
     }
-    val item = Collections.synchronizedMap(mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId.getAndIncrement()}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "status" to "queued", "phase" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "totalBytesEstimated" to false, "speedBytesPerSecond" to null, "etaSeconds" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>()))
+    val playlist = if (!args.playlistId.isNullOrBlank() && !args.playlistTitle.isNullOrBlank()) mapOf("id" to args.playlistId, "title" to args.playlistTitle, "index" to args.playlistIndex, "total" to args.playlistTotal) else null
+    val item = Collections.synchronizedMap(mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId.getAndIncrement()}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "playlist" to playlist, "status" to "queued", "phase" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "totalBytesEstimated" to false, "speedBytesPerSecond" to null, "etaSeconds" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>()))
     downloads.add(item); jobGenerations[item["id"] as String] = AtomicInteger(0)
     emitDownloads(true); invoke.resolveObject(item); startQueuedDownloads()
   }
@@ -644,7 +649,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
               item["downloadedBytes"] = finalBytes; item["totalBytes"] = finalBytes
               item["speedBytesPerSecond"] = null; item["etaSeconds"] = null
               item["filePaths"] = filePaths
-              item["status"] = "completed"; item["phase"] = "completed"; item["percent"] = 100.0; item["message"] = "Ready to play"
+              item["status"] = "completed"; item["phase"] = "completed"; item["percent"] = 100.0; item["message"] = "Completed"
             }
           }
         } catch (error: Exception) {
@@ -664,7 +669,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File, generation: Int) {
     val request = YoutubeDLRequest(item["url"] as String)
-    request.addOption("--ignore-config"); request.addOption("--no-warnings"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
+    request.addOption("--ignore-config"); request.addOption("--ignore-errors"); request.addOption("--no-warnings"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
     request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
     if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
     request.addOption("--playlist-end", "100")
@@ -969,7 +974,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       val url = entry.optString("url")
       if (id.isBlank() || url.isBlank()) continue
       val item = Collections.synchronizedMap(mutableMapOf<String, Any?>())
-      for (key in listOf("id", "title", "url", "thumbnail", "isPlaylist", "status", "phase", "percent", "downloadedBytes", "totalBytes", "totalBytesEstimated", "speedBytesPerSecond", "etaSeconds", "message")) {
+      for (key in listOf("id", "title", "url", "thumbnail", "isPlaylist", "playlist", "status", "phase", "percent", "downloadedBytes", "totalBytes", "totalBytesEstimated", "speedBytesPerSecond", "etaSeconds", "message")) {
         item[key] = entry.opt(key).takeUnless { it == JSONObject.NULL }
       }
       item["filePaths"] = entry.optJSONArray("filePaths")?.let { array -> (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) } } ?: emptyList<String>()
@@ -1024,10 +1029,17 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   private fun publishAudioToMusic(file: File, item: Map<String, Any?>, generation: Int): PublishedAudio {
-    val destination = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube/${file.name}")
+    val playlist = item["playlist"] as? Map<*, *>
+    val playlistTitle = playlist?.get("title") as? String
+    val playlistFolder = if (playlistTitle != null || item["isPlaylist"] == true) safePlaylistFolderName(playlistTitle ?: item["title"] as? String) else null
+    val folder = buildString {
+      append("MichoPlay")
+      if (playlistFolder != null) append("/").append(playlistFolder)
+    }
+    val destination = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "$folder/${file.name}")
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-      val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "MichoPlay/YouTube")
-      if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("Android couldn’t create Music/MichoPlay/YouTube.")
+      val directory = destination.parentFile ?: throw IllegalStateException("Android couldn’t create the playlist folder.")
+      if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("Android couldn’t create the playlist folder in Music/MichoPlay.")
       if (destination.exists() && runCatching { requirePlayableAudio(destination) }.isSuccess)
         return PublishedAudio(destination.absolutePath, null, false)
       val created = !destination.exists() || destination.delete()
@@ -1040,7 +1052,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         throw error
       }
     }
-    val relativePath = "${Environment.DIRECTORY_MUSIC}/MichoPlay/YouTube/"
+    val relativePath = "${Environment.DIRECTORY_MUSIC}/$folder/"
     val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
     activity.contentResolver.query(collection, arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA),
       "${MediaStore.Audio.Media.DISPLAY_NAME}=? AND ${MediaStore.Audio.Media.RELATIVE_PATH}=?",
@@ -1079,6 +1091,17 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       activity.contentResolver.delete(uri, null, null)
       throw error
     }
+  }
+
+  private fun safePlaylistFolderName(title: String?): String {
+    val cleaned = (title ?: "")
+      .map { character -> if (character.isISOControl() || character in "\\/:*?\"<>|") '_' else character }
+      .take(120)
+      .joinToString("")
+      .trim()
+      .trim('.')
+    if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") return "Playlist"
+    return if (cleaned.uppercase() in setOf("CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9")) "_$cleaned" else cleaned
   }
 
   @Command

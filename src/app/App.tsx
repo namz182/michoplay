@@ -70,6 +70,7 @@ import type {
   PlayerSnapshot,
   Track,
   YoutubeDownload,
+  YoutubeDownloadPlaylist,
   YoutubeSearchResult,
 } from "../lib/api";
 import {
@@ -95,6 +96,8 @@ import {
 import { Cover, useArtwork } from "./Artwork";
 import { LyricsBadge } from "../components/LyricsBadge";
 import { LyricsView } from "../screens/lyrics/LyricsView";
+import { PlaylistSelection } from "../components/downloads/PlaylistSelection";
+import { PlaylistDownloadProgress } from "../components/downloads/PlaylistDownloadProgress";
 import { BufferedYoutubeSearch, DesktopGlobalSearch } from "./components/SearchInputs";
 import { SleepTimerControl, sleepTimerLabel } from "./components/SleepTimerControl";
 import { VolumeControl } from "./components/VolumeControl";
@@ -351,6 +354,7 @@ export default function App() {
   const [youtubeDownloads, setYoutubeDownloads] = useState<YoutubeDownload[]>(
     [],
   );
+  const [playlistSelection, setPlaylistSelection] = useState<YoutubeSearchResult | null>(null);
   const latestYoutubeDownloads = useRef<YoutubeDownload[]>([]);
   const youtubeDownloadsVersion = useRef(0);
   const [unseenDownloadIds, setUnseenDownloadIds] = useState<string[]>([]);
@@ -685,7 +689,7 @@ export default function App() {
         .map((track) => track.id);
       if (newIds.length)
         setMessage(
-          `Saved ${newIds.length} ${newIds.length === 1 ? "song" : "songs"} to Music/YouTube`,
+          `Saved ${newIds.length} ${newIds.length === 1 ? "song" : "songs"} to Music/MichoPlay`,
         );
       return scanned;
     } catch (error) {
@@ -1945,6 +1949,7 @@ export default function App() {
   async function queueYoutubeDownload(
     selected: YoutubeSearchResult,
     source?: DOMRect,
+    playlist?: YoutubeDownloadPlaylist,
   ) {
     setMessage("");
     try {
@@ -1953,6 +1958,7 @@ export default function App() {
         selected.title,
         selected.thumbnail,
         selected.isPlaylist,
+        playlist,
       );
       setYoutubeDownloads((prior) =>
         prior.some((download) => download.id === item.id)
@@ -1963,7 +1969,7 @@ export default function App() {
         setUnseenDownloadIds((prior) =>
           prior.includes(item.id) ? prior : [...prior, item.id],
         );
-        showMobileDownloadFeedback(source);
+        if (!playlist) showMobileDownloadFeedback(source);
       } else {
         setPanelView("downloads");
         setShowPanel(true);
@@ -1980,6 +1986,10 @@ export default function App() {
     source?: DOMRect,
   ) {
     if (query) rememberSearch(query);
+    if (selected.isPlaylist) {
+      setPlaylistSelection(selected);
+      return;
+    }
     const existing = youtubeDownloads.find(
       (download) =>
         download.url === selected.url &&
@@ -2006,6 +2016,32 @@ export default function App() {
     });
   }
 
+  async function queueSelectedPlaylistSongs(songs: YoutubeSearchResult[]) {
+    const playlist = playlistSelection;
+    setPlaylistSelection(null);
+    if (!playlist || songs.length === 0) return;
+    const playlistId = playlist.id || playlist.url;
+    const queueable = songs.filter((song) => !youtubeDownloads.some((item) => item.url === song.url && !["failed", "cancelled"].includes(item.status)));
+    let queued = 0;
+    for (const [index, song] of queueable.entries()) {
+      const context: YoutubeDownloadPlaylist = {
+        id: playlistId,
+        title: playlist.title,
+        index: index + 1,
+        total: queueable.length,
+      };
+      if (await queueYoutubeDownload(song, undefined, context)) queued += 1;
+    }
+    if (isAndroid) {
+      setMobileTab("downloads");
+      if (queued > 0) showMobileDownloadFeedback(undefined, `Added ${queued} ${queued === 1 ? "song" : "songs"}`);
+    } else {
+      setPanelView("downloads");
+      setShowPanel(true);
+      if (queued > 0) setMessage(`Added ${queued} ${queued === 1 ? "song" : "songs"} from “${playlist.title}”.`);
+    }
+  }
+
   async function playYoutubeDownload(item: YoutubeDownload) {
     let matching = tracksForDownload(item, tracks, youtubeDirectory);
     if (!matching.length)
@@ -2023,7 +2059,7 @@ export default function App() {
       await run(() => api.playCollection(trackIds, trackIds[0]));
     } else
       setMessage(
-        "The downloaded audio could not be found in Music/YouTube. Try refreshing the library.",
+        "The downloaded audio could not be found in Music/MichoPlay. Try refreshing the library.",
       );
   }
   function openDownloadedTrackMenu(item: YoutubeDownload, event: MouseEvent) {
@@ -2047,7 +2083,7 @@ export default function App() {
         if (target) openTrackMenuAt(target, rect);
         else
           setMessage(
-            "The downloaded song could not be found in Music/YouTube.",
+            "The downloaded song could not be found in Music/MichoPlay.",
           );
       })
       .catch((error) => setMessage(String(error)));
@@ -4758,7 +4794,9 @@ export default function App() {
                       )}
                     </div>
                     {youtubeDownloads.length ? (
-                      youtubeDownloads.map((item) => (
+                      <>
+                      <PlaylistDownloadProgress downloads={youtubeDownloads} onControl={(id, action) => void controlYoutubeDownload(id, action)} onPlay={(item) => void playYoutubeDownload(item)} onMenu={(item, event) => openDownloadedTrackMenu(item, event)} />
+                      {youtubeDownloads.filter((item) => !item.playlist).map((item) => (
                         <article
                           className={`download-item status-${item.status}`}
                           key={item.id}
@@ -4888,7 +4926,8 @@ export default function App() {
                             )}
                           </div>
                         </article>
-                      ))
+                      ))}
+                      </>
                     ) : (
                       <div className="download-manager-empty">
                         <strong>No downloads yet</strong>
@@ -7172,6 +7211,7 @@ export default function App() {
           </section>
         </div>
       )}
+      {playlistSelection && <PlaylistSelection playlist={playlistSelection} onClose={() => setPlaylistSelection(null)} onConfirm={(songs) => void queueSelectedPlaylistSongs(songs)} />}
       {confirmation && (
         <div
           className="dialog-overlay"

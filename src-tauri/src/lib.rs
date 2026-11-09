@@ -2632,12 +2632,64 @@ fn desktop_youtube_directory(app: &AppHandle) -> Result<PathBuf, String> {
         .audio_dir()
         .or_else(|_| app.path().home_dir().map(|home| home.join("Music")))
         .map_err(|_| "The Music folder couldn’t be located.".to_owned())?;
-    let directory = music_directory.join("YouTube");
+    let directory = music_directory.join("MichoPlay");
     std::fs::create_dir_all(&directory)
-        .map_err(|_| "MichoPlay couldn’t create Music/YouTube.".to_owned())?;
+        .map_err(|_| "MichoPlay couldn’t create its folder in Music.".to_owned())?;
     directory
         .canonicalize()
-        .map_err(|_| "The YouTube music folder couldn’t be located.".to_owned())
+        .map_err(|_| "The MichoPlay music folder couldn’t be located.".to_owned())
+}
+
+#[cfg(not(target_os = "android"))]
+fn safe_youtube_folder_name(name: &str) -> String {
+    let cleaned = name
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .take(120)
+        .collect::<String>();
+    let cleaned = cleaned.trim().trim_matches('.');
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "Playlist".to_owned()
+    } else if matches!(
+        cleaned.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        format!("_{cleaned}")
+    } else {
+        cleaned.to_owned()
+    }
 }
 
 #[tauri::command]
@@ -2671,6 +2723,15 @@ struct YoutubeSearchResult {
     duration_seconds: Option<f64>,
     is_playlist: bool,
     has_lyrics: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeDownloadPlaylist {
+    id: String,
+    title: String,
+    index: u32,
+    total: u32,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -2708,6 +2769,8 @@ struct YoutubeDownloadItem {
     url: String,
     thumbnail: Option<String>,
     is_playlist: bool,
+    #[serde(default)]
+    playlist: Option<YoutubeDownloadPlaylist>,
     status: String,
     #[serde(default)]
     phase: String,
@@ -3200,12 +3263,20 @@ async fn youtube_search(
     limit: Option<usize>,
     offset: Option<usize>,
     include_lyrics: Option<bool>,
+    playlist_items: Option<bool>,
     bridge: State<'_, MediaBridge>,
     app: AppHandle,
 ) -> Result<Vec<YoutubeSearchResult>, String> {
-    let limit = limit.unwrap_or(15).clamp(1, 30);
-    let offset = offset.unwrap_or(0).min(50);
-    let search_end = offset.saturating_add(limit).min(50);
+    let playlist_items = playlist_items.unwrap_or(false);
+    let limit = limit
+        .unwrap_or(15)
+        .clamp(1, if playlist_items { 100 } else { 30 });
+    let offset = offset
+        .unwrap_or(0)
+        .min(if playlist_items { 5_000 } else { 50 });
+    let search_end = offset
+        .saturating_add(limit)
+        .min(if playlist_items { 5_000 } else { 50 });
     #[cfg(target_os = "android")]
     {
         let _ = app;
@@ -3213,7 +3284,7 @@ async fn youtube_search(
         call_android_media(
             plugin,
             "youtubeSearch",
-            serde_json::json!({ "query": query, "limit": limit, "offset": offset, "includeLyrics": include_lyrics.unwrap_or(false) }),
+            serde_json::json!({ "query": query, "limit": limit, "offset": offset, "includeLyrics": include_lyrics.unwrap_or(false), "playlistItems": playlist_items }),
         )
         .await
     }
@@ -3269,7 +3340,7 @@ async fn youtube_search(
                 serde_json::from_slice(&output.stdout).map_err(|_| {
                     "YouTube search returned unreadable results. Try another search.".to_owned()
                 })?;
-            if is_playlist_url {
+            if is_playlist_url && !playlist_items {
                 let title = document
                     .get("title")
                     .and_then(serde_json::Value::as_str)
@@ -3409,6 +3480,7 @@ async fn youtube_download_enqueue(
     title: String,
     thumbnail: Option<String>,
     is_playlist: bool,
+    playlist: Option<YoutubeDownloadPlaylist>,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
     bridge: State<'_, MediaBridge>,
@@ -3419,7 +3491,16 @@ async fn youtube_download_enqueue(
         call_android_media(
             plugin,
             "youtubeDownloadEnqueue",
-            serde_json::json!({ "url": url, "title": title, "thumbnail": thumbnail, "isPlaylist": is_playlist }),
+            serde_json::json!({
+                "url": url,
+                "title": title,
+                "thumbnail": thumbnail,
+                "isPlaylist": is_playlist,
+                "playlistId": playlist.as_ref().map(|value| value.id.as_str()),
+                "playlistTitle": playlist.as_ref().map(|value| value.title.as_str()),
+                "playlistIndex": playlist.as_ref().map(|value| value.index),
+                "playlistTotal": playlist.as_ref().map(|value| value.total),
+            }),
         )
         .await
     }
@@ -3449,6 +3530,7 @@ async fn youtube_download_enqueue(
                 url: url.clone(),
                 thumbnail,
                 is_playlist,
+                playlist,
                 status: "queued".to_owned(),
                 phase: "queued".to_owned(),
                 percent: None,
@@ -3701,7 +3783,7 @@ fn youtube_download_worker(app: AppHandle) {
             return;
         };
         emit_youtube_downloads(&app);
-        let is_playlist = app
+        let (title, playlist_title, is_playlist) = app
             .state::<YoutubeDownloadState>()
             .0
             .lock()
@@ -3711,10 +3793,26 @@ fn youtube_download_worker(app: AppHandle) {
                     .tasks
                     .iter()
                     .find(|task| task.item.id == id)
-                    .map(|task| task.item.is_playlist)
+                    .map(|task| {
+                        (
+                            task.item.title.clone(),
+                            task.item
+                                .playlist
+                                .as_ref()
+                                .map(|playlist| playlist.title.clone()),
+                            task.item.is_playlist,
+                        )
+                    })
             })
-            .unwrap_or(false);
-        let result = run_youtube_download(&app, &id, &url, is_playlist);
+            .unwrap_or_else(|| ("YouTube audio".to_owned(), None, false));
+        let result = run_youtube_download(
+            &app,
+            &id,
+            &url,
+            &title,
+            playlist_title.as_deref(),
+            is_playlist,
+        );
         {
             let state = app.state::<YoutubeDownloadState>();
             if let Ok(mut manager) = state.0.lock() {
@@ -3734,7 +3832,7 @@ fn youtube_download_worker(app: AppHandle) {
                                     task.item.downloaded_bytes = Some(bytes);
                                     task.item.total_bytes = Some(bytes);
                                 }
-                                task.item.message = "Ready to play".to_owned();
+                                task.item.message = "Completed".to_owned();
                             }
                             Err(error) => {
                                 task.item.status = "failed".to_owned();
@@ -3756,7 +3854,7 @@ fn youtube_download_file_error(error: std::io::Error) -> String {
 
     match error.kind() {
         ErrorKind::NotFound => {
-            "The downloaded song is missing from Music/YouTube. Try downloading it again."
+            "The downloaded song is missing from Music/MichoPlay. Try downloading it again."
         }
         ErrorKind::PermissionDenied => {
             "MichoPlay doesn't have permission to read the downloaded song. Allow access to your Music folder and try again."
@@ -3838,13 +3936,25 @@ fn run_youtube_download(
     app: &AppHandle,
     id: &str,
     url: &str,
+    title: &str,
+    playlist_title: Option<&str>,
     is_playlist: bool,
 ) -> Result<(Option<u64>, Vec<String>), String> {
     let directory = desktop_youtube_directory(app)?;
     let yt_dlp = bundled_desktop_tool(app, "yt-dlp")?;
     let ffmpeg = desktop_mp3_ffmpeg(app)?;
     let deno = bundled_desktop_tool(app, "deno")?;
-    let output_template = directory.join("%(title).160B [%(id)s].%(ext)s");
+    let output_directory = if is_playlist || playlist_title.is_some() {
+        let playlist_directory =
+            directory.join(safe_youtube_folder_name(playlist_title.unwrap_or(title)));
+        std::fs::create_dir_all(&playlist_directory).map_err(|_| {
+            "MichoPlay couldn’t create the playlist folder in Music/MichoPlay.".to_owned()
+        })?;
+        playlist_directory
+    } else {
+        directory
+    };
+    let output_template = output_directory.join("%(title).160B [%(id)s].%(ext)s");
     let mut command = hidden_command(yt_dlp);
     #[cfg(unix)]
     {
@@ -3855,6 +3965,7 @@ fn run_youtube_download(
         .arg("--ignore-config")
         .arg("--encoding")
         .arg("utf-8")
+        .arg("--ignore-errors")
         .arg("--no-colors")
         .arg("--newline")
         .arg("--progress")
@@ -5490,7 +5601,7 @@ mod tests {
         let missing = root.join("missing.mp3");
         assert_eq!(
             youtube_download_file_size(&missing).unwrap_err(),
-            "The downloaded song is missing from Music/YouTube. Try downloading it again."
+            "The downloaded song is missing from Music/MichoPlay. Try downloading it again."
         );
         let empty = root.join("empty.mp3");
         std::fs::write(&empty, []).unwrap();
@@ -5521,7 +5632,7 @@ mod tests {
         for (kind, expected) in [
             (
                 ErrorKind::NotFound,
-                "The downloaded song is missing from Music/YouTube. Try downloading it again.",
+                "The downloaded song is missing from Music/MichoPlay. Try downloading it again.",
             ),
             (
                 ErrorKind::PermissionDenied,
