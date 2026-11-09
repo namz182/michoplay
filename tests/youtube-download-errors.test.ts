@@ -4,7 +4,7 @@ import { youtubeDownloadErrorText } from "../src/lib/youtube-size.ts";
 
 test("missing files, unreadable locations, and missing locations remain distinct", () => {
   const cases = [
-    ["The downloaded MP3 file could not be found.", "The downloaded song is missing from Music/YouTube. Try downloading it again."],
+    ["The downloaded MP3 file could not be found.", "The downloaded song is missing from Music/MichoPlay. Try downloading it again."],
     ["Couldn’t read the downloaded MP3 file path: invalid UTF-8", "MichoPlay couldn't read where the song was saved. Try downloading it again."],
     ["The downloader finished without reporting an MP3 file.", "The download finished without a saved song location. Try downloading it again."],
     ["The downloader did not produce an MP3 file.", "The saved download isn't an MP3 file. Try downloading it again."],
@@ -14,7 +14,7 @@ test("missing files, unreadable locations, and missing locations remain distinct
 
 test("specific native errors survive presentation without being generalized", () => {
   const messages = [
-    "The downloaded song is missing from Music/YouTube. Try downloading it again.",
+    "The downloaded song is missing from Music/MichoPlay. Try downloading it again.",
     "MichoPlay doesn't have permission to read the downloaded song. Allow access to your Music folder and try again.",
     "The downloaded song's folder is no longer available. Restore the folder or download the song again.",
     "Your Music folder took too long to respond. Check that the drive is connected and try again.",
@@ -52,6 +52,32 @@ test("debug context does not override the actual failure or leak into messages",
   assert.equal(youtubeDownloadErrorText(details), "YouTube blocked this download. Try again.");
   assert.equal(youtubeDownloadErrorText("[debug] ffmpeg, cookies configured\nConnection timed out"), "Couldn't connect to YouTube. Check your internet connection and try again.");
   assert.equal(youtubeDownloadErrorText("The downloaded MP3 file could not be accessed: Permission denied (os error 13)"), "MichoPlay doesn't have permission to read the downloaded song. Allow access to your Music folder and try again.");
+});
+
+test("YouTube compatibility failures and temporary request errors stay actionable", () => {
+  assert.equal(
+    youtubeDownloadErrorText("ERROR: No supported JavaScript runtime could be found; challenge solving failed"),
+    "YouTube changed how this song is delivered. Update MichoPlay and try again.",
+  );
+  assert.equal(
+    youtubeDownloadErrorText("ERROR: HTTP Error 400: Bad Request"),
+    "YouTube couldn't provide this song right now. Try another result or try again later.",
+  );
+});
+
+test("Android enqueue errors explain invalid links and startup/permission states", () => {
+  assert.equal(
+    youtubeDownloadErrorText("Enter a valid YouTube video or playlist URL."),
+    "This YouTube result link is invalid. Refresh Search results and try again.",
+  );
+  assert.equal(
+    youtubeDownloadErrorText("Android media services are still starting. Try again shortly."),
+    "Downloads are still starting. Wait a moment and try again.",
+  );
+  assert.equal(
+    youtubeDownloadErrorText("Allow storage access, then tap Download again."),
+    "Allow MichoPlay storage access, then tap Download again.",
+  );
 });
 
 test("unknown failures do not invent a specific cause or expose technical text", () => {

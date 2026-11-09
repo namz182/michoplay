@@ -64,8 +64,8 @@ class YoutubeDownloadArgs {
   var isPlaylist: Boolean = false
   var playlistId: String? = null
   var playlistTitle: String? = null
-  var playlistIndex: Int = 0
-  var playlistTotal: Int = 0
+  var playlistIndex: Int? = null
+  var playlistTotal: Int? = null
   var id: String = ""
 }
 
@@ -577,7 +577,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.reject("Allow storage access, then tap Download again.")
       return
     }
-    val playlist = if (!args.playlistId.isNullOrBlank() && !args.playlistTitle.isNullOrBlank()) mapOf("id" to args.playlistId, "title" to args.playlistTitle, "index" to args.playlistIndex, "total" to args.playlistTotal) else null
+    val playlist = if (!args.playlistId.isNullOrBlank() && !args.playlistTitle.isNullOrBlank()) mapOf("id" to args.playlistId, "title" to args.playlistTitle, "index" to (args.playlistIndex ?: 0), "total" to (args.playlistTotal ?: 0)) else null
     val item = Collections.synchronizedMap(mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId.getAndIncrement()}", "title" to args.title.ifBlank { "YouTube audio" }, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "playlist" to playlist, "status" to "queued", "phase" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "totalBytesEstimated" to false, "speedBytesPerSecond" to null, "etaSeconds" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>()))
     downloads.add(item); jobGenerations[item["id"] as String] = AtomicInteger(0)
     emitDownloads(true); invoke.resolveObject(item); startQueuedDownloads()
@@ -612,11 +612,11 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           try {
             executeYoutubeAudioDownload(item, staging, generation)
           } catch (error: Exception) {
-            if (!isYoutubeForbidden(error)) throw error
+            if (!isYoutubeCompatibilityFailure(error)) throw error
             if (item["status"] != "downloading") throw error
-            item["message"] = "Refreshing YouTube support and retrying…"
+            item["message"] = "Refreshing download support and retrying…"
             emitDownloads()
-            if (!refreshDownloaderAfter403()) throw error
+            if (!refreshDownloaderForCompatibility()) throw error
             if (item["status"] != "downloading") throw error
             executeYoutubeAudioDownload(item, staging, generation)
           }
@@ -670,6 +670,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File, generation: Int) {
     val request = YoutubeDLRequest(item["url"] as String)
     request.addOption("--ignore-config"); request.addOption("--ignore-errors"); request.addOption("--no-warnings"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
+    // Mobile networks often change between search and download. Let yt-dlp retry
+    // short connection failures instead of immediately failing the whole job.
+    request.addOption("--retries", "5"); request.addOption("--fragment-retries", "5")
+    request.addOption("--extractor-retries", "3"); request.addOption("--socket-timeout", "30")
     request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
     if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
     request.addOption("--playlist-end", "100")
@@ -893,17 +897,23 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     return seconds * 1000 + millis
   }
 
-  private fun isYoutubeForbidden(error: Throwable): Boolean {
+  private fun isYoutubeCompatibilityFailure(error: Throwable): Boolean {
     var cause: Throwable? = error
     while (cause != null) {
-      if (cause.message.orEmpty().contains("403") || cause.message.orEmpty().contains("forbidden", ignoreCase = true)) return true
+      val message = cause.message.orEmpty()
+      if (message.contains("403") || message.contains("forbidden", ignoreCase = true) ||
+        message.contains("signature", ignoreCase = true) ||
+        message.contains("challenge", ignoreCase = true) ||
+        message.contains("javascript runtime", ignoreCase = true) ||
+        message.contains("no video formats", ignoreCase = true) ||
+        message.contains("requested format", ignoreCase = true)) return true
       cause = cause.cause
     }
     return false
   }
 
   @Synchronized
-  private fun refreshDownloaderAfter403(): Boolean {
+  private fun refreshDownloaderForCompatibility(): Boolean {
     if (downloader403RefreshAttempted) return false
     downloader403RefreshAttempted = true
     return try {

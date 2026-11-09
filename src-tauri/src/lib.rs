@@ -3522,8 +3522,11 @@ async fn youtube_download_enqueue(
                 "isPlaylist": is_playlist,
                 "playlistId": playlist.as_ref().map(|value| value.id.as_str()),
                 "playlistTitle": playlist.as_ref().map(|value| value.title.as_str()),
-                "playlistIndex": playlist.as_ref().map(|value| value.index),
-                "playlistTotal": playlist.as_ref().map(|value| value.total),
+                // The Android plugin argument model uses integer playlist
+                // positions. Send neutral values for single-song downloads
+                // instead of JSON null, which Jackson rejects for primitives.
+                "playlistIndex": playlist.as_ref().map(|value| value.index).unwrap_or(0),
+                "playlistTotal": playlist.as_ref().map(|value| value.total).unwrap_or(0),
             }),
         )
         .await

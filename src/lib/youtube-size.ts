@@ -78,6 +78,16 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
   if (friendlyMessage) return friendlyMessage;
 
   const lines = error.split(/\r?\n/).map((line) => line.trim());
+  const normalized = lines.join(" ").toLowerCase();
+  if (/enter a valid youtube (?:video or playlist|url)/.test(normalized)) {
+    return "This YouTube result link is invalid. Refresh Search results and try again.";
+  }
+  if (/android media services are still starting|youtube tools are still starting/.test(normalized)) {
+    return "Downloads are still starting. Wait a moment and try again.";
+  }
+  if (/allow storage access/.test(normalized)) {
+    return "Allow MichoPlay storage access, then tap Download again.";
+  }
   const reportedErrors = lines.filter((line) => /^error:/i.test(line));
   // Classify reported failures without exposing tool logs or system details.
   const detail = (reportedErrors.length ? reportedErrors : lines.filter((line) => !/^\[debug\]/i.test(line))).join("\n").toLowerCase();
@@ -99,6 +109,9 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
   }
   if (/sign.?in|log.?in|age.restrict|confirm you.re not a bot|cookies|members.only/.test(detail)) {
     return "YouTube requires sign-in for this video. Try another song.";
+  }
+  if (/javascript runtime|js runtime|challenge solving failed|signature extraction|signature solving/.test(detail)) {
+    return "YouTube changed how this song is delivered. Update MichoPlay and try again.";
   }
   if (/private video|video unavailable|not available|removed by the uploader|has been removed|copyright/.test(detail)) {
     return "This video is unavailable. Try another song.";
@@ -129,6 +142,9 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
   }
   if (/429|too many requests|rate.limit/.test(detail)) {
     return "YouTube is limiting downloads right now. Try again later.";
+  }
+  if (/http error (?:400|401|410)|bad request|unauthorized|gone \(410\)/.test(detail)) {
+    return "YouTube couldn't provide this song right now. Try another result or try again later.";
   }
   if (/403|forbidden/.test(detail)) {
     return "YouTube blocked this download. Try again.";

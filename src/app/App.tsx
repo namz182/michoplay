@@ -1963,8 +1963,14 @@ export default function App() {
   ) {
     setMessage("");
     try {
+      // The Android picker result can carry a Music/short-link URL variant.
+      // Queue video IDs as the canonical watch URL so native validation and
+      // yt-dlp receive the same stable URL on every mobile search result.
+      const downloadUrl = isAndroid && !selected.isPlaylist && /^[\w-]{11}$/.test(selected.id)
+        ? `https://www.youtube.com/watch?v=${selected.id}`
+        : selected.url;
       const item = await api.youtubeDownloadEnqueue(
-        selected.url,
+        downloadUrl,
         selected.title,
         selected.thumbnail,
         selected.isPlaylist,
@@ -1986,7 +1992,8 @@ export default function App() {
       }
       return true;
     } catch (error) {
-      setMessage(youtubeDownloadErrorText(String(error), selected.isPlaylist));
+      const rawError = error instanceof Error ? error.message : String(error);
+      setMessage(youtubeDownloadErrorText(rawError, selected.isPlaylist));
       return false;
     }
   }
@@ -5264,7 +5271,7 @@ export default function App() {
             {scanning && !scanNotificationDismissed && (
               <div className="app-notification-badge scanning" role="status">
                 <span className="app-notification-spinner loading-indicator" />
-                <span className="app-notification-copy">
+                <div className="app-notification-copy">
                   {scanProgress?.phase ?? "Scanning music and artwork…"}
                   {scanProgress?.phase === "Finding audio files" &&
                   scanProgress.processed
@@ -5272,7 +5279,7 @@ export default function App() {
                     : scanProgress?.total
                       ? ` · ${scanProgress.processed.toLocaleString()} of ${scanProgress.total.toLocaleString()}`
                       : ""}
-                </span>
+                </div>
                 <button
                   className="app-notification-action"
                   onClick={() => void api.cancelScan().catch(() => {})}
