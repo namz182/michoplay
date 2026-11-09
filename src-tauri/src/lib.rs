@@ -1,8 +1,9 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
+#[cfg(not(target_os = "android"))]
+use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::{
     config::WriteOptions,
     file::{AudioFile, TaggedFileExt},
-    picture::{MimeType, Picture, PictureType},
     probe::Probe,
     tag::{ItemKey, Tag, TagExt, TagType},
 };
@@ -21,15 +22,18 @@ use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
     hash::{Hash, Hasher},
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
+};
+#[cfg(not(target_os = "android"))]
+use std::{
+    io::{BufRead, BufReader},
+    process::{Command, Stdio},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
@@ -45,6 +49,7 @@ static LIBRARY_DIRTY_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 #[cfg(not(target_os = "android"))]
 static YOUTUBE_DOWNLOAD_PERSIST_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(not(target_os = "android"))]
 fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[cfg(windows)]
     let command = {
@@ -299,6 +304,7 @@ fn embed_lyrics_text(audio_path: &Path, contents: &str) -> Result<(), String> {
         .map_err(|error| format!("Could not embed downloaded lyrics: {error}"))
 }
 
+#[cfg(not(target_os = "android"))]
 fn vtt_timestamp_ms(value: &str) -> Option<u64> {
     let (time, fraction) = value.trim().split_once('.')?;
     let parts = time
@@ -319,6 +325,7 @@ fn vtt_timestamp_ms(value: &str) -> Option<u64> {
     seconds.checked_mul(1000)?.checked_add(millis)
 }
 
+#[cfg(not(target_os = "android"))]
 fn append_vtt_cue(lyrics: &mut Vec<String>, start_ms: Option<u64>, cue: &mut Vec<String>) {
     let Some(start_ms) = start_ms else {
         cue.clear();
@@ -362,6 +369,7 @@ fn append_vtt_cue(lyrics: &mut Vec<String>, start_ms: Option<u64>, cue: &mut Vec
     ));
 }
 
+#[cfg(not(target_os = "android"))]
 fn vtt_to_lrc(vtt: &str) -> String {
     let mut lyrics = Vec::new();
     let mut cue = Vec::new();
@@ -385,6 +393,7 @@ fn vtt_to_lrc(vtt: &str) -> String {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn attach_downloaded_lyrics(audio_path: &Path) {
     let Some(parent) = audio_path.parent() else {
         return;
@@ -2621,6 +2630,7 @@ async fn library_import_and_play_audio_files(
 }
 
 #[derive(Deserialize)]
+#[cfg(target_os = "android")]
 struct YoutubeMusicDirectory {
     path: String,
 }
@@ -2699,6 +2709,7 @@ async fn youtube_music_directory(
 ) -> Result<String, String> {
     #[cfg(target_os = "android")]
     {
+        let _ = app;
         let plugin = android_media_plugin(&bridge)?;
         let directory: YoutubeMusicDirectory =
             call_android_media(plugin, "youtubeMusicDirectory", serde_json::json!({})).await?;
@@ -2788,6 +2799,7 @@ struct YoutubeDownloadItem {
     file_paths: Vec<String>,
 }
 
+#[cfg(not(target_os = "android"))]
 struct YoutubeDownloadTask {
     item: YoutubeDownloadItem,
     process_id: Option<u32>,
@@ -2796,20 +2808,30 @@ struct YoutubeDownloadTask {
 
 #[derive(Default)]
 struct YoutubeDownloadManager {
+    #[cfg(not(target_os = "android"))]
     tasks: Vec<YoutubeDownloadTask>,
+    #[cfg(not(target_os = "android"))]
     next_id: u64,
+    #[cfg(not(target_os = "android"))]
     active_workers: usize,
+    #[cfg(not(target_os = "android"))]
     last_progress_emit: Option<std::time::Instant>,
+    #[cfg(not(target_os = "android"))]
     storage_path: Option<PathBuf>,
+    #[cfg(not(target_os = "android"))]
     last_persist: Option<std::time::Instant>,
+    #[cfg(not(target_os = "android"))]
     last_persisted_states: Vec<(String, String, String)>,
 }
 
+#[cfg(not(target_os = "android"))]
 const MAX_CONCURRENT_YOUTUBE_DOWNLOADS: usize = 3;
 
 #[derive(Default)]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 struct YoutubeDownloadState(Mutex<YoutubeDownloadManager>);
 
+#[cfg(not(target_os = "android"))]
 impl YoutubeDownloadManager {
     fn snapshot(&self) -> Vec<YoutubeDownloadItem> {
         self.tasks.iter().map(|task| task.item.clone()).collect()
@@ -3274,9 +3296,6 @@ async fn youtube_search(
     let offset = offset
         .unwrap_or(0)
         .min(if playlist_items { 5_000 } else { 50 });
-    let search_end = offset
-        .saturating_add(limit)
-        .min(if playlist_items { 5_000 } else { 50 });
     #[cfg(target_os = "android")]
     {
         let _ = app;
@@ -3292,6 +3311,9 @@ async fn youtube_search(
     #[cfg(not(target_os = "android"))]
     {
         let _ = bridge;
+        let search_end = offset
+            .saturating_add(limit)
+            .min(if playlist_items { 5_000 } else { 50 });
         let yt_dlp = bundled_desktop_tool(&app, "yt-dlp")?;
         let query = query.trim().to_owned();
         if query.is_empty() || query.chars().count() > 200 {
@@ -3460,6 +3482,7 @@ async fn youtube_downloads_state(
 ) -> Result<Vec<YoutubeDownloadItem>, String> {
     #[cfg(target_os = "android")]
     {
+        let _ = state;
         let plugin = android_media_plugin(&bridge)?;
         call_android_media(plugin, "youtubeDownloadsState", serde_json::json!({})).await
     }
@@ -3487,6 +3510,7 @@ async fn youtube_download_enqueue(
 ) -> Result<YoutubeDownloadItem, String> {
     #[cfg(target_os = "android")]
     {
+        let _ = (app, state);
         let plugin = android_media_plugin(&bridge)?;
         call_android_media(
             plugin,
@@ -3564,6 +3588,7 @@ async fn youtube_download_pause(
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
+        let _ = (app, state);
         let plugin = android_media_plugin(&bridge)?;
         call_android_media(
             plugin,
@@ -3610,6 +3635,7 @@ async fn youtube_download_resume(
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
+        let _ = (app, state);
         let plugin = android_media_plugin(&bridge)?;
         call_android_media(
             plugin,
@@ -3653,6 +3679,7 @@ async fn youtube_download_cancel(
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
+        let _ = (app, state);
         let plugin = android_media_plugin(&bridge)?;
         call_android_media(
             plugin,
@@ -3699,29 +3726,29 @@ async fn youtube_download_remove(
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
+        let _ = (app, state);
         let plugin = android_media_plugin(&bridge)?;
-        return call_android_media(
+        call_android_media(
             plugin,
             "youtubeDownloadRemove",
             serde_json::json!({ "id": id }),
         )
-        .await;
+        .await
     }
     #[cfg(not(target_os = "android"))]
-    let _ = bridge;
-    let mut manager = state
-        .0
-        .lock()
-        .map_err(|_| "The download manager is unavailable.".to_owned())?;
-    manager.tasks.retain(|task| {
-        task.item.id != id || task.item.status == "downloading" || task.item.status == "queued"
-    });
-    drop(manager);
-    #[cfg(not(target_os = "android"))]
-    emit_youtube_downloads(&app);
-    #[cfg(target_os = "android")]
-    let _ = app;
-    Ok(())
+    {
+        let _ = bridge;
+        let mut manager = state
+            .0
+            .lock()
+            .map_err(|_| "The download manager is unavailable.".to_owned())?;
+        manager.tasks.retain(|task| {
+            task.item.id != id || task.item.status == "downloading" || task.item.status == "queued"
+        });
+        drop(manager);
+        emit_youtube_downloads(&app);
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "android"))]

@@ -1,5 +1,8 @@
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection};
+#[cfg(any(target_os = "android", test))]
+use rusqlite::{OptionalExtension, TransactionBehavior};
 use std::collections::HashMap;
+#[cfg(any(target_os = "android", test))]
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
@@ -91,6 +94,7 @@ pub(crate) fn app_data_save(app: AppHandle, key: String, value: String) -> Resul
         .map_err(|_| "MichoPlay’s saved settings could not be updated.".to_owned())
 }
 
+#[cfg(any(target_os = "android", test))]
 fn read_favorites(connection: &Connection) -> Result<Vec<u64>, String> {
     let saved = connection
         .query_row(
@@ -108,10 +112,12 @@ fn read_favorites(connection: &Connection) -> Result<Vec<u64>, String> {
         .unwrap_or_else(|| Ok(Vec::new()))
 }
 
+#[cfg(target_os = "android")]
 pub(crate) fn favorite_ids(app: &AppHandle) -> Result<Vec<u64>, String> {
     read_favorites(&open(app)?)
 }
 
+#[cfg(any(target_os = "android", test))]
 fn toggle_favorite_in(connection: &mut Connection, track_id: u64) -> Result<Vec<u64>, String> {
     connection
         .busy_timeout(Duration::from_secs(2))
@@ -140,6 +146,7 @@ fn toggle_favorite_in(connection: &mut Connection, track_id: u64) -> Result<Vec<
     Ok(favorites)
 }
 
+#[cfg(target_os = "android")]
 pub(crate) fn toggle_favorite(app: &AppHandle, track_id: u64) -> Result<Vec<u64>, String> {
     toggle_favorite_in(&mut open(app)?, track_id)
 }
