@@ -14,6 +14,7 @@ import android.provider.MediaStore
 import android.media.MediaScannerConnection
 import android.media.MediaMetadataRetriever
 import android.os.Environment
+import android.util.Log
 import app.tauri.annotation.Command
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.InvokeArg
@@ -25,6 +26,7 @@ import app.tauri.plugin.Plugin
 import androidx.core.content.ContextCompat
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import com.yausername.youtubedl_android.YoutubeDLResponse
 import com.yausername.ffmpeg.FFmpeg
 import org.json.JSONObject
 import org.json.JSONArray
@@ -622,6 +624,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
             emitDownloads()
             val refreshed = refreshDownloaderForCompatibility()
             requireActiveJob(item, generation)
+            // Never reuse a partial or already-processed file from the failed
+            // attempt; a stale MP3 can make post-processing fail again.
+            staging.deleteRecursively(); staging.mkdirs()
             if (refreshed) {
               try {
                 executeYoutubeAudioDownload(item, staging, generation)
@@ -630,6 +635,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
                 requireActiveJob(item, generation)
                 item["message"] = "Trying another YouTube stream…"
                 emitDownloads()
+                staging.deleteRecursively(); staging.mkdirs()
                 executeYoutubeAudioDownload(item, staging, generation, "android_vr,web_embedded")
               }
             } else {
@@ -676,9 +682,12 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           }
           // A pause followed quickly by resume changes the item to queued before
           // this process exits. Do not let the old worker overwrite that request.
-          if (jobIsActive(item, generation)) { item["status"] = "failed"; item["phase"] = "failed"; item["message"] = error.message ?: "Download failed" }
+          if (jobIsActive(item, generation)) {
+            item["status"] = "failed"; item["phase"] = "failed"; item["message"] = error.message ?: "Download failed"
+            Log.w("MichoPlay", "YouTube download failed: ${error.message}", error)
+          }
         } finally {
-          if (item["status"] == "completed" || item["status"] == "cancelled") staging.deleteRecursively()
+          if (item["status"] == "completed" || item["status"] == "cancelled" || item["status"] == "failed") staging.deleteRecursively()
           activeDownloads.decrementAndGet(); emitDownloads(true); startQueuedDownloads()
         }
       }
@@ -686,20 +695,27 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File, generation: Int, playerClients: String? = null) {
+    val isPlaylist = item["isPlaylist"] == true
     val request = YoutubeDLRequest(item["url"] as String)
-    request.addOption("--ignore-config"); request.addOption("--ignore-errors"); request.addOption("--no-warnings"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
+    request.addOption("--ignore-config"); request.addOption("--ignore-errors"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
     // Mobile networks often change between search and download. Let yt-dlp retry
     // short connection failures instead of immediately failing the whole job.
     request.addOption("--retries", "5"); request.addOption("--fragment-retries", "5")
     request.addOption("--extractor-retries", "3"); request.addOption("--socket-timeout", "30")
     request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
     if (playerClients != null) request.addOption("--extractor-args", "youtube:player_client=$playerClients")
-    if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
+    if (isPlaylist) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
     request.addOption("--playlist-end", "100")
     // The app only needs an audio stream; selecting `best` can return a
     // video+audio file that fails during MP3 conversion on some devices.
     request.addOption("-f", "bestaudio[acodec!=none]/bestaudio")
     request.addOption("-x"); request.addOption("--audio-format", "mp3"); request.addOption("--audio-quality", "0"); request.addOption("--embed-metadata")
+    // --embed-metadata also enables chapters, and an existing MP3 may contain
+    // attached pictures that the Android FFmpeg build cannot probe while
+    // copying streams. Mirror the desktop workarounds so tagging cannot fail
+    // before the MP3 is written.
+    request.addOption("--no-embed-chapters")
+    request.addOption("--postprocessor-args", "Metadata+ffmpeg_o:-vn")
     request.addOption("--write-subs"); request.addOption("--write-auto-subs"); request.addOption("--sub-langs", "en.*"); request.addOption("--sub-format", "vtt")
     request.addOption("--embed-thumbnail")
     request.addOption("-o", File(staging, "%(title).160B [%(id)s].%(ext)s").absolutePath)
@@ -710,7 +726,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     val playlistItem = Regex("Downloading item\\s+(\\d+)\\s+of\\s+(\\d+)")
     var playlistPosition: Pair<Int, Int>? = null
     var isAudioTransfer = false
-    YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
+    // Keep stdout and stderr separate. yt-dlp writes the progress template to
+    // stdout, while the library builds its exception message from stderr.
+    // Merging the streams leaves response.err empty and hides the real error.
+    val response = YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
       if (jobIsActive(item, generation)) {
         playlistItem.find(line)?.let { match ->
           val current = match.groupValues[1].toIntOrNull()
@@ -738,7 +757,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           ?: fields?.getOrNull(6)?.trim()?.toDoubleOrNull()
           ?: progressMatch?.groupValues?.getOrNull(1)?.toDoubleOrNull()
           ?: progress.takeIf { it.isFinite() }?.toDouble()
-        if (percentValue != null && (isAudioTransfer || progressIsAudio)) {
+        val isAudioProgress = isAudioTransfer || progressIsAudio || item["phase"] == "downloading"
+        if (percentValue != null && isAudioProgress) {
           // Ignore caption/artwork transfers so the bar follows the audio stream.
           val trackPercent = percentValue.coerceIn(0.0, 100.0)
           val position = playlistPosition
@@ -774,6 +794,15 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         }
       }
       kotlin.Unit
+    }
+    // --ignore-errors keeps post-processing problems (for example a thumbnail
+    // that cannot be attached) from aborting a download that already produced
+    // audio. Inspect the exit code ourselves so genuine extractor failures are
+    // surfaced and the compatibility retry can run.
+    val produced = staging.walkTopDown().any { it.isFile && it.extension.equals("mp3", ignoreCase = true) }
+    if (!produced) {
+      if (response.exitCode != 0) throw IllegalStateException(youtubeDownloadFailure(response))
+      throw IllegalStateException("YouTube did not produce a playable audio file.")
     }
   }
 
@@ -925,10 +954,29 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         message.contains("challenge", ignoreCase = true) ||
         message.contains("javascript runtime", ignoreCase = true) ||
         message.contains("no video formats", ignoreCase = true) ||
+        message.contains("unable to extract", ignoreCase = true) ||
+        message.contains("player response", ignoreCase = true) ||
+        message.contains("po token", ignoreCase = true) ||
+        message.contains("nsig", ignoreCase = true) ||
         message.contains("requested format", ignoreCase = true)) return true
       cause = cause.cause
     }
     return false
+  }
+
+  /**
+   * Keep the useful part of yt-dlp's stderr. Errors are reported one per line,
+   * so prefer the ERROR lines and fall back to the tail of the output.
+   */
+  private fun youtubeDownloadFailure(response: YoutubeDLResponse): String {
+    val lines = response.err.ifBlank { response.out }
+      .lineSequence()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .toList()
+    val errors = lines.filter { it.startsWith("ERROR:", ignoreCase = true) }
+    val detail = (errors.ifEmpty { lines }).takeLast(8).joinToString("\n")
+    return detail.ifBlank { "yt-dlp stopped with exit code ${response.exitCode}." }
   }
 
   @Synchronized
@@ -979,7 +1027,22 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Synchronized private fun emitDownloads(force: Boolean = false) {
     val now = android.os.SystemClock.elapsedRealtime()
-    val states = downloads.joinToString("|") { "${it["id"]}:${it["status"]}:${it["phase"]}" }
+    val states = downloads.joinToString("|") {
+      synchronized(it) {
+        listOf(
+          it["id"],
+          it["status"],
+          it["phase"],
+          it["percent"],
+          it["downloadedBytes"],
+          it["totalBytes"],
+          it["totalBytesEstimated"],
+          it["speedBytesPerSecond"],
+          it["etaSeconds"],
+          it["message"],
+        ).joinToString(":")
+      }
+    }
     val changed = states != lastDownloadStates
     if (!force && !changed && now - lastDownloadUpdateMs < 250L) return
     lastDownloadUpdateMs = now
@@ -1003,8 +1066,18 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       val url = entry.optString("url")
       if (id.isBlank() || url.isBlank()) continue
       val item = Collections.synchronizedMap(mutableMapOf<String, Any?>())
-      for (key in listOf("id", "title", "url", "thumbnail", "isPlaylist", "playlist", "status", "phase", "percent", "downloadedBytes", "totalBytes", "totalBytesEstimated", "speedBytesPerSecond", "etaSeconds", "message")) {
+      for (key in listOf("id", "title", "url", "thumbnail", "isPlaylist", "status", "phase", "percent", "downloadedBytes", "totalBytes", "totalBytesEstimated", "speedBytesPerSecond", "etaSeconds", "message")) {
         item[key] = entry.opt(key).takeUnless { it == JSONObject.NULL }
+      }
+      // SharedPreferences stores the playlist as a JSONObject. Convert it back
+      // to a Map so resumed downloads still land in their playlist folder.
+      item["playlist"] = entry.optJSONObject("playlist")?.let { playlist ->
+        mapOf(
+          "id" to playlist.optString("id"),
+          "title" to playlist.optString("title"),
+          "index" to playlist.optInt("index"),
+          "total" to playlist.optInt("total"),
+        )
       }
       item["filePaths"] = entry.optJSONArray("filePaths")?.let { array -> (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) } } ?: emptyList<String>()
       if (item["status"] == "downloading") {
@@ -1058,8 +1131,12 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   private fun publishAudioToMusic(file: File, item: Map<String, Any?>, generation: Int): PublishedAudio {
-    val playlist = item["playlist"] as? Map<*, *>
-    val playlistTitle = playlist?.get("title") as? String
+    val playlist = item["playlist"]
+    val playlistTitle = when (playlist) {
+      is Map<*, *> -> playlist["title"] as? String
+      is JSONObject -> playlist.optString("title").takeIf { it.isNotBlank() }
+      else -> null
+    }
     val playlistFolder = if (playlistTitle != null || item["isPlaylist"] == true) safePlaylistFolderName(playlistTitle ?: item["title"] as? String) else null
     val folder = buildString {
       append("MichoPlay")
