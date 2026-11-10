@@ -611,14 +611,32 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           staging.mkdirs()
           try {
             executeYoutubeAudioDownload(item, staging, generation)
-          } catch (error: Exception) {
-            if (!isYoutubeCompatibilityFailure(error)) throw error
-            if (item["status"] != "downloading") throw error
-            item["message"] = "Refreshing download support and retrying…"
+          } catch (firstError: Exception) {
+            if (!isYoutubeCompatibilityFailure(firstError)) throw firstError
+            requireActiveJob(item, generation)
+
+            // A fresh yt-dlp often fixes YouTube's frequently changing player
+            // signatures. If the same client is still denied, retry with
+            // clients that do not require a GVS PO token.
+            item["message"] = "Refreshing YouTube support…"
             emitDownloads()
-            if (!refreshDownloaderForCompatibility()) throw error
-            if (item["status"] != "downloading") throw error
-            executeYoutubeAudioDownload(item, staging, generation)
+            val refreshed = refreshDownloaderForCompatibility()
+            requireActiveJob(item, generation)
+            if (refreshed) {
+              try {
+                executeYoutubeAudioDownload(item, staging, generation)
+              } catch (refreshError: Exception) {
+                if (!isYoutubeCompatibilityFailure(refreshError)) throw refreshError
+                requireActiveJob(item, generation)
+                item["message"] = "Trying another YouTube stream…"
+                emitDownloads()
+                executeYoutubeAudioDownload(item, staging, generation, "android_vr,web_embedded")
+              }
+            } else {
+              item["message"] = "Trying another YouTube stream…"
+              emitDownloads()
+              executeYoutubeAudioDownload(item, staging, generation, "android_vr,web_embedded")
+            }
           }
           if (jobIsActive(item, generation)) {
             item["phase"] = "verifying"; item["message"] = "Checking the downloaded audio…"; emitDownloads()
@@ -667,7 +685,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File, generation: Int) {
+  private fun executeYoutubeAudioDownload(item: MutableMap<String, Any?>, staging: File, generation: Int, playerClients: String? = null) {
     val request = YoutubeDLRequest(item["url"] as String)
     request.addOption("--ignore-config"); request.addOption("--ignore-errors"); request.addOption("--no-warnings"); request.addOption("--no-colors"); request.addOption("--newline"); request.addOption("--progress"); request.addOption("--continue")
     // Mobile networks often change between search and download. Let yt-dlp retry
@@ -675,6 +693,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     request.addOption("--retries", "5"); request.addOption("--fragment-retries", "5")
     request.addOption("--extractor-retries", "3"); request.addOption("--socket-timeout", "30")
     request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
+    if (playerClients != null) request.addOption("--extractor-args", "youtube:player_client=$playerClients")
     if (item["isPlaylist"] == true) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
     request.addOption("--playlist-end", "100")
     // The app only needs an audio stream; selecting `best` can return a
