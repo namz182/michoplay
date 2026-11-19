@@ -99,17 +99,66 @@ import { LyricsBadge } from "../components/LyricsBadge";
 import { LyricsView } from "../screens/lyrics/LyricsView";
 import { PlaylistSelection } from "../components/downloads/PlaylistSelection";
 import { DownloadProgressList } from "../components/downloads/DownloadProgressList";
-import { cleanDownloadMetadata, createDownloadBatch, newestDownloadsFirst } from "../lib/downloads";
-import { BufferedYoutubeSearch, DesktopGlobalSearch } from "./components/SearchInputs";
-import { SleepTimerControl, sleepTimerLabel } from "./components/SleepTimerControl";
+import {
+  cleanDownloadMetadata,
+  createDownloadBatch,
+  newestDownloadsFirst,
+} from "../lib/downloads";
+import {
+  BufferedYoutubeSearch,
+  DesktopGlobalSearch,
+} from "./components/SearchInputs";
+import {
+  SleepTimerControl,
+  sleepTimerLabel,
+} from "./components/SleepTimerControl";
 import { VolumeControl } from "./components/VolumeControl";
 import { MobileNav } from "./components/MobileNav";
 import { SpotifyImportScreen } from "../screens/spotify/SpotifyImportScreen";
 import { TransportControls } from "./components/TransportControls";
 import { useYoutubeSearch } from "./useYoutubeSearch";
-import type { Collection, Detail, DownloadFeedback, GlobalSearchResult, ListeningRecord, Page, Playlist, SavedPlaybackSession, Section, TrackMenu, TrackSort } from "./types";
+import type {
+  Collection,
+  Detail,
+  DownloadFeedback,
+  GlobalSearchResult,
+  ListeningRecord,
+  Page,
+  Playlist,
+  SavedPlaybackSession,
+  Section,
+  TrackMenu,
+  TrackSort,
+} from "./types";
 import { trackSortOptions } from "./types";
-import { albumKey, coverKeys, durationLabel, fileToBase64, headingTime, initialPlayer, initialZoomLevel, isFinishedYoutubeDownload, isNewerVersion, navigation, normalizeZoom, playlistSubmenuPlacement, sameYoutubeDownloads, storedLibraryRoots, time, tracksForDownload, youtubeFolderInitialResultLimit, youtubeGlobalInitialResultLimit, youtubeResultSize, youtubeSearchPageSize, latestReleaseApiUrl, michoplayDeveloperUrl, michoplayGithubUrl, michoplayIssueUrl, michoplayWebsiteUrl, defaultVolume } from "./utils";
+import {
+  albumKey,
+  coverKeys,
+  durationLabel,
+  fileToBase64,
+  headingTime,
+  initialPlayer,
+  initialZoomLevel,
+  isFinishedYoutubeDownload,
+  isNewerVersion,
+  navigation,
+  normalizeZoom,
+  playlistSubmenuPlacement,
+  sameYoutubeDownloads,
+  storedLibraryRoots,
+  time,
+  tracksForDownload,
+  youtubeFolderInitialResultLimit,
+  youtubeGlobalInitialResultLimit,
+  youtubeResultSize,
+  youtubeSearchPageSize,
+  latestReleaseApiUrl,
+  michoplayDeveloperUrl,
+  michoplayGithubUrl,
+  michoplayIssueUrl,
+  michoplayWebsiteUrl,
+  defaultVolume,
+} from "./utils";
 
 export default function App() {
   const [history, setHistory] = useState({
@@ -201,7 +250,9 @@ export default function App() {
   );
   const [downloadConcurrency, setDownloadConcurrency] = useState(() => {
     const saved = stored<number>("download-concurrency", 5);
-    return Number.isFinite(saved) ? Math.min(10, Math.max(1, Math.round(saved))) : 5;
+    return Number.isFinite(saved)
+      ? Math.min(10, Math.max(1, Math.round(saved)))
+      : 5;
   });
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
@@ -313,7 +364,7 @@ export default function App() {
   });
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<
-    "home" | "search" | "library" | "youtube" | "spotify" | "downloads"
+    "home" | "search" | "library" | "youtube" | "downloads"
   >("home");
   const [mobileLibraryActionsOpen, setMobileLibraryActionsOpen] =
     useState(false);
@@ -368,7 +419,8 @@ export default function App() {
   const [youtubeDownloads, setYoutubeDownloads] = useState<YoutubeDownload[]>(
     [],
   );
-  const [playlistSelection, setPlaylistSelection] = useState<YoutubeSearchResult | null>(null);
+  const [playlistSelection, setPlaylistSelection] =
+    useState<YoutubeSearchResult | null>(null);
   const latestYoutubeDownloads = useRef<YoutubeDownload[]>([]);
   const youtubeLibrarySyncInFlight = useRef<Promise<Track[]> | null>(null);
   const youtubeDownloadsVersion = useRef(0);
@@ -411,7 +463,13 @@ export default function App() {
     setMobileLyricsExpanded(false);
     setMobilePlayerLyricsOpen(false);
     setFullModeLyrics(false);
-  }, [history.index, page.section, page.detail?.kind, page.detail?.key, mobileTab]);
+  }, [
+    history.index,
+    page.section,
+    page.detail?.kind,
+    page.detail?.key,
+    mobileTab,
+  ]);
 
   function enrichYoutubeLyrics(
     query: string,
@@ -518,7 +576,8 @@ export default function App() {
     offlineMessage: "YouTube search needs an internet connection.",
     requestErrorMessage: "Couldn't search YouTube. Try again.",
     onEnrich: enrichYoutubeLyrics,
-    onLoadMoreError: () => setMessage("Couldn't load more YouTube results. Try again."),
+    onLoadMoreError: () =>
+      setMessage("Couldn't load more YouTube results. Try again."),
   });
   const globalYoutubeSearch = useYoutubeSearch({
     query: search,
@@ -529,10 +588,13 @@ export default function App() {
     pageSize: youtubeSearchPageSize,
     minimumQueryLength: 2,
     debounceMs: 450,
-    offlineMessage: "YouTube search is unavailable offline. Your local matches are still shown.",
-    requestErrorMessage: "YouTube search couldn't load. Check your connection and try again.",
+    offlineMessage:
+      "YouTube search is unavailable offline. Your local matches are still shown.",
+    requestErrorMessage:
+      "YouTube search couldn't load. Check your connection and try again.",
     onEnrich: enrichYoutubeLyrics,
-    onLoadMoreError: () => setMessage("Couldn't load more YouTube results. Try again."),
+    onLoadMoreError: () =>
+      setMessage("Couldn't load more YouTube results. Try again."),
   });
   const youtubeResults = folderYoutubeSearch.results;
   const setYoutubeResults = folderYoutubeSearch.setResults;
@@ -731,9 +793,11 @@ export default function App() {
   }, [youtubeDirectory, roots, tracks]);
   const syncYoutubeLibrary = useCallback(() => {
     if (!youtubeLibrarySyncInFlight.current) {
-      youtubeLibrarySyncInFlight.current = performYoutubeLibrarySync().finally(() => {
-        youtubeLibrarySyncInFlight.current = null;
-      });
+      youtubeLibrarySyncInFlight.current = performYoutubeLibrarySync().finally(
+        () => {
+          youtubeLibrarySyncInFlight.current = null;
+        },
+      );
     }
     return youtubeLibrarySyncInFlight.current;
   }, [performYoutubeLibrarySync]);
@@ -948,11 +1012,16 @@ export default function App() {
       const paths = [...completedPaths];
       completedPaths.clear();
       try {
-        if (isAndroid && paths.length) await api.embedDownloadedLyrics(paths).catch(() => {});
+        if (isAndroid && paths.length)
+          await api.embedDownloadedLyrics(paths).catch(() => {});
         if (active) await latestYoutubeLibrarySync.current();
       } finally {
         libraryRefreshRunning = false;
-        if (active && libraryRefreshPending) libraryRefreshTimer = window.setTimeout(() => void refreshCompleted(), 1000);
+        if (active && libraryRefreshPending)
+          libraryRefreshTimer = window.setTimeout(
+            () => void refreshCompleted(),
+            1000,
+          );
       }
     };
     const applyDownloads = (incoming: YoutubeDownload[]) => {
@@ -1002,12 +1071,17 @@ export default function App() {
         .forEach((item) => completedYoutubeDownloads.current.add(item.id));
       if (newlyCompletedIds.length) {
         const completedIds = new Set(newlyCompletedIds);
-        items.filter((item) => completedIds.has(item.id)).forEach((item) => {
-          (item.filePaths ?? []).forEach((path) => completedPaths.add(path));
-        });
+        items
+          .filter((item) => completedIds.has(item.id))
+          .forEach((item) => {
+            (item.filePaths ?? []).forEach((path) => completedPaths.add(path));
+          });
         libraryRefreshPending = true;
         if (libraryRefreshTimer === undefined && !libraryRefreshRunning)
-          libraryRefreshTimer = window.setTimeout(() => void refreshCompleted(), 1000);
+          libraryRefreshTimer = window.setTimeout(
+            () => void refreshCompleted(),
+            1000,
+          );
       }
     };
     const initialVersion = youtubeDownloadsVersion.current;
@@ -1049,11 +1123,18 @@ export default function App() {
       void addPluginListener<{ items: YoutubeDownload[] }>(
         "michoplay-media",
         "youtube-downloads-updated",
-        ({ items }) => { if (active && Array.isArray(items)) void applyDownloads(items); },
-      ).then((listener) => {
-        if (active) unlisten = () => { void listener.unregister(); };
-        else void listener.unregister();
-      }).catch(() => {});
+        ({ items }) => {
+          if (active && Array.isArray(items)) void applyDownloads(items);
+        },
+      )
+        .then((listener) => {
+          if (active)
+            unlisten = () => {
+              void listener.unregister();
+            };
+          else void listener.unregister();
+        })
+        .catch(() => {});
     } else {
       void listen<YoutubeDownload[]>(
         "youtube-downloads-updated",
@@ -1066,7 +1147,8 @@ export default function App() {
     return () => {
       active = false;
       if (poll !== undefined) window.clearTimeout(poll);
-      if (libraryRefreshTimer !== undefined) window.clearTimeout(libraryRefreshTimer);
+      if (libraryRefreshTimer !== undefined)
+        window.clearTimeout(libraryRefreshTimer);
       // A navigation/subscription change must not lose a pending library sync.
       if (libraryRefreshPending) void latestYoutubeLibrarySync.current();
       unlisten?.();
@@ -1527,9 +1609,9 @@ export default function App() {
   useEffect(() => {
     saveStoredData("download-concurrency", JSON.stringify(downloadConcurrency));
     if (isTauri()) {
-      void api.youtubeDownloadSetConcurrency(downloadConcurrency).catch((error) =>
-        setMessage(String(error)),
-      );
+      void api
+        .youtubeDownloadSetConcurrency(downloadConcurrency)
+        .catch((error) => setMessage(String(error)));
     }
   }, [downloadConcurrency]);
   useEffect(() => {
@@ -2017,10 +2099,13 @@ export default function App() {
       // The Android picker result can carry a Music/short-link URL variant.
       // Queue video IDs as the canonical watch URL so native validation and
       // yt-dlp receive the same stable URL on every mobile search result.
-      const downloadUrl = isAndroid && !selected.isPlaylist && /^[\w-]{11}$/.test(selected.id)
-        ? `https://www.youtube.com/watch?v=${selected.id}`
-        : selected.url;
-      const metadata = selected.isPlaylist ? { title: selected.title, artist: "" } : cleanDownloadMetadata(selected.title, selected.artist, trustArtist);
+      const downloadUrl =
+        isAndroid && !selected.isPlaylist && /^[\w-]{11}$/.test(selected.id)
+          ? `https://www.youtube.com/watch?v=${selected.id}`
+          : selected.url;
+      const metadata = selected.isPlaylist
+        ? { title: selected.title, artist: "" }
+        : cleanDownloadMetadata(selected.title, selected.artist, trustArtist);
       const item = await api.youtubeDownloadEnqueue(
         downloadUrl,
         metadata.title,
@@ -2090,7 +2175,14 @@ export default function App() {
     const playlist = playlistSelection;
     setPlaylistSelection(null);
     if (!playlist || songs.length === 0) return;
-    const queueable = songs.filter((song) => !youtubeDownloads.some((item) => item.url === song.url && !["failed", "cancelled"].includes(item.status)));
+    const queueable = songs.filter(
+      (song) =>
+        !youtubeDownloads.some(
+          (item) =>
+            item.url === song.url &&
+            !["failed", "cancelled"].includes(item.status),
+        ),
+    );
     const batch = createDownloadBatch(playlist.title, queueable.length);
     let queued = 0;
     for (const [index, song] of queueable.entries()) {
@@ -2099,11 +2191,18 @@ export default function App() {
     }
     if (isAndroid) {
       setMobileTab("downloads");
-      if (queued > 0) showMobileDownloadFeedback(undefined, `Added ${queued} ${queued === 1 ? "song" : "songs"}`);
+      if (queued > 0)
+        showMobileDownloadFeedback(
+          undefined,
+          `Added ${queued} ${queued === 1 ? "song" : "songs"}`,
+        );
     } else {
       setPanelView("downloads");
       setShowPanel(true);
-      if (queued > 0) setMessage(`Added ${queued} ${queued === 1 ? "song" : "songs"} from “${playlist.title}”.`);
+      if (queued > 0)
+        setMessage(
+          `Added ${queued} ${queued === 1 ? "song" : "songs"} from “${playlist.title}”.`,
+        );
     }
   }
 
@@ -2255,7 +2354,7 @@ export default function App() {
   }
   function openSpotifyPage() {
     setSearch("");
-    setMobileTab(isAndroid ? "spotify" : "home");
+    setMobileTab("home");
     navigate({ section: "Spotify" });
   }
 
@@ -2514,18 +2613,24 @@ export default function App() {
     setLyricsSource(null);
     setLyricsLoading(Boolean(footerTrack));
     if (footerTrack) {
-      void api.lyricsRead(footerTrack.id).then((result) => {
-        if (version !== lyricsRequestVersion.current) return;
-        setLyricsText(result.text);
-        setLyricsOffsetMs(result.offsetMs);
-        setLyricsSource(result.source);
-      }).catch(() => {
-        if (version === lyricsRequestVersion.current) setLyricsText(null);
-      }).finally(() => {
-        if (version === lyricsRequestVersion.current) setLyricsLoading(false);
-      });
+      void api
+        .lyricsRead(footerTrack.id)
+        .then((result) => {
+          if (version !== lyricsRequestVersion.current) return;
+          setLyricsText(result.text);
+          setLyricsOffsetMs(result.offsetMs);
+          setLyricsSource(result.source);
+        })
+        .catch(() => {
+          if (version === lyricsRequestVersion.current) setLyricsText(null);
+        })
+        .finally(() => {
+          if (version === lyricsRequestVersion.current) setLyricsLoading(false);
+        });
     }
-    return () => { lyricsRequestVersion.current += 1; };
+    return () => {
+      lyricsRequestVersion.current += 1;
+    };
   }, [footerTrack?.id]);
   function handleLyricsImported(trackId: number, result: LyricsData) {
     if (footerTrack?.id === trackId) {
@@ -2535,11 +2640,19 @@ export default function App() {
       setLyricsSource(result.source);
       setLyricsLoading(false);
     }
-    setTracks((previous) => previous.map((track) => track.id === trackId ? { ...track, hasLyrics: true } : track));
+    setTracks((previous) =>
+      previous.map((track) =>
+        track.id === trackId ? { ...track, hasLyrics: true } : track,
+      ),
+    );
   }
-  const downloadPlaybackKey = youtubeDownloads.map((item) => `${item.id}:${item.status}`).join("|");
+  const downloadPlaybackKey = youtubeDownloads
+    .map((item) => `${item.id}:${item.status}`)
+    .join("|");
   useEffect(() => {
-    const downloadsById = new Map(youtubeDownloads.map((item) => [item.id, item]));
+    const downloadsById = new Map(
+      youtubeDownloads.map((item) => [item.id, item]),
+    );
     document
       .querySelectorAll<HTMLElement>(".download-item, .mobile-download-row")
       .forEach((row) => {
@@ -2614,7 +2727,12 @@ export default function App() {
   }, [availableTracks]);
   const normalizedFoldersSearch = foldersSearch.trim().toLocaleLowerCase();
   const visibleFolders = useMemo(
-    () => folders.filter((folder) => `${folder.title} ${folder.subtitle}`.toLocaleLowerCase().includes(normalizedFoldersSearch)),
+    () =>
+      folders.filter((folder) =>
+        `${folder.title} ${folder.subtitle}`
+          .toLocaleLowerCase()
+          .includes(normalizedFoldersSearch),
+      ),
     [folders, normalizedFoldersSearch],
   );
   const albums = useMemo(() => {
@@ -3333,9 +3451,7 @@ export default function App() {
                           <span className="search-result-copy">
                             <strong>{result.title}</strong>
                             <small>
-                              {result.hasLyrics && (
-                                <LyricsBadge />
-                              )}
+                              {result.hasLyrics && <LyricsBadge />}
                               YouTube ·{" "}
                               {result.isPlaylist
                                 ? "Playlist"
@@ -3758,6 +3874,7 @@ export default function App() {
         {isAndroid &&
           !mobilePlayerOpen &&
           page.section !== "Settings" &&
+          !(page.section === "Spotify" && mobileTab === "home") &&
           !(listPage && (mobileTab === "home" || mobileTab === "youtube")) && (
             <header className="mobile-header">
               <div className="mobile-header-title">
@@ -3966,7 +4083,9 @@ export default function App() {
                   source={lyricsSource}
                   loading={lyricsLoading}
                   visible={lyricsOpen}
-                  onImported={(result) => handleLyricsImported(footerTrack.id, result)}
+                  onImported={(result) =>
+                    handleLyricsImported(footerTrack.id, result)
+                  }
                   onOffsetSaved={setLyricsOffsetMs}
                   onSeek={(positionMs) => void run(() => api.seek(positionMs))}
                 />
@@ -4117,10 +4236,17 @@ export default function App() {
                   />
                 ) : page.section === "Spotify" ? (
                   <SpotifyImportScreen
+                    mobile={isAndroid}
+                    onBack={() => {
+                      if (history.index > 0) travel(-1);
+                      else navigate({ section: "Home" });
+                    }}
                     libraryTracks={tracks}
                     downloads={youtubeDownloads}
                     downloadConcurrency={downloadConcurrency}
-                    onQueue={(candidate, playlist) => queueYoutubeDownload(candidate, undefined, playlist, true)}
+                    onQueue={(candidate, playlist) =>
+                      queueYoutubeDownload(candidate, undefined, playlist, true)
+                    }
                     onDownloadControl={(id, action) => {
                       void controlYoutubeDownload(id, action);
                     }}
@@ -4306,9 +4432,7 @@ export default function App() {
                                         <span>
                                           <strong>{track.title}</strong>
                                           <small>
-                                            {track.hasLyrics && (
-                                              <LyricsBadge />
-                                            )}
+                                            {track.hasLyrics && <LyricsBadge />}
                                             {track.artist}
                                           </small>
                                         </span>
@@ -4322,16 +4446,18 @@ export default function App() {
                               </div>
                             )}
                         </div>
-                        {!isAndroid && page.section === "Home" && !page.detail && (
-                          <button
-                            className="home-shelf-action home-heading-add"
-                            disabled={scanning}
-                            onClick={chooseLibrarySource}
-                          >
-                            <Plus size={14} />
-                            Add root folder
-                          </button>
-                        )}
+                        {!isAndroid &&
+                          page.section === "Home" &&
+                          !page.detail && (
+                            <button
+                              className="home-shelf-action home-heading-add"
+                              disabled={scanning}
+                              onClick={chooseLibrarySource}
+                            >
+                              <Plus size={14} />
+                              Add root folder
+                            </button>
+                          )}
                       </div>
                     </div>
                     {listPage ? (
@@ -4746,6 +4872,7 @@ export default function App() {
                           navigate({ section });
                         }}
                         openYoutube={openYoutubePage}
+                        openSpotify={isAndroid ? openSpotifyPage : undefined}
                         chooseLibrarySource={chooseLibrarySource}
                         openFolder={(item) =>
                           openDetail("Home", "folder", item)
@@ -4781,7 +4908,9 @@ export default function App() {
                                 aria-label="Search folders"
                                 placeholder="Search folders"
                                 value={foldersSearch}
-                                onChange={(event) => setFoldersSearch(event.target.value)}
+                                onChange={(event) =>
+                                  setFoldersSearch(event.target.value)
+                                }
                               />
                               {foldersSearch && (
                                 <button
@@ -4978,138 +5107,154 @@ export default function App() {
                     </div>
                     {youtubeDownloads.length ? (
                       <>
-                      <DownloadProgressList downloads={youtubeDownloads} onControl={(id, action) => void controlYoutubeDownload(id, action)} onPlay={(item) => void playYoutubeDownload(item)} onMenu={(item, event) => openDownloadedTrackMenu(item, event)} renderSong={(item) => (
-                        <article
-                          className={`download-item status-${item.status}`}
-                          data-download-id={item.id}
-                          key={item.id}
-                        >
-                          <div className="download-item-main">
-                            <div className="download-item-art">
-                              {item.thumbnail && (
-                                <img
-                                  src={item.thumbnail}
-                                  alt=""
-                                  loading="lazy"
-                                  onError={(event) => {
-                                    event.currentTarget.hidden = true;
+                        <DownloadProgressList
+                          downloads={youtubeDownloads}
+                          onControl={(id, action) =>
+                            void controlYoutubeDownload(id, action)
+                          }
+                          onPlay={(item) => void playYoutubeDownload(item)}
+                          onMenu={(item, event) =>
+                            openDownloadedTrackMenu(item, event)
+                          }
+                          renderSong={(item) => (
+                            <article
+                              className={`download-item status-${item.status}`}
+                              data-download-id={item.id}
+                              key={item.id}
+                            >
+                              <div className="download-item-main">
+                                <div className="download-item-art">
+                                  {item.thumbnail && (
+                                    <img
+                                      src={item.thumbnail}
+                                      alt=""
+                                      loading="lazy"
+                                      onError={(event) => {
+                                        event.currentTarget.hidden = true;
+                                      }}
+                                    />
+                                  )}
+                                  {item.status === "completed" && (
+                                    <button
+                                      className="download-art-play"
+                                      aria-label={`Play ${item.title}`}
+                                      title="Play downloaded audio"
+                                      onClick={() =>
+                                        void playYoutubeDownload(item)
+                                      }
+                                    >
+                                      <Play size={15} fill="currentColor" />
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="download-item-copy">
+                                  <strong>{item.title}</strong>
+                                  {youtubeDownloadDescription(item) && (
+                                    <small>
+                                      {youtubeDownloadDescription(item)}
+                                    </small>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="download-item-progress">
+                                <span
+                                  className={
+                                    youtubeDownloadIsPending(item)
+                                      ? "is-pending"
+                                      : ""
+                                  }
+                                  style={{
+                                    width: `${youtubeDownloadProgress(item)}%`,
                                   }}
                                 />
-                              )}
-                              {item.status === "completed" && (
-                                <button
-                                  className="download-art-play"
-                                  aria-label={`Play ${item.title}`}
-                                  title="Play downloaded audio"
-                                  onClick={() => void playYoutubeDownload(item)}
+                              </div>
+                              <div className="download-item-actions">
+                                <span
+                                  className={`download-status-label ${item.status}`}
                                 >
-                                  <Play size={15} fill="currentColor" />
-                                </button>
-                              )}
-                            </div>
-                            <div className="download-item-copy">
-                              <strong>{item.title}</strong>
-                              {youtubeDownloadDescription(item) && (
-                                <small>
-                                  {youtubeDownloadDescription(item)}
-                                </small>
-                              )}
-                            </div>
-                          </div>
-                          <div className="download-item-progress">
-                            <span
-                              className={
-                                youtubeDownloadIsPending(item)
-                                  ? "is-pending"
-                                  : ""
-                              }
-                              style={{
-                                width: `${youtubeDownloadProgress(item)}%`,
-                              }}
-                            />
-                          </div>
-                          <div className="download-item-actions">
-                            <span
-                              className={`download-status-label ${item.status}`}
-                            >
-                              {item.status === "completed" ? null : item.status}
-                            </span>
-                            {item.status === "completed" ? (
-                              <button
-                                className="icon-button download-menu-trigger"
-                                aria-label={`More actions for ${item.title}`}
-                                title={`More actions for ${item.title}`}
-                                onClick={(event) =>
-                                  openDownloadedTrackMenu(item, event)
-                                }
-                              >
-                                <MoreVertical size={16} />
-                              </button>
-                            ) : (
-                              <>
-                                {item.status === "downloading" ||
-                                item.status === "queued" ? (
+                                  {item.status === "completed"
+                                    ? null
+                                    : item.status}
+                                </span>
+                                {item.status === "completed" ? (
                                   <button
-                                    className="icon-button"
-                                    aria-label={`Pause ${item.title}`}
-                                    onClick={() =>
-                                      void controlYoutubeDownload(
-                                        item.id,
-                                        "pause",
-                                      )
+                                    className="icon-button download-menu-trigger"
+                                    aria-label={`More actions for ${item.title}`}
+                                    title={`More actions for ${item.title}`}
+                                    onClick={(event) =>
+                                      openDownloadedTrackMenu(item, event)
                                     }
                                   >
-                                    <Pause size={14} />
-                                  </button>
-                                ) : item.status === "paused" ||
-                                  item.status === "failed" ? (
-                                  <button
-                                    className="icon-button"
-                                    aria-label={`${item.status === "failed" ? "Retry" : "Resume"} ${item.title}`}
-                                    onClick={() =>
-                                      void controlYoutubeDownload(
-                                        item.id,
-                                        "resume",
-                                      )
-                                    }
-                                  >
-                                    <Play size={14} />
-                                  </button>
-                                ) : null}
-                                {["queued", "downloading", "paused"].includes(
-                                  item.status,
-                                ) ? (
-                                  <button
-                                    className="icon-button"
-                                    aria-label={`Cancel ${item.title}`}
-                                    onClick={() =>
-                                      void controlYoutubeDownload(
-                                        item.id,
-                                        "cancel",
-                                      )
-                                    }
-                                  >
-                                    <X size={14} />
+                                    <MoreVertical size={16} />
                                   </button>
                                 ) : (
-                                  <button
-                                    className="icon-button"
-                                    aria-label={`Remove ${item.title} from downloads`}
-                                    onClick={() =>
-                                      void controlYoutubeDownload(
-                                        item.id,
-                                        "remove",
-                                      )
-                                    }
-                                  >
-                                    <X size={14} />
-                                  </button>
+                                  <>
+                                    {item.status === "downloading" ||
+                                    item.status === "queued" ? (
+                                      <button
+                                        className="icon-button"
+                                        aria-label={`Pause ${item.title}`}
+                                        onClick={() =>
+                                          void controlYoutubeDownload(
+                                            item.id,
+                                            "pause",
+                                          )
+                                        }
+                                      >
+                                        <Pause size={14} />
+                                      </button>
+                                    ) : item.status === "paused" ||
+                                      item.status === "failed" ? (
+                                      <button
+                                        className="icon-button"
+                                        aria-label={`${item.status === "failed" ? "Retry" : "Resume"} ${item.title}`}
+                                        onClick={() =>
+                                          void controlYoutubeDownload(
+                                            item.id,
+                                            "resume",
+                                          )
+                                        }
+                                      >
+                                        <Play size={14} />
+                                      </button>
+                                    ) : null}
+                                    {[
+                                      "queued",
+                                      "downloading",
+                                      "paused",
+                                    ].includes(item.status) ? (
+                                      <button
+                                        className="icon-button"
+                                        aria-label={`Cancel ${item.title}`}
+                                        onClick={() =>
+                                          void controlYoutubeDownload(
+                                            item.id,
+                                            "cancel",
+                                          )
+                                        }
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        className="icon-button"
+                                        aria-label={`Remove ${item.title} from downloads`}
+                                        onClick={() =>
+                                          void controlYoutubeDownload(
+                                            item.id,
+                                            "remove",
+                                          )
+                                        }
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    )}
+                                  </>
                                 )}
-                              </>
-                            )}
-                          </div>
-                        </article>
-                      )} />
+                              </div>
+                            </article>
+                          )}
+                        />
                       </>
                     ) : (
                       <div className="download-manager-empty">
@@ -5132,9 +5277,7 @@ export default function App() {
                           <div className="now-track-copy">
                             <strong>{nowPlayingTrack.title}</strong>
                             <span>
-                              {nowPlayingTrack.hasLyrics && (
-                                <LyricsBadge />
-                              )}
+                              {nowPlayingTrack.hasLyrics && <LyricsBadge />}
                               {nowPlayingTrack.artist}
                             </span>
                           </div>
@@ -5235,9 +5378,7 @@ export default function App() {
                                   {track.title}
                                 </span>
                                 <span className="queue-label queue-label-artist">
-                                  {track.hasLyrics && (
-                                    <LyricsBadge />
-                                  )}
+                                  {track.hasLyrics && <LyricsBadge />}
                                   {track.artist}
                                 </span>
                               </span>
@@ -5319,9 +5460,7 @@ export default function App() {
                 {footerTrack?.title ?? "Nothing playing"}
               </span>
               <span className="track-artist">
-                {footerTrack?.hasLyrics && (
-                  <LyricsBadge />
-                )}
+                {footerTrack?.hasLyrics && <LyricsBadge />}
                 {footerTrack?.artist ?? ""}
               </span>
             </div>
@@ -5347,7 +5486,15 @@ export default function App() {
               disabled={!tracks.length}
               onShuffle={() => void run(api.shuffle)}
               onPrevious={() => void run(api.previous)}
-              onToggle={() => void run(current ? api.toggle : footerTrack ? () => api.play(footerTrack.id) : api.toggle)}
+              onToggle={() =>
+                void run(
+                  current
+                    ? api.toggle
+                    : footerTrack
+                      ? () => api.play(footerTrack.id)
+                      : api.toggle,
+                )
+              }
               onNext={() => void run(api.next)}
               onRepeat={() => void run(api.repeat)}
             />
@@ -5418,7 +5565,11 @@ export default function App() {
                 <PanelRightOpen size={17} />
               )}
             </button>
-            <VolumeControl volume={player.volume} onChange={setVolume} onToggleMute={toggleMute} />
+            <VolumeControl
+              volume={player.volume}
+              onChange={setVolume}
+              onToggleMute={toggleMute}
+            />
             <button
               className={`transport-button full-mode-trigger ${fullMode ? "active" : ""}`}
               aria-label={fullMode ? "Exit full mode" : "Open full mode"}
@@ -5526,7 +5677,9 @@ export default function App() {
                       offsetMs={lyricsOffsetMs}
                       source={lyricsSource}
                       loading={lyricsLoading}
-                      onImported={(result) => handleLyricsImported(footerTrack.id, result)}
+                      onImported={(result) =>
+                        handleLyricsImported(footerTrack.id, result)
+                      }
                       onOffsetSaved={setLyricsOffsetMs}
                       onSeek={(positionMs) =>
                         void run(() => api.seek(positionMs))
@@ -5581,7 +5734,15 @@ export default function App() {
                     player={player}
                     onShuffle={() => void run(api.shuffle)}
                     onPrevious={() => void run(api.previous)}
-                    onToggle={() => void run(current ? api.toggle : footerTrack ? () => api.play(footerTrack.id) : api.toggle)}
+                    onToggle={() =>
+                      void run(
+                        current
+                          ? api.toggle
+                          : footerTrack
+                            ? () => api.play(footerTrack.id)
+                            : api.toggle,
+                      )
+                    }
                     onNext={() => void run(api.next)}
                     onRepeat={() => void run(api.repeat)}
                     lyricsActive={fullModeLyrics}
@@ -5617,7 +5778,11 @@ export default function App() {
                     <span>{time(player.durationMs)}</span>
                   </div>
                   <div className="full-mode-volume">
-                    <VolumeControl volume={player.volume} onChange={setVolume} onToggleMute={toggleMute} />
+                    <VolumeControl
+                      volume={player.volume}
+                      onChange={setVolume}
+                      onToggleMute={toggleMute}
+                    />
                   </div>
                 </div>
               </div>
@@ -5680,9 +5845,7 @@ export default function App() {
                           <span>
                             <strong>{track.title}</strong>
                             <small>
-                              {track.hasLyrics && (
-                                <LyricsBadge />
-                              )}
+                              {track.hasLyrics && <LyricsBadge />}
                               {track.artist}
                             </small>
                           </span>
@@ -5728,9 +5891,7 @@ export default function App() {
                               <span>
                                 <strong>{track.title}</strong>
                                 <small>
-                                  {track.hasLyrics && (
-                                    <LyricsBadge />
-                                  )}
+                                  {track.hasLyrics && <LyricsBadge />}
                                   {track.artist}
                                 </small>
                               </span>
@@ -5854,9 +6015,7 @@ export default function App() {
                                   <span>
                                     <strong>{track.title}</strong>
                                     <small>
-                                      {track.hasLyrics && (
-                                        <LyricsBadge />
-                                      )}
+                                      {track.hasLyrics && <LyricsBadge />}
                                       {track.artist}
                                     </small>
                                   </span>
@@ -5902,92 +6061,90 @@ export default function App() {
               <div
                 className={`mobile-mini-player ${page.section === "Settings" ? "settings-open" : ""}`}
               >
-            <button
-              className="mobile-mini-track"
-              onClick={() => setMobilePlayerOpen(true)}
-              disabled={!footerTrack}
-            >
-              {footerTrack && (
-                <Cover
-                  className="mobile-mini-cover"
-                  keys={[footerTrack.artworkKey]}
-                />
-              )}
-              <span>
-                <strong>{footerTrack?.title ?? "Nothing playing"}</strong>
-                <small>
-                  {footerTrack?.hasLyrics && (
-                    <LyricsBadge />
-                  )}
-                  {footerTrack?.artist ?? "Choose a song to start"}
-                </small>
-              </span>
-            </button>
-            {footerTrack && (
-              <>
                 <button
-                  className={`mobile-mini-action ${favorites.includes(footerTrack.id) ? "selected" : ""}`}
-                  aria-label={
-                    favorites.includes(footerTrack.id)
-                      ? "Remove from liked songs"
-                      : "Add to liked songs"
-                  }
-                  onClick={() => toggleFavorite(footerTrack.id)}
+                  className="mobile-mini-track"
+                  onClick={() => setMobilePlayerOpen(true)}
+                  disabled={!footerTrack}
                 >
-                  <Heart
-                    size={19}
-                    fill={
-                      favorites.includes(footerTrack.id)
-                        ? "currentColor"
-                        : "none"
-                    }
+                  {footerTrack && (
+                    <Cover
+                      className="mobile-mini-cover"
+                      keys={[footerTrack.artworkKey]}
+                    />
+                  )}
+                  <span>
+                    <strong>{footerTrack?.title ?? "Nothing playing"}</strong>
+                    <small>
+                      {footerTrack?.hasLyrics && <LyricsBadge />}
+                      {footerTrack?.artist ?? "Choose a song to start"}
+                    </small>
+                  </span>
+                </button>
+                {footerTrack && (
+                  <>
+                    <button
+                      className={`mobile-mini-action ${favorites.includes(footerTrack.id) ? "selected" : ""}`}
+                      aria-label={
+                        favorites.includes(footerTrack.id)
+                          ? "Remove from liked songs"
+                          : "Add to liked songs"
+                      }
+                      onClick={() => toggleFavorite(footerTrack.id)}
+                    >
+                      <Heart
+                        size={19}
+                        fill={
+                          favorites.includes(footerTrack.id)
+                            ? "currentColor"
+                            : "none"
+                        }
+                      />
+                    </button>
+                    <button
+                      className="mobile-mini-skip"
+                      aria-label="Previous track"
+                      onClick={() => void run(api.previous)}
+                    >
+                      <SkipBack size={17} fill="currentColor" />
+                    </button>
+                    <button
+                      className="mobile-mini-play"
+                      aria-label={player.isPlaying ? "Pause" : "Play"}
+                      onClick={() =>
+                        void run(
+                          current ? api.toggle : () => api.play(footerTrack.id),
+                        )
+                      }
+                    >
+                      {player.isPlaying ? (
+                        <Pause size={18} fill="currentColor" />
+                      ) : (
+                        <Play size={18} fill="currentColor" />
+                      )}
+                    </button>
+                    <button
+                      className="mobile-mini-skip"
+                      aria-label="Next track"
+                      onClick={() => void run(api.next)}
+                    >
+                      <SkipForward size={17} fill="currentColor" />
+                    </button>
+                  </>
+                )}
+                <div
+                  className="mobile-mini-progress"
+                  role="progressbar"
+                  aria-label="Playback progress"
+                  aria-valuemin={0}
+                  aria-valuemax={player.durationMs || 0}
+                  aria-valuenow={Math.min(player.positionMs, player.durationMs)}
+                >
+                  <span
+                    style={{
+                      width: `${Math.min(100, player.durationMs ? (player.positionMs / player.durationMs) * 100 : 0)}%`,
+                    }}
                   />
-                </button>
-                <button
-                  className="mobile-mini-skip"
-                  aria-label="Previous track"
-                  onClick={() => void run(api.previous)}
-                >
-                  <SkipBack size={17} fill="currentColor" />
-                </button>
-                <button
-                  className="mobile-mini-play"
-                  aria-label={player.isPlaying ? "Pause" : "Play"}
-                  onClick={() =>
-                    void run(
-                      current ? api.toggle : () => api.play(footerTrack.id),
-                    )
-                  }
-                >
-                  {player.isPlaying ? (
-                    <Pause size={18} fill="currentColor" />
-                  ) : (
-                    <Play size={18} fill="currentColor" />
-                  )}
-                </button>
-                <button
-                  className="mobile-mini-skip"
-                  aria-label="Next track"
-                  onClick={() => void run(api.next)}
-                >
-                  <SkipForward size={17} fill="currentColor" />
-                </button>
-              </>
-            )}
-            <div
-              className="mobile-mini-progress"
-              role="progressbar"
-              aria-label="Playback progress"
-              aria-valuemin={0}
-              aria-valuemax={player.durationMs || 0}
-              aria-valuenow={Math.min(player.positionMs, player.durationMs)}
-            >
-              <span
-                style={{
-                  width: `${Math.min(100, player.durationMs ? (player.positionMs / player.durationMs) * 100 : 0)}%`,
-                }}
-              />
-            </div>
+                </div>
               </div>
             </>
           )}
@@ -5998,16 +6155,22 @@ export default function App() {
             downloadNavRef={downloadNavRef}
             onHome={() => {
               setMobileTab("home");
-              if (page.section !== "Home" || page.detail) navigate({ section: "Home" });
+              if (page.section !== "Home" || page.detail)
+                navigate({ section: "Home" });
             }}
             onLibrary={() => {
               setMobileTab("library");
-              if (page.section !== "Home" || page.detail) navigate({ section: "Home" });
+              if (page.section !== "Home" || page.detail)
+                navigate({ section: "Home" });
             }}
             onYoutube={openYoutubePage}
-            onSpotify={openSpotifyPage}
             onDownloads={openMobileDownloads}
-            onSearch={() => { setMobileTab("search"); setSearch(""); }}
+            onSearch={() => {
+              setMobileTab("search");
+              setSearch("");
+              if (page.section !== "Home" || page.detail)
+                navigate({ section: "Home" });
+            }}
           />
           {downloadFeedback && (
             <>
@@ -6168,7 +6331,9 @@ export default function App() {
                       source={lyricsSource}
                       loading={lyricsLoading}
                       expanded
-                      onImported={(result) => handleLyricsImported(footerTrack.id, result)}
+                      onImported={(result) =>
+                        handleLyricsImported(footerTrack.id, result)
+                      }
                       onOffsetSaved={setLyricsOffsetMs}
                       onExpand={() => setMobileLyricsExpanded(true)}
                       onClose={() => setMobilePlayerLyricsOpen(false)}
@@ -6213,9 +6378,7 @@ export default function App() {
                 <div>
                   <strong>{footerTrack.title}</strong>
                   <span className="mobile-player-track-meta">
-                    {footerTrack.hasLyrics && (
-                      <LyricsBadge />
-                    )}
+                    {footerTrack.hasLyrics && <LyricsBadge />}
                     <span>{footerTrack.artist}</span>
                   </span>
                 </div>
@@ -6311,9 +6474,7 @@ export default function App() {
                   )}
                 </button>
               </div>
-              <div
-                className="mobile-player-actions has-lyrics"
-              >
+              <div className="mobile-player-actions has-lyrics">
                 <button
                   className={`mobile-player-timer ${player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd ? "active" : ""}`}
                   aria-label={
@@ -6395,7 +6556,9 @@ export default function App() {
             source={lyricsSource}
             loading={lyricsLoading}
             expanded
-            onImported={(result) => handleLyricsImported(footerTrack.id, result)}
+            onImported={(result) =>
+              handleLyricsImported(footerTrack.id, result)
+            }
             onOffsetSaved={setLyricsOffsetMs}
             onSeek={(positionMs) => void run(() => api.seek(positionMs))}
           />
@@ -6569,9 +6732,7 @@ export default function App() {
                       <span>
                         <strong>{track.title}</strong>
                         <small>
-                          {track.hasLyrics && (
-                            <LyricsBadge />
-                          )}
+                          {track.hasLyrics && <LyricsBadge />}
                           {track.artist}
                         </small>
                       </span>
@@ -7334,9 +7495,7 @@ export default function App() {
                     <span className="add-songs-copy">
                       <strong>{track.title}</strong>
                       <small>
-                        {track.hasLyrics && (
-                          <LyricsBadge />
-                        )}
+                        {track.hasLyrics && <LyricsBadge />}
                         {track.artist}
                       </small>
                     </span>
@@ -7414,7 +7573,13 @@ export default function App() {
           </section>
         </div>
       )}
-      {playlistSelection && <PlaylistSelection playlist={playlistSelection} onClose={() => setPlaylistSelection(null)} onConfirm={(songs) => void queueSelectedPlaylistSongs(songs)} />}
+      {playlistSelection && (
+        <PlaylistSelection
+          playlist={playlistSelection}
+          onClose={() => setPlaylistSelection(null)}
+          onConfirm={(songs) => void queueSelectedPlaylistSongs(songs)}
+        />
+      )}
       {confirmation && (
         <div
           className="dialog-overlay"
