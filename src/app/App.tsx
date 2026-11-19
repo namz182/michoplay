@@ -132,6 +132,7 @@ export default function App() {
   const [fullMode, setFullMode] = useState(false);
   const [fullModeLyrics, setFullModeLyrics] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [lyricsMounted, setLyricsMounted] = useState(false);
   const [lyricsText, setLyricsText] = useState<string | null>(null);
   const [lyricsOffsetMs, setLyricsOffsetMs] = useState(0);
   const [lyricsSource, setLyricsSource] = useState<string | null>(null);
@@ -2493,6 +2494,7 @@ export default function App() {
   const nowPlayingTrack = current;
   const nowPlayingIsActive = current !== null && player.isPlaying;
   const footerTrack = current ?? recentTracks[0] ?? null;
+  const desktopLyricsOpen = !isAndroid && lyricsOpen && Boolean(footerTrack);
   useEffect(() => {
     const version = ++lyricsRequestVersion.current;
     setLyricsText(null);
@@ -3936,11 +3938,14 @@ export default function App() {
         >
           <section
             ref={contentScrollRef}
-            className="content-scroll"
+            className={`content-scroll ${desktopLyricsOpen ? "lyrics-open" : ""}`}
             aria-label={heading}
           >
-            {!isAndroid && lyricsOpen && footerTrack ? (
-              <div className="desktop-lyrics-stage">
+            {!isAndroid && lyricsMounted && footerTrack && (
+              <div
+                className={`desktop-lyrics-stage ${lyricsOpen ? "" : "is-hidden"}`}
+                aria-hidden={!lyricsOpen}
+              >
                 <LyricsView
                   track={footerTrack}
                   text={lyricsText ?? ""}
@@ -3948,12 +3953,17 @@ export default function App() {
                   offsetMs={lyricsOffsetMs}
                   source={lyricsSource}
                   loading={lyricsLoading}
+                  visible={lyricsOpen}
                   onImported={(result) => handleLyricsImported(footerTrack.id, result)}
                   onOffsetSaved={setLyricsOffsetMs}
                   onSeek={(positionMs) => void run(() => api.seek(positionMs))}
                 />
               </div>
-            ) : (
+            )}
+            <div
+              className={`content-page-stage ${desktopLyricsOpen ? "is-hidden" : ""}`}
+              aria-hidden={desktopLyricsOpen}
+            >
               <>
                 {isAndroid && page.section === "Settings" ? (
                   mobileAboutOpen ? (
@@ -4843,7 +4853,7 @@ export default function App() {
                   </>
                 )}
               </>
-            )}
+            </div>
           </section>
           {showPanel && (
             <>
@@ -5370,6 +5380,7 @@ export default function App() {
                 const next = !lyricsOpen;
                 setLyricsOpen(next);
                 if (next) {
+                  setLyricsMounted(true);
                   setPanelView("now-playing");
                   setShowPanel(true);
                 }

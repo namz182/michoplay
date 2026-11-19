@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Maximize2, Minus, MoreHorizontal, Plus, RotateCcw, Search, X } from "lucide-react";
 import { Cover } from "../../app/Artwork";
@@ -24,12 +24,57 @@ function durationLabel(seconds: number | null) {
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 }
 
+const LyricsLineList = memo(function LyricsLineList({
+  lines,
+  plainLines,
+  active,
+  trackId,
+  displayOffsetMs,
+  visible,
+  onSeek,
+}: {
+  lines: Line[];
+  plainLines: string[];
+  active: number;
+  trackId: number;
+  displayOffsetMs: number;
+  visible: boolean;
+  onSeek?: (positionMs: number) => void;
+}) {
+  const activeRef = useRef<HTMLParagraphElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const previousActive = useRef<{ trackId: number; index: number } | null>(null);
+
+  useEffect(() => {
+    if (!visible) {
+      previousActive.current = null;
+      return;
+    }
+    if (!activeRef.current || !scrollRef.current) return;
+    const activeLine = activeRef.current.getBoundingClientRect();
+    const list = scrollRef.current;
+    const listBounds = list.getBoundingClientRect();
+    const lineTop = list.scrollTop + activeLine.top - listBounds.top;
+    const target = lineTop - (list.clientHeight - activeLine.height) / 2;
+    const previous = previousActive.current;
+    previousActive.current = { trackId, index: active };
+    const smooth = previous?.trackId === trackId && previous.index !== active &&
+      Math.abs(previous.index - active) <= 3 && Math.abs(target - list.scrollTop) <= list.clientHeight &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    list.scrollTo({ top: target, behavior: smooth ? "smooth" : "auto" });
+  }, [active, trackId, visible]);
+
+  return <div ref={scrollRef} className="lyrics-scroll">
+    {lines.length ? lines.map((line, index) => <p key={`${line.timeMs}-${index}`} ref={index === active ? activeRef : undefined} className={`lyrics-line ${index === active ? "active" : index < active ? "past" : ""}`} role={onSeek ? "button" : undefined} tabIndex={onSeek ? 0 : undefined} onClick={onSeek ? () => onSeek(Math.max(0, line.timeMs + displayOffsetMs)) : undefined} onKeyDown={onSeek ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSeek(Math.max(0, line.timeMs + displayOffsetMs)); } } : undefined}>{line.text || "♪"}</p>) : plainLines.map((line, index) => <p key={index}>{line}</p>)}
+  </div>;
+});
+
 export function LyricsView({
   track, text, positionMs, offsetMs = 0, source, loading = false,
-  expanded = false, preview = false, onExpand, onClose, onSeek, onImported, onOffsetSaved,
+  expanded = false, preview = false, visible = true, onExpand, onClose, onSeek, onImported, onOffsetSaved,
 }: {
   track: Track; text: string; positionMs: number; offsetMs?: number; source?: string | null;
-  loading?: boolean; expanded?: boolean; preview?: boolean; onExpand?: () => void;
+  loading?: boolean; expanded?: boolean; preview?: boolean; visible?: boolean; onExpand?: () => void;
   onClose?: () => void; onSeek?: (positionMs: number) => void;
   onImported?: (result: LyricsData) => void; onOffsetSaved?: (offsetMs: number) => void;
 }) {
@@ -38,9 +83,9 @@ export function LyricsView({
   const [draftOffsetMs, setDraftOffsetMs] = useState(offsetMs);
   const displayOffsetMs = preview ? offsetMs : draftOffsetMs;
   const active = lines.reduce((index, line, lineIndex) => line.timeMs + displayOffsetMs <= positionMs ? lineIndex : index, -1);
-  const activeRef = useRef<HTMLParagraphElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const previousActive = useRef<{ trackId: number; index: number } | null>(null);
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = onSeek;
+  const seekTo = useCallback((positionMs: number) => onSeekRef.current?.(positionMs), []);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -67,21 +112,6 @@ export function LyricsView({
     setError("");
     setSearchFailed(false);
   }, [track.id]);
-
-  useEffect(() => {
-    if (preview || searchOpen || !activeRef.current || !scrollRef.current) return;
-    const activeLine = activeRef.current.getBoundingClientRect();
-    const list = scrollRef.current;
-    const listBounds = list.getBoundingClientRect();
-    const lineTop = list.scrollTop + activeLine.top - listBounds.top;
-    const target = lineTop - (list.clientHeight - activeLine.height) / 2;
-    const previous = previousActive.current;
-    previousActive.current = { trackId: track.id, index: active };
-    const smooth = previous?.trackId === track.id && previous.index !== active &&
-      Math.abs(previous.index - active) <= 3 && Math.abs(target - list.scrollTop) <= list.clientHeight &&
-      !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    list.scrollTo({ top: target, behavior: smooth ? "smooth" : "auto" });
-  }, [active, preview, searchOpen, track.id]);
 
   async function searchLyrics(value: string) {
     const currentRequest = ++requestId.current;
@@ -221,12 +251,18 @@ export function LyricsView({
       </div>}
     </div> : <>
       {errorAlert}
-      <div ref={scrollRef} className="lyrics-scroll">
-        {lines.length ? lines.map((line, index) => <p key={`${line.timeMs}-${index}`} ref={index === active ? activeRef : undefined} className={`lyrics-line ${index === active ? "active" : index < active ? "past" : ""}`} role={onSeek ? "button" : undefined} tabIndex={onSeek ? 0 : undefined} onClick={onSeek ? () => onSeek(Math.max(0, line.timeMs + displayOffsetMs)) : undefined} onKeyDown={onSeek ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSeek(Math.max(0, line.timeMs + displayOffsetMs)); } } : undefined}>{line.text || "♪"}</p>) : plainLines.length ? plainLines.map((line, index) => <p key={index}>{line}</p>) : <div className="lyrics-unavailable">
-          <strong>{loading ? "Loading lyrics…" : "No lyrics saved"}</strong>
-          {!loading && <><span>Search for this song and import the match you want.</span><button className="lyrics-find-button" onClick={openSearch}><Search size={16} />Search lyrics</button></>}
-        </div>}
-      </div>
+      {lines.length || plainLines.length ? <LyricsLineList
+        lines={lines}
+        plainLines={plainLines}
+        active={active}
+        trackId={track.id}
+        displayOffsetMs={displayOffsetMs}
+        visible={visible}
+        onSeek={onSeek ? seekTo : undefined}
+      /> : <div className="lyrics-scroll"><div className="lyrics-unavailable">
+        <strong>{loading ? "Loading lyrics…" : "No lyrics saved"}</strong>
+        {!loading && <><span>Search for this song and import the match you want.</span><button className="lyrics-find-button" onClick={openSearch}><Search size={16} />Search lyrics</button></>}
+      </div></div>}
     </>}
   </section>;
 }

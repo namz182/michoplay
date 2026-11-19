@@ -780,11 +780,15 @@ button:disabled {
   gap: 8px;
 }
 .content-scroll {
+  position: relative;
   min-width: 0;
   overflow: auto;
   border-radius: 12px 12px 0 0;
   background: linear-gradient(180deg, #211f20 0, #181718 40%, #151416 72%);
   scrollbar-color: #514c54 transparent;
+}
+.content-scroll.lyrics-open {
+  overflow: hidden;
 }
 .collection-heading {
   padding: 35px 25px 9px;
@@ -1303,11 +1307,24 @@ button:disabled {
   opacity: 0.35;
 }
 .desktop-lyrics-stage {
+  position: sticky;
+  z-index: 2;
+  top: 0;
   display: flex;
   height: 100%;
   min-height: 480px;
   box-sizing: border-box;
   padding: 3px 8px 8px;
+}
+.desktop-lyrics-stage.is-hidden {
+  display: none;
+}
+.content-page-stage {
+  min-height: 100%;
+}
+.content-page-stage.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 .desktop-lyrics-stage > .lyrics-view {
   min-height: 100%;
