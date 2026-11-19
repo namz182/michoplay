@@ -3549,11 +3549,15 @@ async fn library_pick_audio_files(bridge: State<'_, MediaBridge>) -> Result<Vec<
     }
 }
 
-#[tauri::command]
-async fn spotify_public_metadata(url: String) -> Result<SpotifyPublicMetadata, String> {
+fn spotify_preview_url(url: &str) -> Result<(String, String), String> {
     let parsed =
         url::Url::parse(url.trim()).map_err(|_| "Paste a valid Spotify link.".to_owned())?;
-    if parsed.scheme() != "https" || parsed.host_str() != Some("open.spotify.com") {
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("open.spotify.com")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port_or_known_default() != Some(443)
+    {
         return Err("Paste a Spotify link from open.spotify.com.".to_owned());
     }
     let mut parts = parsed
@@ -3571,38 +3575,84 @@ async fn spotify_public_metadata(url: String) -> Result<SpotifyPublicMetadata, S
         return Err("The Spotify link does not contain a valid item ID.".to_owned());
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|_| "MichoPlay could not prepare a Spotify preview request.".to_owned())?;
-    let response = client
-        .get(format!("https://open.spotify.com/embed/{kind}/{id}"))
-        .header(reqwest::header::ACCEPT, "text/html")
-        .send()
-        .await
-        .map_err(|_| {
-            "Spotify’s public preview could not be reached. Check your connection and retry."
-                .to_owned()
-        })?;
-    if !response.status().is_success() {
-        return Err(
-            "Spotify could not preview this link. Check that it is public and retry.".to_owned(),
-        );
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > 5_000_000)
+    Ok((
+        kind.to_owned(),
+        format!("https://open.spotify.com/embed/{kind}/{id}"),
+    ))
+}
+
+#[tauri::command]
+async fn spotify_public_metadata(
+    url: String,
+    bridge: State<'_, MediaBridge>,
+) -> Result<SpotifyPublicMetadata, String> {
+    let (kind, preview_url) = spotify_preview_url(&url)?;
+    let html;
+    #[cfg(target_os = "android")]
     {
-        return Err("Spotify’s public preview response was too large.".to_owned());
+        #[derive(Deserialize)]
+        struct PreviewResponse {
+            html: String,
+        }
+        let preview: PreviewResponse = call_android_media(
+            android_media_plugin(&bridge)?,
+            "spotifyPublicPreview",
+            serde_json::json!({ "url": preview_url }),
+        )
+        .await?;
+        html = preview.html;
     }
-    let html = response.text().await.map_err(|_| {
-        "Spotify’s public preview could not be read. Check your connection and retry.".to_owned()
-    })?;
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        let client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|_| "MichoPlay could not prepare a Spotify preview request.".to_owned())?;
+        let mut response = client
+            .get(preview_url)
+            .header(reqwest::header::ACCEPT, "text/html")
+            .send()
+            .await
+            .map_err(|_| {
+                "Spotify’s public preview could not be reached. Check your connection and retry."
+                    .to_owned()
+            })?;
+        if !response.status().is_success() {
+            return Err(
+                "Spotify could not preview this link. Check that it is public and retry."
+                    .to_owned(),
+            );
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > 5_000_000)
+        {
+            return Err("Spotify’s public preview response was too large.".to_owned());
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| {
+            "Spotify’s public preview could not be read. Check your connection and retry."
+                .to_owned()
+        })? {
+            if body.len() + chunk.len() > 5_000_000 {
+                return Err("Spotify’s public preview response was too large.".to_owned());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        html = String::from_utf8(body)
+            .map_err(|_| "Spotify returned an invalid public preview.".to_owned())?;
+    }
     if html.len() > 5_000_000 {
         return Err("Spotify’s public preview response was too large.".to_owned());
     }
-    spotify_public_metadata_from_html(&html, kind)
+    tauri::async_runtime::spawn_blocking(move || spotify_public_metadata_from_html(&html, &kind))
+        .await
+        .map_err(|_| {
+            "Spotify’s public preview could not be processed. Retry the link.".to_owned()
+        })?
 }
 
 fn spotify_json_from_script(script: &str) -> Option<serde_json::Value> {
@@ -6153,6 +6203,51 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spotify_preview_urls_are_canonical_and_restricted() {
+        let id = "3bCxmOtEZMXln987Zns5Oq";
+        for path in [
+            format!("playlist/{id}?si=shared"),
+            format!("intl-en/playlist/{id}"),
+        ] {
+            assert_eq!(
+                spotify_preview_url(&format!("https://open.spotify.com/{path}")).unwrap(),
+                (
+                    "playlist".to_owned(),
+                    format!("https://open.spotify.com/embed/playlist/{id}")
+                )
+            );
+        }
+        for url in [
+            format!("http://open.spotify.com/playlist/{id}"),
+            format!("https://other.example/playlist/{id}"),
+            format!("https://user@open.spotify.com/playlist/{id}"),
+            format!("https://open.spotify.com:444/playlist/{id}"),
+            format!("https://open.spotify.com/artist/{id}"),
+            "https://open.spotify.com/playlist/short".to_owned(),
+        ] {
+            assert!(spotify_preview_url(&url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn spotify_public_playlist_from_the_report_contains_all_23_songs() {
+        let json = include_str!("../fixtures/spotify-playlist.json");
+        for (id, contents) in [
+            ("__NEXT_DATA__", json.to_owned()),
+            ("initial-state", STANDARD.encode(json)),
+        ] {
+            let html = format!(r#"<html><script id="{id}">{contents}</script></html>"#);
+            let playlist = spotify_public_metadata_from_html(&html, "playlist").unwrap();
+            assert_eq!(playlist.title, "The weekend");
+            assert_eq!(playlist.songs.len(), 23);
+            assert_eq!(playlist.songs[0].title, "Starboy");
+            assert!(playlist.songs[0].artist.contains("The Weeknd"));
+            assert_eq!(playlist.songs[0].duration_seconds, Some(230.453));
+        }
+        assert!(spotify_public_metadata_from_html("<html>Unavailable</html>", "playlist").is_err());
+    }
 
     #[test]
     fn downloaded_lyrics_are_embedded_and_read_from_mp3() {

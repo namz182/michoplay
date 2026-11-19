@@ -12,6 +12,7 @@
     "test:youtube-size": "node --experimental-strip-types tests/youtube-size.test.ts",
     "test:downloads": "node --experimental-strip-types --test tests/downloads.test.ts",
     "test:youtube-errors": "node --experimental-strip-types tests/youtube-download-errors.test.ts",
+    "test:spotify": "node --experimental-strip-types tests/spotify-preview.test.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:prepare-tools": "node scripts/prepare-desktop-tools.mjs"

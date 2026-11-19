@@ -1,0 +1,156 @@
+{
+  "props": {
+    "pageProps": {
+      "state": {
+        "data": {
+          "entity": {
+            "name": "The weekend",
+            "type": "playlist",
+            "uri": "spotify:playlist:3bCxmOtEZMXln987Zns5Oq",
+            "subtitle": "Mainza",
+            "trackList": [
+              {
+                "uri": "spotify:track:7MXVkk9YMctZqd1Srtv4MB",
+                "title": "Starboy",
+                "subtitle": "The Weeknd, Daft Punk",
+                "duration": 230453
+              },
+              {
+                "uri": "spotify:track:5GXAXm5YOmYT0kL5jHvYBt",
+                "title": "I Feel It Coming",
+                "subtitle": "The Weeknd, Daft Punk",
+                "duration": 269186
+              },
+              {
+                "uri": "spotify:track:37F0uwRSrdzkBiuj0D5UHI",
+                "title": "Reminder",
+                "subtitle": "The Weeknd",
+                "duration": 218880
+              },
+              {
+                "uri": "spotify:track:4F7A0DXBrmUAkp32uenhZt",
+                "title": "Party Monster",
+                "subtitle": "The Weeknd",
+                "duration": 249213
+              },
+              {
+                "uri": "spotify:track:3dhjNA0jGA8vHBQ1VdD6vV",
+                "title": "I Feel It Coming",
+                "subtitle": "The Weeknd, Daft Punk",
+                "duration": 269186
+              },
+              {
+                "uri": "spotify:track:6bnF93Rx87YqUBLSgjiMU8",
+                "title": "Heartless",
+                "subtitle": "The Weeknd",
+                "duration": 198266
+              },
+              {
+                "uri": "spotify:track:3orEOtd8CPL8GFlpRpKuoE",
+                "title": "Faith",
+                "subtitle": "The Weeknd",
+                "duration": 283226
+              },
+              {
+                "uri": "spotify:track:4BGZF4oLbTL0pWm7C18pbv",
+                "title": "Scared To Live",
+                "subtitle": "The Weeknd",
+                "duration": 191306
+              },
+              {
+                "uri": "spotify:track:0VjIjW4GlUZAMYd2vXMi3b",
+                "title": "Blinding Lights",
+                "subtitle": "The Weeknd",
+                "duration": 200040
+              },
+              {
+                "uri": "spotify:track:7szuecWAPwGoV1e5vGu8tl",
+                "title": "In Your Eyes",
+                "subtitle": "The Weeknd",
+                "duration": 237520
+              },
+              {
+                "uri": "spotify:track:5QO79kh1waicV47BqGRL3g",
+                "title": "Save Your Tears",
+                "subtitle": "The Weeknd",
+                "duration": 215626
+              },
+              {
+                "uri": "spotify:track:2p8IUWQDrpjuFltbdgLOag",
+                "title": "After Hours",
+                "subtitle": "The Weeknd",
+                "duration": 361026
+              },
+              {
+                "uri": "spotify:track:2BcnxwxBuar5wjCaLqm5N3",
+                "title": "Until I Bleed Out",
+                "subtitle": "The Weeknd",
+                "duration": 190173
+              },
+              {
+                "uri": "spotify:track:6zzdyvVWjGrQBraSvuqJPY",
+                "title": "Starry Eyes",
+                "subtitle": "The Weeknd",
+                "duration": 148000
+              },
+              {
+                "uri": "spotify:track:2D4dV2KXDTszzJ3p3cFqhA",
+                "title": "Less Than Zero",
+                "subtitle": "The Weeknd",
+                "duration": 211814
+              },
+              {
+                "uri": "spotify:track:7CyPwkp0oE8Ro9Dd5CUDjW",
+                "title": "One Of The Girls (with JENNIE, Lily Rose Depp)",
+                "subtitle": "The Weeknd, JENNIE, Lily-Rose Depp",
+                "duration": 244684
+              },
+              {
+                "uri": "spotify:track:7lsYGc5H5DHktxO7gbB8bN",
+                "title": "Ordinary Life",
+                "subtitle": "The Weeknd",
+                "duration": 221920
+              },
+              {
+                "uri": "spotify:track:5J4ZkQpzMUFojo1CtAZYpn",
+                "title": "Love Me Harder",
+                "subtitle": "Ariana Grande, The Weeknd",
+                "duration": 236133
+              },
+              {
+                "uri": "spotify:track:7uJH0YdSZL6psjxI6Xy08b",
+                "title": "Acquainted",
+                "subtitle": "The Weeknd",
+                "duration": 348853
+              },
+              {
+                "uri": "spotify:track:4jAbAakxgkZSubdmxYrSFR",
+                "title": "Out of Time",
+                "subtitle": "The Weeknd",
+                "duration": 214190
+              },
+              {
+                "uri": "spotify:track:5fohLPNqO6TqwrZ7BoUWUT",
+                "title": "High For This",
+                "subtitle": "The Weeknd",
+                "duration": 247226
+              },
+              {
+                "uri": "spotify:track:3dMfqx5iDMUiaOxW6i81Io",
+                "title": "Scared To Live",
+                "subtitle": "The Weeknd",
+                "duration": 191306
+              },
+              {
+                "uri": "spotify:track:0FIDCNYYjNvPVimz5icugS",
+                "title": "Timeless (feat Playboi Carti)",
+                "subtitle": "The Weeknd, Playboi Carti",
+                "duration": 256000
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -38,6 +38,11 @@ import java.nio.charset.Charset
 import java.util.concurrent.Executors
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.TimeUnit
+import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.Collections
 
@@ -57,6 +62,9 @@ class MediaUpdateArgs {
 
 @InvokeArg
 class YoutubeSearchArgs { var query: String = ""; var limit: Int = 15; var offset: Int = 0; var includeLyrics: Boolean = false; var playlistItems: Boolean = false }
+
+@InvokeArg
+class SpotifyPreviewArgs { var url: String = "" }
 
 @InvokeArg
 class YoutubeDownloadArgs {
@@ -512,6 +520,36 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         if (paths.isEmpty()) throw IllegalArgumentException("No supported audio files were selected.")
         invoke.resolveObject(paths.toList())
       } catch (error: Exception) { invoke.reject(error.message ?: "Could not open the selected audio files.") }
+    }
+  }
+
+  @Command
+  fun spotifyPublicPreview(invoke: Invoke) {
+    val args = invoke.parseArgs(SpotifyPreviewArgs::class.java)
+    val settled = AtomicBoolean(false)
+    val connection = AtomicReference<HttpURLConnection?>(null)
+    val deadline = downloadEvents.schedule({
+      if (settled.compareAndSet(false, true)) {
+        invoke.reject("Spotify took too long to respond. Check your connection and retry.")
+        io.execute { connection.get()?.disconnect() }
+      }
+    }, 20, TimeUnit.SECONDS)
+    io.execute {
+      try {
+        val html = SpotifyPreviewClient.fetch(args.url, onConnection = { connection.set(it) })
+        if (settled.compareAndSet(false, true)) invoke.resolveObject(mapOf("html" to html))
+      } catch (error: Exception) {
+        Log.w("MichoPlay", "Spotify preview request failed", error)
+        val message = when (error) {
+          is SocketTimeoutException -> "Spotify took too long to respond. Check your connection and retry."
+          is java.net.UnknownHostException -> "Spotify could not be reached. Check your connection and retry."
+          else -> error.message ?: "Spotify’s public preview could not be loaded. Retry the link."
+        }
+        if (settled.compareAndSet(false, true)) invoke.reject(message)
+      } finally {
+        deadline.cancel(false)
+        connection.get()?.disconnect()
+      }
     }
   }
 

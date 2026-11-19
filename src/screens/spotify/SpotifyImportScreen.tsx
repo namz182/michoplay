@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ChevronLeft, Disc3, LoaderCircle, Music2, X } from "lucide-react";
+import { ChevronLeft, Disc3, Music2, X } from "lucide-react";
 import { Cover } from "../../app/Artwork";
 import {
   api,
@@ -16,6 +16,7 @@ import {
   cleanDownloadMetadata,
   createDownloadBatch,
 } from "../../lib/downloads";
+import { fetchSpotifyPreview } from "../../lib/spotify-preview";
 
 type ImportKind = "track" | "album" | "playlist";
 type SpotifyLink = { kind: ImportKind; id: string; url: string };
@@ -213,8 +214,14 @@ export function SpotifyImportScreen({
     Map<string, YoutubeSearchResult>
   >(() => new Map());
   const requestId = useRef(0);
+  const previewRequest = useRef<AbortController | null>(null);
   const processing = useRef(new Set<string>());
   const claimedMatches = useRef(new Map<string, string>());
+
+  useEffect(() => () => {
+    requestId.current += 1;
+    previewRequest.current?.abort();
+  }, []);
 
   const downloadsByUrl = useMemo(() => {
     const byUrl = new Map<string, YoutubeDownload>();
@@ -230,6 +237,7 @@ export function SpotifyImportScreen({
   const allSelected = songs.length > 0 && selectedSongs.length === songs.length;
 
   async function fetchLink(input: string) {
+    previewRequest.current?.abort();
     const parsed = parseSpotifyLink(input);
     const thisRequest = ++requestId.current;
     if (!parsed) {
@@ -256,8 +264,10 @@ export function SpotifyImportScreen({
     setResolvedMatches(new Map());
     claimedMatches.current.clear();
 
+    const controller = new AbortController();
+    previewRequest.current = controller;
     try {
-      const result = await api.spotifyPublicMetadata(parsed.url);
+      const result = await fetchSpotifyPreview(api.spotifyPublicMetadata, parsed.url, { signal: controller.signal });
       if (thisRequest !== requestId.current) return;
       const items = result.songs.map((song, index) => ({
         ...song,
@@ -270,10 +280,15 @@ export function SpotifyImportScreen({
       setError(
         reason instanceof Error
           ? reason.message
-          : "Could not load Spotify’s public playlist preview. Check your connection and retry.",
+          : typeof reason === "string" && reason.trim()
+            ? reason
+            : "Could not load Spotify’s public playlist preview. Check your connection and retry.",
       );
     } finally {
-      if (thisRequest === requestId.current) setLoading(false);
+      if (thisRequest === requestId.current) {
+        previewRequest.current = null;
+        setLoading(false);
+      }
     }
   }
 
@@ -284,6 +299,8 @@ export function SpotifyImportScreen({
 
   function clearLink() {
     requestId.current += 1;
+    previewRequest.current?.abort();
+    previewRequest.current = null;
     setUrl("");
     setMetadata(null);
     setSongs([]);
@@ -293,6 +310,14 @@ export function SpotifyImportScreen({
     claimedMatches.current.clear();
     setError("");
     setLoading(false);
+  }
+
+  function cancelLoading() {
+    requestId.current += 1;
+    previewRequest.current?.abort();
+    previewRequest.current = null;
+    setLoading(false);
+    setError("");
   }
 
   function setAllSelected(checked: boolean) {
@@ -584,6 +609,7 @@ export function SpotifyImportScreen({
 
       <form
         className="spotify-link-form"
+        aria-busy={loading}
         onSubmit={(event) => void submitLink(event)}
       >
         <div className="spotify-link-input-row">
@@ -605,21 +631,18 @@ export function SpotifyImportScreen({
               <X size={17} />
             </button>
           )}
-          <button
+          {loading ? <button className="spotify-fetch-button" type="button" onClick={cancelLoading}>Cancel</button> : <button
             className="spotify-fetch-button"
             type="submit"
-            disabled={loading || !parseSpotifyLink(url)}
+            disabled={!parseSpotifyLink(url)}
           >
-            {loading && <LoaderCircle size={15} className="spotify-spin" />}
             Fetch songs
-          </button>
+          </button>}
         </div>
       </form>
 
       {error && (
-        <p className="spotify-inline-error" role="alert">
-          {error}
-        </p>
+        <div className="spotify-inline-error" role="alert"><span>{error}</span>{parseSpotifyLink(url) && <button type="button" className="spotify-source-reset" onClick={() => void fetchLink(url)}>Retry</button>}</div>
       )}
 
       {loading && (
