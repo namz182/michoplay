@@ -1,4 +1,7 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD},
+    Engine,
+};
 #[cfg(not(target_os = "android"))]
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::{
@@ -2729,6 +2732,8 @@ async fn youtube_music_directory(
 struct YoutubeSearchResult {
     id: String,
     title: String,
+    #[serde(default)]
+    artist: Option<String>,
     url: String,
     thumbnail: Option<String>,
     duration_seconds: Option<f64>,
@@ -2743,6 +2748,27 @@ struct YoutubeDownloadPlaylist {
     title: String,
     index: u32,
     total: u32,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotifySong {
+    id: String,
+    title: String,
+    artist: String,
+    thumbnail_url: Option<String>,
+    duration_seconds: Option<f64>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotifyPublicMetadata {
+    title: String,
+    thumbnail_url: Option<String>,
+    author: Option<String>,
+    kind: String,
+    songs: Vec<SpotifySong>,
+    total_tracks: Option<usize>,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -2777,6 +2803,8 @@ struct PickedMusicFolder {
 struct YoutubeDownloadItem {
     id: String,
     title: String,
+    #[serde(default)]
+    artist: Option<String>,
     url: String,
     thumbnail: Option<String>,
     is_playlist: bool,
@@ -2817,6 +2845,8 @@ struct YoutubeDownloadManager {
     #[cfg(not(target_os = "android"))]
     last_progress_emit: Option<std::time::Instant>,
     #[cfg(not(target_os = "android"))]
+    update_scheduled: bool,
+    #[cfg(not(target_os = "android"))]
     storage_path: Option<PathBuf>,
     #[cfg(not(target_os = "android"))]
     last_persist: Option<std::time::Instant>,
@@ -2834,18 +2864,53 @@ struct YoutubeDownloadState(Mutex<YoutubeDownloadManager>);
 #[cfg(not(target_os = "android"))]
 impl YoutubeDownloadManager {
     fn snapshot(&self) -> Vec<YoutubeDownloadItem> {
-        self.tasks.iter().map(|task| task.item.clone()).collect()
+        let mut items: Vec<_> = self.tasks.iter().map(|task| task.item.clone()).collect();
+        items.sort_by_key(|item| {
+            std::cmp::Reverse(
+                item.id
+                    .strip_prefix("youtube-")
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .unwrap_or(0),
+            )
+        });
+        items
     }
 }
 
 #[cfg(not(target_os = "android"))]
 fn emit_youtube_downloads(app: &AppHandle) {
+    let scheduled = app
+        .state::<YoutubeDownloadState>()
+        .0
+        .lock()
+        .map(|mut manager| {
+            if manager.update_scheduled {
+                return false;
+            }
+            manager.update_scheduled = true;
+            true
+        })
+        .unwrap_or(false);
+    if !scheduled {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Coalesce queue additions and phase/progress bursts off the UI thread.
+        thread::sleep(Duration::from_millis(250));
+        flush_youtube_downloads(&app);
+    });
+}
+
+#[cfg(not(target_os = "android"))]
+fn flush_youtube_downloads(app: &AppHandle) {
     let _persist_guard = YOUTUBE_DOWNLOAD_PERSIST_LOCK.lock().ok();
     let (items, persistence) = app
         .state::<YoutubeDownloadState>()
         .0
         .lock()
         .map(|mut manager| {
+            manager.update_scheduled = false;
             let items = manager.snapshot();
             let states = items
                 .iter()
@@ -3280,6 +3345,275 @@ async fn library_pick_audio_files(bridge: State<'_, MediaBridge>) -> Result<Vec<
 }
 
 #[tauri::command]
+async fn spotify_public_metadata(url: String) -> Result<SpotifyPublicMetadata, String> {
+    let parsed =
+        url::Url::parse(url.trim()).map_err(|_| "Paste a valid Spotify link.".to_owned())?;
+    if parsed.scheme() != "https" || parsed.host_str() != Some("open.spotify.com") {
+        return Err("Paste a Spotify link from open.spotify.com.".to_owned());
+    }
+    let mut parts = parsed
+        .path_segments()
+        .ok_or_else(|| "Paste a valid Spotify link.".to_owned())?
+        .collect::<Vec<_>>();
+    if parts.first().is_some_and(|part| part.starts_with("intl-")) {
+        parts.remove(0);
+    }
+    if parts.len() != 2 || !["track", "album", "playlist"].contains(&parts[0]) {
+        return Err("Paste a Spotify song, album, or playlist link.".to_owned());
+    }
+    let (kind, id) = (parts[0], parts[1]);
+    if id.len() != 22 || !id.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return Err("The Spotify link does not contain a valid item ID.".to_owned());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|_| "MichoPlay could not prepare a Spotify preview request.".to_owned())?;
+    let response = client
+        .get(format!("https://open.spotify.com/embed/{kind}/{id}"))
+        .header(reqwest::header::ACCEPT, "text/html")
+        .send()
+        .await
+        .map_err(|_| {
+            "Spotify’s public preview could not be reached. Check your connection and retry."
+                .to_owned()
+        })?;
+    if !response.status().is_success() {
+        return Err(
+            "Spotify could not preview this link. Check that it is public and retry.".to_owned(),
+        );
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > 5_000_000)
+    {
+        return Err("Spotify’s public preview response was too large.".to_owned());
+    }
+    let html = response.text().await.map_err(|_| {
+        "Spotify’s public preview could not be read. Check your connection and retry.".to_owned()
+    })?;
+    if html.len() > 5_000_000 {
+        return Err("Spotify’s public preview response was too large.".to_owned());
+    }
+    spotify_public_metadata_from_html(&html, kind)
+}
+
+fn spotify_json_from_script(script: &str) -> Option<serde_json::Value> {
+    if let Ok(value) = serde_json::from_str(script.trim()) {
+        return Some(value);
+    }
+    let encoded = script
+        .trim()
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    [
+        STANDARD.decode(encoded.as_bytes()),
+        URL_SAFE.decode(encoded.as_bytes()),
+        URL_SAFE_NO_PAD.decode(encoded.as_bytes()),
+    ]
+    .into_iter()
+    .find_map(Result::ok)
+    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+fn spotify_embedded_entity(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    value
+        .pointer("/data/entity")
+        .or_else(|| value.pointer("/props/pageProps/state/data/entity"))
+        .or_else(|| value.get("entity"))
+        .or_else(|| value.get("data").filter(|data| data.get("name").is_some()))
+        .or_else(|| value.get("name").map(|_| value))
+}
+
+fn spotify_json_from_html(html: &str) -> Option<serde_json::Value> {
+    let mut cursor = 0;
+    while let Some(relative_start) = html[cursor..].find("<script") {
+        let start = cursor + relative_start;
+        let Some(relative_open_end) = html[start..].find('>') else {
+            break;
+        };
+        let open_end = start + relative_open_end;
+        let Some(relative_end) = html[open_end + 1..].find("</script>") else {
+            break;
+        };
+        let end = open_end + 1 + relative_end;
+        let attributes = html[start..open_end].to_ascii_lowercase();
+        if attributes.contains("resource")
+            || attributes.contains("initial-state")
+            || attributes.contains("__next_data__")
+        {
+            if let Some(value) = spotify_json_from_script(&html[open_end + 1..end]) {
+                if spotify_embedded_entity(&value).is_some() {
+                    return Some(value);
+                }
+            }
+        }
+        cursor = end + "</script>".len();
+    }
+    None
+}
+
+fn spotify_image_url(value: &serde_json::Value) -> Option<String> {
+    let sources = value
+        .pointer("/coverArt/sources")
+        .or_else(|| value.pointer("/images"))
+        .or_else(|| value.pointer("/album/images"))
+        .and_then(serde_json::Value::as_array)?;
+    sources
+        .iter()
+        .filter_map(|source| {
+            let url = source.get("url")?.as_str()?;
+            if !url.starts_with("https://") {
+                return None;
+            }
+            let width = source
+                .get("width")
+                .or_else(|| source.get("height"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default();
+            Some((width, url.to_owned()))
+        })
+        .max_by_key(|(width, _)| *width)
+        .map(|(_, url)| url)
+}
+
+fn spotify_artist(value: &serde_json::Value) -> String {
+    if let Some(artists) = value.get("artists").and_then(serde_json::Value::as_array) {
+        let names = artists
+            .iter()
+            .filter_map(|artist| artist.get("name").and_then(serde_json::Value::as_str))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>();
+        if !names.is_empty() {
+            return names.join(", ");
+        }
+    }
+    value
+        .get("subtitle")
+        .or_else(|| value.get("artist"))
+        .or_else(|| value.pointer("/show/publisher"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+fn spotify_duration_seconds(value: &serde_json::Value) -> Option<f64> {
+    let duration = value
+        .get("duration_ms")
+        .or_else(|| value.get("duration"))?
+        .as_f64()?;
+    Some(if duration > 1000.0 {
+        duration / 1000.0
+    } else {
+        duration
+    })
+}
+
+fn spotify_public_metadata_from_html(
+    html: &str,
+    expected_kind: &str,
+) -> Result<SpotifyPublicMetadata, String> {
+    let payload = spotify_json_from_html(html).ok_or_else(|| {
+        "Spotify did not expose playlist details in its public preview.".to_owned()
+    })?;
+    let entity = spotify_embedded_entity(&payload)
+        .ok_or_else(|| "Spotify’s public preview did not include collection details.".to_owned())?;
+    let kind = entity
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            entity
+                .get("uri")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|uri| uri.split(':').nth(1))
+        })
+        .unwrap_or(expected_kind);
+    let title = entity
+        .get("name")
+        .or_else(|| entity.get("title"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .ok_or_else(|| "Spotify’s public preview did not include a title.".to_owned())?
+        .to_owned();
+    let collection_art = spotify_image_url(entity);
+    let author = entity
+        .pointer("/ownerV2/name")
+        .or_else(|| entity.pointer("/owner/name"))
+        .or_else(|| entity.get("subtitle"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|author| !author.is_empty())
+        .map(ToOwned::to_owned);
+    let raw_tracks = entity
+        .get("trackList")
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| {
+            entity
+                .pointer("/tracks/items")
+                .and_then(serde_json::Value::as_array)
+        })
+        .or_else(|| entity.get("items").and_then(serde_json::Value::as_array));
+    let track_rows = raw_tracks
+        .map(|items| items.iter().collect::<Vec<_>>())
+        .unwrap_or_else(|| {
+            (kind == "track")
+                .then_some(vec![entity])
+                .unwrap_or_default()
+        });
+    let songs = track_rows
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, raw)| {
+            let track = raw.get("item").unwrap_or(raw);
+            let title = track
+                .get("title")
+                .or_else(|| track.get("name"))?
+                .as_str()?
+                .trim();
+            if title.is_empty() {
+                return None;
+            }
+            let uri = track.get("uri").and_then(serde_json::Value::as_str);
+            let id = uri
+                .and_then(|uri| uri.rsplit(':').next())
+                .or_else(|| track.get("id").and_then(serde_json::Value::as_str))
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("spotify-track-{index}"));
+            Some(SpotifySong {
+                id,
+                title: title.to_owned(),
+                artist: spotify_artist(track),
+                thumbnail_url: spotify_image_url(track),
+                duration_seconds: spotify_duration_seconds(track),
+            })
+        })
+        .collect::<Vec<_>>();
+    if songs.is_empty() {
+        return Err("Spotify’s public preview did not include any songs for this link.".to_owned());
+    }
+    let total_tracks = entity
+        .get("totalTrackCount")
+        .or_else(|| entity.get("trackCount"))
+        .or_else(|| entity.pointer("/tracks/total"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok());
+    Ok(SpotifyPublicMetadata {
+        title,
+        thumbnail_url: collection_art,
+        author,
+        kind: kind.to_owned(),
+        songs,
+        total_tracks,
+    })
+}
+
+#[tauri::command]
 async fn youtube_search(
     query: String,
     limit: Option<usize>,
@@ -3386,6 +3720,11 @@ async fn youtube_search(
                         .unwrap_or("playlist")
                         .to_owned(),
                     title,
+                    artist: document
+                        .get("channel")
+                        .or_else(|| document.get("uploader"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned),
                     url,
                     thumbnail,
                     duration_seconds: None,
@@ -3431,6 +3770,12 @@ async fn youtube_search(
                     Some(YoutubeSearchResult {
                         id,
                         title,
+                        artist: entry
+                            .get("artist")
+                            .or_else(|| entry.get("channel"))
+                            .or_else(|| entry.get("uploader"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToOwned::to_owned),
                         url,
                         thumbnail,
                         duration_seconds: entry.get("duration").and_then(serde_json::Value::as_f64),
@@ -3504,6 +3849,7 @@ async fn youtube_download_enqueue(
     thumbnail: Option<String>,
     is_playlist: bool,
     playlist: Option<YoutubeDownloadPlaylist>,
+    artist: Option<String>,
     app: AppHandle,
     state: State<'_, YoutubeDownloadState>,
     bridge: State<'_, MediaBridge>,
@@ -3519,6 +3865,7 @@ async fn youtube_download_enqueue(
                 "url": url,
                 "title": title,
                 "thumbnail": thumbnail,
+                "artist": artist,
                 "isPlaylist": is_playlist,
                 "playlistId": playlist.as_ref().map(|value| value.id.as_str()),
                 "playlistTitle": playlist.as_ref().map(|value| value.title.as_str()),
@@ -3555,6 +3902,7 @@ async fn youtube_download_enqueue(
                     title.trim().to_owned()
                 },
                 url: url.clone(),
+                artist,
                 thumbnail,
                 is_playlist,
                 playlist,
@@ -3813,7 +4161,7 @@ fn youtube_download_worker(app: AppHandle) {
             return;
         };
         emit_youtube_downloads(&app);
-        let (title, playlist_title, is_playlist) = app
+        let (title, artist, playlist_title, is_playlist) = app
             .state::<YoutubeDownloadState>()
             .0
             .lock()
@@ -3826,6 +4174,7 @@ fn youtube_download_worker(app: AppHandle) {
                     .map(|task| {
                         (
                             task.item.title.clone(),
+                            task.item.artist.clone(),
                             task.item
                                 .playlist
                                 .as_ref()
@@ -3834,12 +4183,13 @@ fn youtube_download_worker(app: AppHandle) {
                         )
                     })
             })
-            .unwrap_or_else(|| ("YouTube audio".to_owned(), None, false));
+            .unwrap_or_else(|| ("YouTube audio".to_owned(), None, None, false));
         let result = run_youtube_download(
             &app,
             &id,
             &url,
             &title,
+            artist.as_deref(),
             playlist_title.as_deref(),
             is_playlist,
         );
@@ -3961,12 +4311,44 @@ fn youtube_download_is_active(app: &AppHandle, id: &str) -> bool {
         .unwrap_or(false)
 }
 
+// Use the cleaned queue title for both the filename and the embedded MP3 title.
+// Escaping replacement backslashes keeps Python's re.sub from treating titles
+// such as "\\1" as backreferences. Video IDs remain in filenames for uniqueness.
+#[cfg(not(target_os = "android"))]
+fn configure_download_metadata(
+    command: &mut Command,
+    title: &str,
+    artist: Option<&str>,
+    is_playlist: bool,
+) {
+    if is_playlist {
+        return;
+    }
+    command
+        .arg("--parse-metadata")
+        .arg("title:%(meta_title)s")
+        .arg("--replace-in-metadata")
+        .arg("title,meta_title")
+        .arg("(?s)^.*$")
+        .arg(title.replace('\\', "\\\\"));
+    if let Some(artist) = artist.filter(|artist| !artist.trim().is_empty()) {
+        command
+            .arg("--parse-metadata")
+            .arg("title:%(meta_artist)s")
+            .arg("--replace-in-metadata")
+            .arg("artist,meta_artist")
+            .arg("(?s)^.*$")
+            .arg(artist.replace('\\', "\\\\"));
+    }
+}
+
 #[cfg(not(target_os = "android"))]
 fn run_youtube_download(
     app: &AppHandle,
     id: &str,
     url: &str,
     title: &str,
+    artist: Option<&str>,
     playlist_title: Option<&str>,
     is_playlist: bool,
 ) -> Result<(Option<u64>, Vec<String>), String> {
@@ -3984,13 +4366,14 @@ fn run_youtube_download(
     } else {
         directory
     };
-    let output_template = output_directory.join("%(title).160B [%(id)s].%(ext)s");
+    let output_template = output_directory.join("%(title).160B.%(ext)s");
     let mut command = hidden_command(yt_dlp);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    configure_download_metadata(&mut command, title, artist, is_playlist);
     let mut child = command
         .arg("--ignore-config")
         .arg("--encoding")
@@ -4015,6 +4398,8 @@ fn run_youtube_download(
         .arg("mp3")
         .arg("--audio-quality")
         .arg("0")
+        .arg("--postprocessor-args")
+        .arg("ExtractAudio+ffmpeg_o:-threads 1")
         .arg("--write-thumbnail")
         .arg("--write-subs")
         .arg("--write-auto-subs")
@@ -5458,6 +5843,7 @@ pub fn run() {
             media_share_text,
             youtube_music_directory,
             youtube_search,
+            spotify_public_metadata,
             youtube_downloads_state,
             youtube_download_enqueue,
             youtube_download_pause,

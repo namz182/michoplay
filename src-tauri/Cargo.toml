@@ -25,6 +25,7 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 base64 = "0.22.1"
 url = "2"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 tauri-plugin-opener = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

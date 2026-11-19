@@ -9,6 +9,7 @@ export type Section =
   | "Folders"
   | "Favorites"
   | "Recently Played"
+  | "Spotify"
   | "Settings";
 export type Detail = {
   kind: "folder" | "album" | "artist" | "playlist";

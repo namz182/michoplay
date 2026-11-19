@@ -97,11 +97,13 @@ import { Cover, useArtwork } from "./Artwork";
 import { LyricsBadge } from "../components/LyricsBadge";
 import { LyricsView } from "../screens/lyrics/LyricsView";
 import { PlaylistSelection } from "../components/downloads/PlaylistSelection";
-import { PlaylistDownloadProgress } from "../components/downloads/PlaylistDownloadProgress";
+import { DownloadProgressList } from "../components/downloads/DownloadProgressList";
+import { cleanDownloadMetadata, createDownloadBatch, newestDownloadsFirst } from "../lib/downloads";
 import { BufferedYoutubeSearch, DesktopGlobalSearch } from "./components/SearchInputs";
 import { SleepTimerControl, sleepTimerLabel } from "./components/SleepTimerControl";
 import { VolumeControl } from "./components/VolumeControl";
 import { MobileNav } from "./components/MobileNav";
+import { SpotifyImportScreen } from "../screens/spotify/SpotifyImportScreen";
 import { TransportControls } from "./components/TransportControls";
 import { useYoutubeSearch } from "./useYoutubeSearch";
 import type { Collection, Detail, DownloadFeedback, GlobalSearchResult, ListeningRecord, Page, Playlist, SavedPlaybackSession, Section, TrackMenu, TrackSort } from "./types";
@@ -187,6 +189,7 @@ export default function App() {
   const seekCommitVersion = useRef(0);
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [foldersSearch, setFoldersSearch] = useState("");
   const [globalYoutubeSearchEnabled, setGlobalYoutubeSearchEnabled] = useState(
     () => stored("global-youtube-search-enabled", true),
   );
@@ -300,7 +303,7 @@ export default function App() {
   });
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<
-    "home" | "search" | "library" | "youtube" | "downloads"
+    "home" | "search" | "library" | "youtube" | "spotify" | "downloads"
   >("home");
   const [mobileLibraryActionsOpen, setMobileLibraryActionsOpen] =
     useState(false);
@@ -357,6 +360,7 @@ export default function App() {
   );
   const [playlistSelection, setPlaylistSelection] = useState<YoutubeSearchResult | null>(null);
   const latestYoutubeDownloads = useRef<YoutubeDownload[]>([]);
+  const youtubeLibrarySyncInFlight = useRef<Promise<Track[]> | null>(null);
   const youtubeDownloadsVersion = useRef(0);
   const [unseenDownloadIds, setUnseenDownloadIds] = useState<string[]>([]);
   const [downloadFeedback, setDownloadFeedback] =
@@ -392,6 +396,12 @@ export default function App() {
       content.scrollLeft = 0;
     }
   }, [isAndroid, mobileTab, page.section, page.detail]);
+  useEffect(() => {
+    setLyricsOpen(false);
+    setMobileLyricsExpanded(false);
+    setMobilePlayerLyricsOpen(false);
+    setFullModeLyrics(false);
+  }, [history.index, page.section, page.detail?.kind, page.detail?.key, mobileTab]);
 
   function enrichYoutubeLyrics(
     query: string,
@@ -676,7 +686,7 @@ export default function App() {
     },
     [roots, youtubeDirectory],
   );
-  const syncYoutubeLibrary = useCallback(async () => {
+  const performYoutubeLibrarySync = useCallback(async () => {
     if (!isTauri() || !youtubeDirectory) return [];
     const nextRoots = [...new Set([...roots, youtubeDirectory])];
     const knownIds = new Set(
@@ -709,6 +719,17 @@ export default function App() {
       setScanning(false);
     }
   }, [youtubeDirectory, roots, tracks]);
+  const syncYoutubeLibrary = useCallback(() => {
+    if (!youtubeLibrarySyncInFlight.current) {
+      youtubeLibrarySyncInFlight.current = performYoutubeLibrarySync().finally(() => {
+        youtubeLibrarySyncInFlight.current = null;
+      });
+    }
+    return youtubeLibrarySyncInFlight.current;
+  }, [performYoutubeLibrarySync]);
+  const latestYoutubeLibrarySync = useRef(syncYoutubeLibrary);
+  latestYoutubeLibrarySync.current = syncYoutubeLibrary;
+
   useEffect(() => {
     if (!youtubeDirectory || !youtubeFolderScanned) return;
     const folderTrackIds = tracks
@@ -905,8 +926,28 @@ export default function App() {
     if (!isTauri()) return;
     let active = true;
     let unlisten: (() => void) | undefined;
-    const applyDownloads = async (items: YoutubeDownload[]) => {
+    let libraryRefreshTimer: number | undefined;
+    let libraryRefreshRunning = false;
+    let libraryRefreshPending = false;
+    const completedPaths = new Set<string>();
+    const refreshCompleted = async () => {
+      libraryRefreshTimer = undefined;
+      if (!active || libraryRefreshRunning || !libraryRefreshPending) return;
+      libraryRefreshRunning = true;
+      libraryRefreshPending = false;
+      const paths = [...completedPaths];
+      completedPaths.clear();
+      try {
+        if (isAndroid && paths.length) await api.embedDownloadedLyrics(paths).catch(() => {});
+        if (active) await latestYoutubeLibrarySync.current();
+      } finally {
+        libraryRefreshRunning = false;
+        if (active && libraryRefreshPending) libraryRefreshTimer = window.setTimeout(() => void refreshCompleted(), 1000);
+      }
+    };
+    const applyDownloads = (incoming: YoutubeDownload[]) => {
       if (!active) return;
+      const items = newestDownloadsFirst(incoming);
       const previous = latestYoutubeDownloads.current;
       latestYoutubeDownloads.current = items;
       const version = ++youtubeDownloadsVersion.current;
@@ -950,22 +991,20 @@ export default function App() {
         .filter((item) => item.status === "completed")
         .forEach((item) => completedYoutubeDownloads.current.add(item.id));
       if (newlyCompletedIds.length) {
-        const completed = items.filter((item) =>
-          newlyCompletedIds.includes(item.id),
-        );
-        const audioPaths = completed.flatMap((item) => item.filePaths ?? []);
-        try {
-          if (audioPaths.length) await api.embedDownloadedLyrics(audioPaths);
-        } catch {
-          /* Keep completed downloads available even if optional lyrics metadata cannot be written. */
-        }
-        await syncYoutubeLibrary();
+        const completedIds = new Set(newlyCompletedIds);
+        items.filter((item) => completedIds.has(item.id)).forEach((item) => {
+          (item.filePaths ?? []).forEach((path) => completedPaths.add(path));
+        });
+        libraryRefreshPending = true;
+        if (libraryRefreshTimer === undefined && !libraryRefreshRunning)
+          libraryRefreshTimer = window.setTimeout(() => void refreshCompleted(), 1000);
       }
     };
     const initialVersion = youtubeDownloadsVersion.current;
     void api
       .youtubeDownloadsState()
-      .then((items) => {
+      .then((incoming) => {
+        const items = newestDownloadsFirst(incoming);
         if (!active || initialVersion !== youtubeDownloadsVersion.current)
           return;
         latestYoutubeDownloads.current = items;
@@ -977,17 +1016,6 @@ export default function App() {
             .filter((item) => item.status === "completed")
             .map((item) => item.id),
         );
-        if (isAndroid) {
-          const paths = items
-            .filter((item) => item.status === "completed")
-            .flatMap((item) => item.filePaths ?? []);
-          void api
-            .embedDownloadedLyrics(paths)
-            .then((embedded) => {
-              if (active && embedded.length) void syncYoutubeLibrary();
-            })
-            .catch(() => {});
-        }
       })
       .catch(() => {});
     let poll: number | undefined;
@@ -1021,15 +1049,19 @@ export default function App() {
         "youtube-downloads-updated",
         ({ payload }) => applyDownloads(payload),
       ).then((dispose) => {
-        unlisten = dispose;
+        if (active) unlisten = dispose;
+        else dispose();
       });
     }
     return () => {
       active = false;
       if (poll !== undefined) window.clearTimeout(poll);
+      if (libraryRefreshTimer !== undefined) window.clearTimeout(libraryRefreshTimer);
+      // A navigation/subscription change must not lose a pending library sync.
+      if (libraryRefreshPending) void latestYoutubeLibrarySync.current();
       unlisten?.();
     };
-  }, [isAndroid, hasActiveYoutubeDownloads, syncYoutubeLibrary]);
+  }, [isAndroid, hasActiveYoutubeDownloads]);
   useEffect(() => {
     const update = () => setBrowserOnline(navigator.onLine);
     window.addEventListener("online", update);
@@ -1960,6 +1992,7 @@ export default function App() {
     selected: YoutubeSearchResult,
     source?: DOMRect,
     playlist?: YoutubeDownloadPlaylist,
+    trustArtist = false,
   ) {
     setMessage("");
     try {
@@ -1969,17 +2002,19 @@ export default function App() {
       const downloadUrl = isAndroid && !selected.isPlaylist && /^[\w-]{11}$/.test(selected.id)
         ? `https://www.youtube.com/watch?v=${selected.id}`
         : selected.url;
+      const metadata = selected.isPlaylist ? { title: selected.title, artist: "" } : cleanDownloadMetadata(selected.title, selected.artist, trustArtist);
       const item = await api.youtubeDownloadEnqueue(
         downloadUrl,
-        selected.title,
+        metadata.title,
         selected.thumbnail,
         selected.isPlaylist,
         playlist,
+        metadata.artist,
       );
       setYoutubeDownloads((prior) =>
         prior.some((download) => download.id === item.id)
           ? prior
-          : [...prior, item],
+          : [item, ...prior],
       );
       if (isAndroid) {
         setUnseenDownloadIds((prior) =>
@@ -2037,16 +2072,11 @@ export default function App() {
     const playlist = playlistSelection;
     setPlaylistSelection(null);
     if (!playlist || songs.length === 0) return;
-    const playlistId = playlist.id || playlist.url;
     const queueable = songs.filter((song) => !youtubeDownloads.some((item) => item.url === song.url && !["failed", "cancelled"].includes(item.status)));
+    const batch = createDownloadBatch(playlist.title, queueable.length);
     let queued = 0;
     for (const [index, song] of queueable.entries()) {
-      const context: YoutubeDownloadPlaylist = {
-        id: playlistId,
-        title: playlist.title,
-        index: index + 1,
-        total: queueable.length,
-      };
+      const context = batch(index);
       if (await queueYoutubeDownload(song, undefined, context)) queued += 1;
     }
     if (isAndroid) {
@@ -2204,6 +2234,11 @@ export default function App() {
       section: "Playlists",
       detail: { kind: "playlist", key: youtube.id, title: youtube.name },
     });
+  }
+  function openSpotifyPage() {
+    setSearch("");
+    setMobileTab(isAndroid ? "spotify" : "home");
+    navigate({ section: "Spotify" });
   }
 
   async function removeFolder(folder: string) {
@@ -2469,11 +2504,13 @@ export default function App() {
   const nowPlayingTrack = current;
   const nowPlayingIsActive = current !== null && player.isPlaying;
   const footerTrack = current ?? recentTracks[0] ?? null;
+  const downloadPlaybackKey = youtubeDownloads.map((item) => `${item.id}:${item.status}`).join("|");
   useEffect(() => {
+    const downloadsById = new Map(youtubeDownloads.map((item) => [item.id, item]));
     document
       .querySelectorAll<HTMLElement>(".download-item, .mobile-download-row")
-      .forEach((row, index) => {
-        const item = youtubeDownloads[index];
+      .forEach((row) => {
+        const item = downloadsById.get(row.dataset.downloadId ?? "");
         const button = row.querySelector<HTMLButtonElement>(
           ".download-art-play, .mobile-download-art > button",
         );
@@ -2498,7 +2535,7 @@ export default function App() {
     mobileTab,
     panelView,
     showPanel,
-    youtubeDownloads,
+    downloadPlaybackKey,
     tracks,
     youtubeDirectory,
     player.currentTrackId,
@@ -2542,6 +2579,11 @@ export default function App() {
       }
     return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
   }, [availableTracks]);
+  const normalizedFoldersSearch = foldersSearch.trim().toLocaleLowerCase();
+  const visibleFolders = useMemo(
+    () => folders.filter((folder) => `${folder.title} ${folder.subtitle}`.toLocaleLowerCase().includes(normalizedFoldersSearch)),
+    [folders, normalizedFoldersSearch],
+  );
   const albums = useMemo(() => {
     const groups = new Map<string, Collection>();
     for (const track of availableTracks) {
@@ -3550,6 +3592,18 @@ export default function App() {
                   <span>YouTube</span>
                 </button>
               )}
+              {label === "Favorites" && (
+                <button
+                  className={`nav-item ${page.section === "Spotify" ? "active" : ""}`}
+                  aria-label="Spotify"
+                  title="Spotify"
+                  aria-current={page.section === "Spotify" ? "page" : undefined}
+                  onClick={openSpotifyPage}
+                >
+                  <Disc3 size={18} />
+                  <span>Spotify</span>
+                </button>
+              )}
             </Fragment>
           ))}
         </nav>
@@ -4000,6 +4054,15 @@ export default function App() {
                     onOpenPlaylist={(item) => {
                       setMobileTab("home");
                       openDetail("Playlists", "playlist", item);
+                    }}
+                  />
+                ) : page.section === "Spotify" ? (
+                  <SpotifyImportScreen
+                    libraryTracks={tracks}
+                    downloads={youtubeDownloads}
+                    onQueue={(candidate, playlist) => queueYoutubeDownload(candidate, undefined, playlist, true)}
+                    onDownloadControl={(id, action) => {
+                      void controlYoutubeDownload(id, action);
                     }}
                   />
                 ) : page.section === "Settings" ? (
@@ -4636,19 +4699,40 @@ export default function App() {
                       />
                     ) : page.section === "Folders" ? (
                       <div className="home-section">
-                        <div className="section-title-row">
+                        <div className="section-title-row folders-view-heading">
                           <h2>Folders</h2>
-                          <button
-                            className="outline-button"
-                            disabled={scanning}
-                            onClick={chooseLibrarySource}
-                          >
-                            <Plus size={15} />
-                            Add folder
-                          </button>
+                          <div className="folders-view-tools">
+                            <label className="collection-search folders-view-search">
+                              <Search size={15} />
+                              <input
+                                type="search"
+                                aria-label="Search folders"
+                                placeholder="Search folders"
+                                value={foldersSearch}
+                                onChange={(event) => setFoldersSearch(event.target.value)}
+                              />
+                              {foldersSearch && (
+                                <button
+                                  className="icon-button"
+                                  aria-label="Clear folder search"
+                                  onClick={() => setFoldersSearch("")}
+                                >
+                                  <X size={14} />
+                                </button>
+                              )}
+                            </label>
+                            <button
+                              className="outline-button"
+                              disabled={scanning}
+                              onClick={chooseLibrarySource}
+                            >
+                              <Plus size={15} />
+                              Add folder
+                            </button>
+                          </div>
                         </div>
                         <CollectionGrid
-                          collections={folders}
+                          collections={visibleFolders}
                           kind="folder"
                           onOpen={(item) => openDetail("Home", "folder", item)}
                           onPlay={playCardCollection}
@@ -4662,6 +4746,12 @@ export default function App() {
                               scanning ? "Scanning music…" : "No folders yet"
                             }
                             description="Add a music folder to browse its songs."
+                          />
+                        )}
+                        {folders.length > 0 && !visibleFolders.length && (
+                          <Empty
+                            title="No matching folders"
+                            description="Try another folder name."
                           />
                         )}
                       </div>
@@ -4816,10 +4906,10 @@ export default function App() {
                     </div>
                     {youtubeDownloads.length ? (
                       <>
-                      <PlaylistDownloadProgress downloads={youtubeDownloads} onControl={(id, action) => void controlYoutubeDownload(id, action)} onPlay={(item) => void playYoutubeDownload(item)} onMenu={(item, event) => openDownloadedTrackMenu(item, event)} />
-                      {youtubeDownloads.filter((item) => !item.playlist).map((item) => (
+                      <DownloadProgressList downloads={youtubeDownloads} onControl={(id, action) => void controlYoutubeDownload(id, action)} onPlay={(item) => void playYoutubeDownload(item)} onMenu={(item, event) => openDownloadedTrackMenu(item, event)} renderSong={(item) => (
                         <article
                           className={`download-item status-${item.status}`}
+                          data-download-id={item.id}
                           key={item.id}
                         >
                           <div className="download-item-main">
@@ -4947,7 +5037,7 @@ export default function App() {
                             )}
                           </div>
                         </article>
-                      ))}
+                      )} />
                       </>
                     ) : (
                       <div className="download-manager-empty">
@@ -5837,6 +5927,7 @@ export default function App() {
               if (page.section !== "Home" || page.detail) navigate({ section: "Home" });
             }}
             onYoutube={openYoutubePage}
+            onSpotify={openSpotifyPage}
             onDownloads={openMobileDownloads}
             onSearch={() => { setMobileTab("search"); setSearch(""); }}
           />
