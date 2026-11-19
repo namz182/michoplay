@@ -16,6 +16,8 @@ export type PlayerSnapshot = {
 export type YoutubeSearchResult = { id: string; title: string; artist?: string | null; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean; hasLyrics: boolean };
 export type SpotifySong = { id: string; title: string; artist: string; thumbnailUrl?: string | null; durationSeconds?: number | null };
 export type SpotifyPublicMetadata = { title: string; thumbnailUrl?: string | null; author?: string | null; kind: "track" | "album" | "playlist"; songs: SpotifySong[]; totalTracks?: number | null };
+export type LyricsData = { text: string | null; offsetMs: number; source: string | null };
+export type LyricsSearchResult = { id: number; trackName: string; artistName: string; albumName: string; duration: number | null; instrumental: boolean; plainLyrics: string | null; syncedLyrics: string | null };
 export type YoutubeDownloadPlaylist = { id: string; title: string; index: number; total: number };
 export type YoutubeDownloadPhase = "queued" | "preparing" | "fetching" | "downloading" | "processing" | "metadata" | "lyrics" | "verifying" | "saving" | "paused" | "completed" | "failed" | "cancelled";
 export type YoutubeDownload = { id: string; title: string; url: string; thumbnail: string | null; isPlaylist: boolean; playlist?: YoutubeDownloadPlaylist | null; status: "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled"; phase: YoutubeDownloadPhase; percent: number | null; downloadedBytes: number | null; totalBytes: number | null; totalBytesEstimated: boolean; speedBytesPerSecond: number | null; etaSeconds: number | null; message: string; filePaths?: string[] };
@@ -55,7 +57,10 @@ export const api = {
     artworkDataUrl: artworkDataUrl ?? null,
   }),
   mediaStop: () => invoke<void>("media_stop"),
-  lyricsRead: (trackId: number) => invoke<string | null>("lyrics_read", { trackId }),
+  lyricsRead: (trackId: number) => invoke<LyricsData>("lyrics_read", { trackId }),
+  lyricsSearch: (trackId: number, query = "") => invoke<LyricsSearchResult[]>("lyrics_search", { trackId, query }),
+  lyricsImport: (trackId: number, text: string, sourceId: number) => invoke<LyricsData>("lyrics_import", { trackId, text, sourceId }),
+  lyricsSetOffset: (trackId: number, offsetMs: number) => invoke<number>("lyrics_set_offset", { trackId, offsetMs }),
   embedDownloadedLyrics: (paths: string[]) => invoke<string[]>("embed_downloaded_lyrics", { paths }),
   mediaTakePendingActions: () => invoke<string[]>("media_take_pending_actions"),
   refresh: (folders: string[]) => invoke<Track[]>("library_refresh", { folders }),

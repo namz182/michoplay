@@ -484,26 +484,247 @@ fn embed_downloaded_lyrics(paths: Vec<String>) -> Vec<String> {
     embedded
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LyricsData {
+    text: Option<String>,
+    offset_ms: i32,
+    source: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LyricsSearchResult {
+    id: u64,
+    track_name: String,
+    artist_name: String,
+    album_name: String,
+    duration: Option<f64>,
+    #[serde(default)]
+    instrumental: bool,
+    plain_lyrics: Option<String>,
+    synced_lyrics: Option<String>,
+}
+
 #[tauri::command]
-fn lyrics_read(track_id: u64, state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let core = state
-        .0
-        .lock()
-        .map_err(|_| "The library is unavailable.".to_owned())?;
-    let track = core
-        .tracks
-        .iter()
-        .find(|track| track.track.id == track_id)
-        .ok_or_else(|| "That song is no longer in the library.".to_owned())?;
-    let path = lyrics_path(&track.path);
-    match fs::read_to_string(path) {
-        Ok(contents) if !contents.trim().is_empty() => Ok(Some(contents)),
-        Ok(_) => Ok(embedded_lyrics(&track.path)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(embedded_lyrics(&track.path))
-        }
-        Err(_) => Err("Could not read this song’s lyrics.".to_owned()),
+async fn lyrics_search(
+    track_id: u64,
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<LyricsSearchResult>, String> {
+    let (title, artist) = {
+        let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
+        let track = core
+            .tracks
+            .get(core.find_track_index(track_id)?)
+            .ok_or_else(|| "That song is no longer in the library.".to_owned())?;
+        (track.track.title.clone(), track.track.artist.clone())
+    };
+    let query = query.trim();
+    if query.len() > 200 {
+        return Err("The lyrics search is too long.".to_owned());
     }
+    let client = reqwest::Client::builder()
+        .user_agent(format!(
+            "MichoPlay/{} (https://michoplay.mainza.dev/)",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|_| "Could not prepare the lyrics search.".to_owned())?;
+    let mut url = url::Url::parse("https://lrclib.net/api/search")
+        .map_err(|_| "Could not prepare the lyrics search.".to_owned())?;
+    {
+        let mut params = url.query_pairs_mut();
+        if query.is_empty() {
+            params
+                .append_pair("track_name", &title)
+                .append_pair("artist_name", &artist);
+        } else {
+            params.append_pair("q", query);
+        }
+    }
+    let response =
+        client.get(url).send().await.map_err(|_| {
+            "Could not reach LRCLIB. Check your connection and try again.".to_owned()
+        })?;
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let wait = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        return Err(wait.map_or_else(
+            || "LRCLIB is busy. Try again shortly.".to_owned(),
+            |seconds| format!("LRCLIB is busy. Try again in {seconds} seconds."),
+        ));
+    }
+    if !response.status().is_success() {
+        return Err("LRCLIB could not search for lyrics right now.".to_owned());
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > 2_000_000)
+    {
+        return Err("The lyrics search response was too large.".to_owned());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| "Could not read the lyrics results.".to_owned())?;
+    if bytes.len() > 2_000_000 {
+        return Err("The lyrics search response was too large.".to_owned());
+    }
+    let results: Vec<LyricsSearchResult> = serde_json::from_slice(&bytes)
+        .map_err(|_| "LRCLIB returned lyrics in an unexpected format.".to_owned())?;
+    Ok(results
+        .into_iter()
+        .filter(|item| {
+            !item.instrumental && (item.synced_lyrics.is_some() || item.plain_lyrics.is_some())
+        })
+        .take(20)
+        .collect())
+}
+
+#[tauri::command]
+fn lyrics_read(track_id: u64, state: State<'_, AppState>) -> Result<LyricsData, String> {
+    let (path, storage_dir) = {
+        let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
+        let track = core
+            .tracks
+            .get(core.find_track_index(track_id)?)
+            .ok_or_else(|| "That song is no longer in the library.".to_owned())?;
+        (track.path.clone(), core.storage_dir.clone())
+    };
+    let connection =
+        open_library_cache(&storage_dir).map_err(|_| "Could not open saved lyrics.".to_owned())?;
+    let saved = connection
+        .query_row(
+            "SELECT text, offset_ms, source FROM track_lyrics WHERE path = ?1",
+            [path.to_string_lossy().as_ref()],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|_| "Could not read saved lyrics.".to_owned())?;
+    let (saved_text, offset_ms, source) = saved.unwrap_or((None, 0, None));
+    let sidecar = fs::read_to_string(lyrics_path(&path))
+        .ok()
+        .filter(|text| !text.trim().is_empty());
+    Ok(LyricsData {
+        text: saved_text.or(sidecar).or_else(|| embedded_lyrics(&path)),
+        offset_ms,
+        source,
+    })
+}
+
+#[tauri::command]
+fn lyrics_import(
+    track_id: u64,
+    text: String,
+    source_id: u64,
+    state: State<'_, AppState>,
+) -> Result<LyricsData, String> {
+    if text.trim().is_empty() || text.len() > 250_000 || source_id == 0 {
+        return Err("The selected lyrics could not be imported.".to_owned());
+    }
+    let (path, storage_dir, track_json) = {
+        let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
+        let index = core.find_track_index(track_id)?;
+        let mut track = core.tracks[index].track.clone();
+        track.has_lyrics = true;
+        let track_json = serde_json::to_string(&track)
+            .map_err(|_| "Could not update the library.".to_owned())?;
+        (
+            core.tracks[index].path.clone(),
+            core.storage_dir.clone(),
+            track_json,
+        )
+    };
+    let path_text = path.to_string_lossy().into_owned();
+    let source = format!("LRCLIB:{source_id}");
+    {
+        let _cache_write = LIBRARY_CACHE_WRITE_LOCK
+            .lock()
+            .map_err(|_| "The library cache is unavailable.")?;
+        let mut connection = open_library_cache(&storage_dir)
+            .map_err(|_| "Could not open saved lyrics.".to_owned())?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| "Could not save the selected lyrics.".to_owned())?;
+        transaction.execute(
+            "INSERT INTO track_lyrics(path, text, source, offset_ms) VALUES (?1, ?2, ?3, 0)
+             ON CONFLICT(path) DO UPDATE SET text = excluded.text, source = excluded.source, offset_ms = 0",
+            params![path_text, text, source],
+        ).map_err(|_| "Could not save the selected lyrics.".to_owned())?;
+        transaction
+            .execute(
+                "UPDATE tracks SET track_json = ?1 WHERE path = ?2",
+                params![track_json, path_text],
+            )
+            .map_err(|_| "Could not update the library.".to_owned())?;
+        transaction
+            .commit()
+            .map_err(|_| "Could not save the selected lyrics.".to_owned())?;
+    }
+    {
+        let mut core = state.0.lock().map_err(|_| "The library is unavailable.")?;
+        if let Ok(index) = core.find_track_index(track_id) {
+            if core.tracks[index].path == path {
+                core.tracks[index].track.has_lyrics = true;
+            }
+        }
+    }
+    // Imported lyrics remain available in SQLite even when Android or a
+    // read-only music folder does not allow editing the audio file.
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"))
+    {
+        let _ = embed_lyrics_text(&path, &text);
+    }
+    Ok(LyricsData {
+        text: Some(text),
+        offset_ms: 0,
+        source: Some(source),
+    })
+}
+
+#[tauri::command]
+fn lyrics_set_offset(
+    track_id: u64,
+    offset_ms: i32,
+    state: State<'_, AppState>,
+) -> Result<i32, String> {
+    if !(-30_000..=30_000).contains(&offset_ms) {
+        return Err("Lyrics timing can be adjusted by up to 30 seconds.".to_owned());
+    }
+    let (path, storage_dir) = {
+        let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
+        let index = core.find_track_index(track_id)?;
+        (
+            core.tracks[index].track.path.clone(),
+            core.storage_dir.clone(),
+        )
+    };
+    let _cache_write = LIBRARY_CACHE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "The library cache is unavailable.")?;
+    let connection =
+        open_library_cache(&storage_dir).map_err(|_| "Could not open saved lyrics.".to_owned())?;
+    connection
+        .execute(
+            "INSERT INTO track_lyrics(path, offset_ms) VALUES (?1, ?2)
+         ON CONFLICT(path) DO UPDATE SET offset_ms = excluded.offset_ms",
+            params![path, offset_ms],
+        )
+        .map_err(|_| "Could not save lyrics timing.".to_owned())?;
+    Ok(offset_ms)
 }
 
 #[derive(Serialize)]
@@ -1232,10 +1453,9 @@ fn read_folder_art(folder: &Path) -> Option<Arc<Artwork>> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn thumbnail_for_audio(path: &Path) -> Option<PathBuf> {
-    let parent = path.parent()?;
+fn thumbnail_for_audio(path: &Path, thumbnail_dir: &Path) -> Option<PathBuf> {
     let stem = path.file_stem()?.to_str()?;
-    std::fs::read_dir(parent)
+    std::fs::read_dir(thumbnail_dir)
         .ok()?
         .flatten()
         .map(|entry| entry.path())
@@ -1252,6 +1472,33 @@ fn thumbnail_for_audio(path: &Path) -> Option<PathBuf> {
                     })
                 && candidate.is_file()
         })
+}
+
+#[cfg(not(target_os = "android"))]
+struct DownloadThumbnailDir(PathBuf);
+
+#[cfg(not(target_os = "android"))]
+impl DownloadThumbnailDir {
+    fn create(id: &str) -> Result<Self, String> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "michoplay-thumbnails-{}-{nonce}-{id}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path)
+            .map_err(|_| "MichoPlay couldn't prepare temporary artwork storage.".to_owned())?;
+        Ok(Self(path))
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+impl Drop for DownloadThumbnailDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1362,6 +1609,12 @@ fn open_library_cache(storage_dir: &Path) -> rusqlite::Result<Connection> {
             artist TEXT NOT NULL,
             album TEXT NOT NULL,
             release_date TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS track_lyrics (
+            path TEXT PRIMARY KEY NOT NULL,
+            text TEXT,
+            source TEXT,
+            offset_ms INTEGER NOT NULL DEFAULT 0
         );",
     )?;
     Ok(connection)
@@ -1388,6 +1641,21 @@ fn load_metadata_overrides(storage_dir: &Path) -> HashMap<String, TrackMetadataE
         ))
     }) else {
         return HashMap::new();
+    };
+    rows.flatten().collect()
+}
+
+fn load_imported_lyrics_paths(storage_dir: &Path) -> HashSet<String> {
+    let Ok(connection) = open_library_cache(storage_dir) else {
+        return HashSet::new();
+    };
+    let Ok(mut statement) =
+        connection.prepare("SELECT path FROM track_lyrics WHERE text IS NOT NULL")
+    else {
+        return HashSet::new();
+    };
+    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
+        return HashSet::new();
     };
     rows.flatten().collect()
 }
@@ -1898,9 +2166,13 @@ where
 
     let mut result = result.into_iter().flatten().collect::<Vec<_>>();
     let metadata_overrides = load_metadata_overrides(storage_dir);
+    let imported_lyrics_paths = load_imported_lyrics_paths(storage_dir);
     for item in &mut result {
         if let Some(edit) = metadata_overrides.get(&item.track.path) {
             apply_metadata_edit(&mut item.track, edit);
+        }
+        if imported_lyrics_paths.contains(&item.track.path) {
+            item.track.has_lyrics = true;
         }
     }
     let mut shared_artwork = HashMap::<String, Arc<Artwork>>::new();
@@ -4367,6 +4639,8 @@ fn run_youtube_download(
         directory
     };
     let output_template = output_directory.join("%(title).160B.%(ext)s");
+    let thumbnail_dir = DownloadThumbnailDir::create(id)?;
+    let thumbnail_template = thumbnail_dir.0.join("%(title).160B.%(ext)s");
     let mut command = hidden_command(yt_dlp);
     #[cfg(unix)]
     {
@@ -4401,6 +4675,8 @@ fn run_youtube_download(
         .arg("--postprocessor-args")
         .arg("ExtractAudio+ffmpeg_o:-threads 1")
         .arg("--write-thumbnail")
+        .arg("--output")
+        .arg(format!("thumbnail:{}", thumbnail_template.to_string_lossy()))
         .arg("--write-subs")
         .arg("--write-auto-subs")
         .arg("--sub-langs")
@@ -4624,16 +4900,14 @@ fn run_youtube_download(
                 set_youtube_download_phase(app, id, "lyrics", "Fetching and embedding lyrics…");
             }
             attach_downloaded_lyrics(path);
-            if let Some(thumbnail) = thumbnail_for_audio(path) {
+            if let Some(thumbnail) = thumbnail_for_audio(path, &thumbnail_dir.0) {
                 set_youtube_download_phase(
                     app,
                     id,
                     "metadata",
                     "Adding artwork and song information…",
                 );
-                if embed_thumbnail_in_mp3(path, &thumbnail).is_ok() {
-                    let _ = std::fs::remove_file(thumbnail);
-                }
+                let _ = embed_thumbnail_in_mp3(path, &thumbnail);
             }
             set_youtube_download_phase(app, id, "saving", "Adding song to your library…");
             if !youtube_download_is_active(app, id) {
@@ -5852,6 +6126,9 @@ pub fn run() {
             youtube_download_remove,
             library_scan_folder,
             lyrics_read,
+            lyrics_search,
+            lyrics_import,
+            lyrics_set_offset,
             embed_downloaded_lyrics,
             library_cancel_scan,
             library_refresh,

@@ -69,6 +69,7 @@ import { saveStoredData, stored } from "../lib/storage";
 import type {
   PlayerSnapshot,
   Track,
+  LyricsData,
   YoutubeDownload,
   YoutubeDownloadPlaylist,
   YoutubeSearchResult,
@@ -132,6 +133,10 @@ export default function App() {
   const [fullModeLyrics, setFullModeLyrics] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [lyricsText, setLyricsText] = useState<string | null>(null);
+  const [lyricsOffsetMs, setLyricsOffsetMs] = useState(0);
+  const [lyricsSource, setLyricsSource] = useState<string | null>(null);
+  const [lyricsLoading, setLyricsLoading] = useState(false);
+  const lyricsRequestVersion = useRef(0);
   const [mobileLyricsExpanded, setMobileLyricsExpanded] = useState(false);
   const [mobilePlayerLyricsOpen, setMobilePlayerLyricsOpen] = useState(false);
   const [mobileTrackSwipeOffset, setMobileTrackSwipeOffset] = useState(0);
@@ -2472,22 +2477,6 @@ export default function App() {
     player.currentTrackId === null
       ? null
       : (trackMap.get(player.currentTrackId) ?? null);
-  useEffect(() => {
-    let live = true;
-    setLyricsText(null);
-    if (current?.hasLyrics)
-      void api
-        .lyricsRead(current.id)
-        .then((text) => {
-          if (live) setLyricsText(text);
-        })
-        .catch(() => {
-          if (live) setLyricsText(null);
-        });
-    return () => {
-      live = false;
-    };
-  }, [current?.id, current?.hasLyrics]);
   const currentArtworkDataUrl = useArtwork(current?.artworkKey);
   const recentTracks = useMemo(
     () =>
@@ -2504,6 +2493,36 @@ export default function App() {
   const nowPlayingTrack = current;
   const nowPlayingIsActive = current !== null && player.isPlaying;
   const footerTrack = current ?? recentTracks[0] ?? null;
+  useEffect(() => {
+    const version = ++lyricsRequestVersion.current;
+    setLyricsText(null);
+    setLyricsOffsetMs(0);
+    setLyricsSource(null);
+    setLyricsLoading(Boolean(footerTrack));
+    if (footerTrack) {
+      void api.lyricsRead(footerTrack.id).then((result) => {
+        if (version !== lyricsRequestVersion.current) return;
+        setLyricsText(result.text);
+        setLyricsOffsetMs(result.offsetMs);
+        setLyricsSource(result.source);
+      }).catch(() => {
+        if (version === lyricsRequestVersion.current) setLyricsText(null);
+      }).finally(() => {
+        if (version === lyricsRequestVersion.current) setLyricsLoading(false);
+      });
+    }
+    return () => { lyricsRequestVersion.current += 1; };
+  }, [footerTrack?.id]);
+  function handleLyricsImported(trackId: number, result: LyricsData) {
+    if (footerTrack?.id === trackId) {
+      lyricsRequestVersion.current += 1;
+      setLyricsText(result.text);
+      setLyricsOffsetMs(result.offsetMs);
+      setLyricsSource(result.source);
+      setLyricsLoading(false);
+    }
+    setTracks((previous) => previous.map((track) => track.id === trackId ? { ...track, hasLyrics: true } : track));
+  }
   const downloadPlaybackKey = youtubeDownloads.map((item) => `${item.id}:${item.status}`).join("|");
   useEffect(() => {
     const downloadsById = new Map(youtubeDownloads.map((item) => [item.id, item]));
@@ -3909,12 +3928,17 @@ export default function App() {
             className="content-scroll"
             aria-label={heading}
           >
-            {!isAndroid && lyricsOpen && footerTrack?.hasLyrics ? (
+            {!isAndroid && lyricsOpen && footerTrack ? (
               <div className="desktop-lyrics-stage">
                 <LyricsView
                   track={footerTrack}
                   text={lyricsText ?? ""}
                   positionMs={player.positionMs}
+                  offsetMs={lyricsOffsetMs}
+                  source={lyricsSource}
+                  loading={lyricsLoading}
+                  onImported={(result) => handleLyricsImported(footerTrack.id, result)}
+                  onOffsetSaved={setLyricsOffsetMs}
                   onSeek={(positionMs) => void run(() => api.seek(positionMs))}
                 />
               </div>
@@ -5320,7 +5344,7 @@ export default function App() {
               aria-label={lyricsOpen ? "Close lyrics" : "Open lyrics"}
               aria-pressed={lyricsOpen}
               title={lyricsOpen ? "Close lyrics" : "Lyrics"}
-              disabled={!footerTrack?.hasLyrics}
+              disabled={!footerTrack}
               onClick={() => {
                 const next = !lyricsOpen;
                 setLyricsOpen(next);
@@ -5450,6 +5474,11 @@ export default function App() {
                       track={footerTrack}
                       text={lyricsText ?? ""}
                       positionMs={player.positionMs}
+                      offsetMs={lyricsOffsetMs}
+                      source={lyricsSource}
+                      loading={lyricsLoading}
+                      onImported={(result) => handleLyricsImported(footerTrack.id, result)}
+                      onOffsetSaved={setLyricsOffsetMs}
                       onSeek={(positionMs) =>
                         void run(() => api.seek(positionMs))
                       }
@@ -6080,13 +6109,18 @@ export default function App() {
                     )}
                   </>
                 )}
-                {mobilePlayerLyricsOpen && footerTrack.hasLyrics ? (
+                {mobilePlayerLyricsOpen ? (
                   <div className="mobile-player-inline-lyrics">
                     <LyricsView
                       track={footerTrack}
                       text={lyricsText ?? ""}
                       positionMs={player.positionMs}
+                      offsetMs={lyricsOffsetMs}
+                      source={lyricsSource}
+                      loading={lyricsLoading}
                       expanded
+                      onImported={(result) => handleLyricsImported(footerTrack.id, result)}
+                      onOffsetSaved={setLyricsOffsetMs}
                       onExpand={() => setMobileLyricsExpanded(true)}
                       onClose={() => setMobilePlayerLyricsOpen(false)}
                       onSeek={(positionMs) =>
@@ -6121,6 +6155,7 @@ export default function App() {
                   track={footerTrack}
                   text={lyricsText ?? ""}
                   positionMs={player.positionMs}
+                  offsetMs={lyricsOffsetMs}
                   preview
                   onExpand={() => setMobilePlayerLyricsOpen(true)}
                 />
@@ -6228,7 +6263,7 @@ export default function App() {
                 </button>
               </div>
               <div
-                className={`mobile-player-actions ${footerTrack.hasLyrics ? "has-lyrics" : ""}`}
+                className="mobile-player-actions has-lyrics"
               >
                 <button
                   className={`mobile-player-timer ${player.sleepTimerRemainingMs !== null || player.sleepTimerAtTrackEnd ? "active" : ""}`}
@@ -6251,16 +6286,14 @@ export default function App() {
                     </span>
                   )}
                 </button>
-                {footerTrack.hasLyrics && (
-                  <button
-                    className="mobile-lyrics-trigger"
-                    aria-label="Show lyrics"
-                    title="Lyrics"
-                    onClick={() => setMobilePlayerLyricsOpen(true)}
-                  >
-                    <Mic2 size={22} />
-                  </button>
-                )}
+                <button
+                  className="mobile-lyrics-trigger"
+                  aria-label="Show lyrics"
+                  title="Lyrics"
+                  onClick={() => setMobilePlayerLyricsOpen(true)}
+                >
+                  <Mic2 size={22} />
+                </button>
                 <button
                   aria-label="Show queue"
                   onClick={() => setMobileQueueOpen(true)}
@@ -6286,7 +6319,7 @@ export default function App() {
           )}
         </section>
       )}
-      {isAndroid && mobileLyricsExpanded && footerTrack?.hasLyrics && (
+      {isAndroid && mobileLyricsExpanded && footerTrack && (
         <div className="mobile-lyrics-fullscreen">
           <Cover
             className="mobile-lyrics-screen-art"
@@ -6309,7 +6342,12 @@ export default function App() {
             track={footerTrack}
             text={lyricsText ?? ""}
             positionMs={player.positionMs}
+            offsetMs={lyricsOffsetMs}
+            source={lyricsSource}
+            loading={lyricsLoading}
             expanded
+            onImported={(result) => handleLyricsImported(footerTrack.id, result)}
+            onOffsetSaved={setLyricsOffsetMs}
             onSeek={(positionMs) => void run(() => api.seek(positionMs))}
           />
         </div>
