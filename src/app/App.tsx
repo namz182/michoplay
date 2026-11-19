@@ -3778,6 +3778,17 @@ export default function App() {
                 {mobileTab === "home" && (
                   <button
                     className="mobile-icon-button"
+                    aria-label="Add root folder"
+                    title="Add root folder"
+                    disabled={scanning}
+                    onClick={chooseLibrarySource}
+                  >
+                    <Plus size={24} />
+                  </button>
+                )}
+                {mobileTab === "home" && (
+                  <button
+                    className="mobile-icon-button"
                     aria-label="Search music"
                     onClick={() => {
                       setMobileTab("search");
@@ -4284,6 +4295,16 @@ export default function App() {
                               </div>
                             )}
                         </div>
+                        {!isAndroid && page.section === "Home" && !page.detail && (
+                          <button
+                            className="home-shelf-action home-heading-add"
+                            disabled={scanning}
+                            onClick={chooseLibrarySource}
+                          >
+                            <Plus size={14} />
+                            Add root folder
+                          </button>
+                        )}
                       </div>
                     </div>
                     {listPage ? (

@@ -104,6 +104,8 @@ export function LyricsView({
   }
 
   function openSearch() {
+    const titleQuery = [track.title, track.artist].filter(Boolean).join(" · ");
+    setQuery((current) => current.trim() ? current : titleQuery);
     setActionsOpen(true);
     setSearchOpen(true);
     if (!results.length) void searchLyrics("");
@@ -160,8 +162,8 @@ export function LyricsView({
   }
 
   const selected = results.find((item) => item.id === selectedId);
-  const previewText = selected?.syncedLyrics || selected?.plainLyrics || "";
-  const previewLines = previewText.split(/\r?\n/).map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]\s*/, "").trim()).filter(Boolean).slice(0, 4);
+  const previewText = selected?.syncedLyrics?.trim() || selected?.plainLyrics?.trim() || "";
+  const previewLines = previewText.split(/\r?\n/).map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]\s*/, "").trim()).filter(Boolean).slice(0, 5);
   const errorAlert = error ? <div className="lyrics-search-error" role="alert">
     <span>{error}</span>
     <button type="button" aria-label="Dismiss lyrics alert" title="Dismiss alert" onClick={() => setError("")}><X size={15} /></button>
@@ -192,7 +194,7 @@ export function LyricsView({
     </div>}
     {searchOpen ? <div className="lyrics-search-panel">
       <form className="lyrics-search-form" onSubmit={(event: FormEvent) => { event.preventDefault(); void searchLyrics(query); }}>
-        <input aria-label="Search lyrics by song or artist" placeholder={`${track.title} · ${track.artist}`} value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input aria-label="Search lyrics by song or artist" placeholder="Song title or artist" value={query} onChange={(event) => setQuery(event.target.value)} />
         <button type="submit" disabled={searching}>{searching ? "Searching…" : "Search"}</button>
       </form>
       {errorAlert}
@@ -206,10 +208,16 @@ export function LyricsView({
           <span className="lyrics-result-meta">{item.duration !== null && `${durationLabel(item.duration)} · `}{item.syncedLyrics ? "Synced" : "Plain"}</span>
         </button>)}
       </div> : <p className="lyrics-search-status">{searchFailed ? "Search again to retry." : "No lyrics found. Try a shorter song or artist name."}</p>}
-      {selected && <div className="lyrics-import-preview">
-        <strong>{selected.trackName} · {selected.artistName}</strong>
-        <div>{previewLines.map((line, index) => <p key={index}>{line}</p>)}</div>
-        <button disabled={importing} onClick={() => void importSelected(selected)}>{importing ? "Importing…" : "Import lyrics"}</button>
+      {selected && <div className="lyrics-import-preview" role="group" aria-label={`Lyrics preview for ${selected.trackName}`}>
+        <div className="lyrics-import-preview-copy">
+          <strong>{selected.trackName}</strong>
+          <span>{selected.artistName}{selected.albumName ? ` · ${selected.albumName}` : ""}</span>
+          <small>{selected.duration !== null ? `${durationLabel(selected.duration)} · ` : ""}{selected.syncedLyrics?.trim() ? "Synced" : "Plain"} lyrics</small>
+        </div>
+        <button disabled={importing || !previewText.trim()} onClick={() => void importSelected(selected)}>{importing ? "Importing…" : "Import lyrics"}</button>
+        <div className="lyrics-import-preview-lines">
+          {previewLines.length ? previewLines.map((line, index) => <p key={index}>{line}</p>) : <p className="lyrics-import-preview-empty">No lyric text is available for this match.</p>}
+        </div>
       </div>}
     </div> : <>
       {errorAlert}
