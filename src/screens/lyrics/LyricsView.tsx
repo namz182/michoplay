@@ -210,8 +210,8 @@ export function LyricsView({
       <div className="lyrics-actions">
         {source === "YouTube:captions" && <button type="button" aria-label="Find song lyrics to replace captions" title="Find song lyrics" onClick={openSearch}><Search size={17} /></button>}
         <button type="button" className={draftOffsetMs !== offsetMs ? "lyrics-actions-unsaved" : undefined} aria-label={`${actionsOpen ? "Hide" : "Show"} lyrics actions${draftOffsetMs !== offsetMs ? ", unsaved timing changes" : ""}`} aria-expanded={actionsOpen} title={draftOffsetMs !== offsetMs ? "Unsaved timing changes" : actionsOpen ? "Hide actions" : "Lyrics actions"} onClick={toggleActions}><MoreHorizontal size={19} /></button>
+        {onExpand && <button aria-label="Open lyrics in full mode" title="Full mode" onClick={onExpand}><Maximize2 size={17} /></button>}
         {onClose && <button aria-label="Close lyrics" title="Close lyrics" onClick={onClose}><X size={18} /></button>}
-        {onExpand && <button aria-label="Expand lyrics" title="Expand lyrics" onClick={onExpand}><Maximize2 size={17} /></button>}
       </div>
     </header>
     {actionsOpen && <div className="lyrics-actions-panel">

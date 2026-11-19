@@ -941,12 +941,21 @@ export default function App() {
       return;
     }
     let active = true;
-    setStartupPhase("Preparing your library…");
+    setStartupPhase("Loading saved songs…");
+    void api
+      .cachedTracks()
+      .then((cached) => {
+        if (!active) return;
+        if (cached.length) setTracks(cached);
+        setStartupLoading(false);
+      })
+      .catch(() => {
+        if (active) setStartupLoading(false);
+      });
     void api
       .youtubeMusicDirectory()
       .then(async (directory) => {
         if (!active) return;
-        setStartupPhase("Loading saved music…");
         const savedRoots = await api.librarySavedRoots().catch(() => []);
         const discoveredRoots = isAndroid
           ? await api.discoverMusicFolders().catch((error) => {
@@ -976,13 +985,6 @@ export default function App() {
               ],
         );
         try {
-          setStartupPhase("Loading cached songs…");
-          const cached = await api.cachedTracks().catch(() => []);
-          if (!active) return;
-          if (cached.length) {
-            setTracks(cached);
-            setStartupLoading(false);
-          }
           setStartupPhase("Scanning music and artwork…");
           setScanning(true);
           const scanned = await api.refresh(nextRoots);
