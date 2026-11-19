@@ -202,8 +202,9 @@ export function LyricsView({
   return <section className={`lyrics-view ${expanded ? "expanded" : ""}`} aria-label={`Lyrics for ${track.title}`}>
     <div className="lyrics-backdrop"><Cover className="lyrics-backdrop-art" keys={[track.artworkKey]} /></div>
     <header className="lyrics-heading">
-      <div><strong>Lyrics</strong>{source?.startsWith("LRCLIB:") && <span>Imported from LRCLIB</span>}</div>
+      <div><strong>Lyrics</strong>{source?.startsWith("LRCLIB:") ? <span>Imported from LRCLIB</span> : source === "YouTube:captions" ? <span>YouTube captions</span> : null}</div>
       <div className="lyrics-actions">
+        {source === "YouTube:captions" && <button type="button" aria-label="Find song lyrics to replace captions" title="Find song lyrics" onClick={openSearch}><Search size={17} /></button>}
         <button type="button" className={draftOffsetMs !== offsetMs ? "lyrics-actions-unsaved" : undefined} aria-label={`${actionsOpen ? "Hide" : "Show"} lyrics actions${draftOffsetMs !== offsetMs ? ", unsaved timing changes" : ""}`} aria-expanded={actionsOpen} title={draftOffsetMs !== offsetMs ? "Unsaved timing changes" : actionsOpen ? "Hide actions" : "Lyrics actions"} onClick={toggleActions}><MoreHorizontal size={19} /></button>
         {onClose && <button aria-label="Close lyrics" title="Close lyrics" onClick={onClose}><X size={18} /></button>}
         {onExpand && <button aria-label="Expand lyrics" title="Expand lyrics" onClick={onExpand}><Maximize2 size={17} /></button>}

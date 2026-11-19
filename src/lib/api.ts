@@ -43,6 +43,7 @@ export const api = {
   pickMusicFolder: () => invoke<{ path: string; count: number; name: string }>("library_pick_music_folder"),
   youtubeSearch: (query: string, limit = 15, offset = 0, includeLyrics = false, playlistItems = false) => invoke<YoutubeSearchResult[]>("youtube_search", { query, limit, offset, includeLyrics, playlistItems }),
   youtubeDownloadsState: () => invoke<YoutubeDownload[]>("youtube_downloads_state"),
+  youtubeDownloadSetConcurrency: (maxConcurrent: number) => invoke<void>("youtube_download_set_concurrency", { maxConcurrent }),
   youtubeDownloadEnqueue: (url: string, title: string, thumbnail: string | null, isPlaylist: boolean, playlist?: YoutubeDownloadPlaylist, artist?: string) => invoke<YoutubeDownload>("youtube_download_enqueue", { url, title, thumbnail, isPlaylist, playlist: playlist ?? null, artist: artist ?? null }),
   youtubeDownloadPause: (id: string) => invoke<void>("youtube_download_pause", { id }),
   youtubeDownloadResume: (id: string) => invoke<void>("youtube_download_resume", { id }),

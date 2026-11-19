@@ -42,7 +42,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
 mod app_data;
+#[cfg(not(target_os = "android"))]
+mod captions;
 use app_data::{app_data_load, app_data_migrate, app_data_save};
+#[cfg(not(target_os = "android"))]
+use captions::vtt_to_lrc;
 
 const EQ_FREQUENCIES: [f32; 6] = [60.0, 150.0, 400.0, 1_000.0, 2_400.0, 15_000.0];
 static LIBRARY_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -308,95 +312,6 @@ fn embed_lyrics_text(audio_path: &Path, contents: &str) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn vtt_timestamp_ms(value: &str) -> Option<u64> {
-    let (time, fraction) = value.trim().split_once('.')?;
-    let parts = time
-        .split(':')
-        .map(str::parse::<u64>)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    let seconds = match parts.as_slice() {
-        [minutes, seconds] => minutes.checked_mul(60)?.checked_add(*seconds)?,
-        [hours, minutes, seconds] => hours
-            .checked_mul(3600)?
-            .checked_add(minutes.checked_mul(60)?)?
-            .checked_add(*seconds)?,
-        _ => return None,
-    };
-    let millis = fraction.chars().take(3).collect::<String>();
-    let millis = millis.parse::<u64>().ok()? * 10_u64.pow(3 - millis.len() as u32);
-    seconds.checked_mul(1000)?.checked_add(millis)
-}
-
-#[cfg(not(target_os = "android"))]
-fn append_vtt_cue(lyrics: &mut Vec<String>, start_ms: Option<u64>, cue: &mut Vec<String>) {
-    let Some(start_ms) = start_ms else {
-        cue.clear();
-        return;
-    };
-    let raw = cue.join(" ");
-    cue.clear();
-    let mut plain = String::new();
-    let mut in_tag = false;
-    for character in raw.chars() {
-        match character {
-            '<' => in_tag = true,
-            '>' if in_tag => in_tag = false,
-            _ if !in_tag => plain.push(character),
-            _ => {}
-        }
-    }
-    let plain = plain
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ");
-    let line = plain.split_whitespace().collect::<Vec<_>>().join(" ");
-    if line.is_empty()
-        || lyrics.last().is_some_and(|previous| {
-            previous
-                .split_once(']')
-                .is_some_and(|(_, text)| text == line)
-        })
-    {
-        return;
-    }
-    lyrics.push(format!(
-        "[{:02}:{:02}.{:02}]{}",
-        start_ms / 60_000,
-        start_ms / 1000 % 60,
-        start_ms % 1000 / 10,
-        line
-    ));
-}
-
-#[cfg(not(target_os = "android"))]
-fn vtt_to_lrc(vtt: &str) -> String {
-    let mut lyrics = Vec::new();
-    let mut cue = Vec::new();
-    let mut start_ms = None;
-    for row in vtt.lines().chain(std::iter::once("")) {
-        let row = row.trim();
-        if let Some((start, _)) = row.split_once("-->") {
-            append_vtt_cue(&mut lyrics, start_ms, &mut cue);
-            start_ms = vtt_timestamp_ms(start);
-        } else if row.is_empty() {
-            append_vtt_cue(&mut lyrics, start_ms, &mut cue);
-            start_ms = None;
-        } else if start_ms.is_some() {
-            cue.push(row.to_owned());
-        }
-    }
-    if lyrics.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", lyrics.join("\n"))
-    }
-}
-
-#[cfg(not(target_os = "android"))]
 fn attach_downloaded_lyrics(audio_path: &Path) {
     let Some(parent) = audio_path.parent() else {
         return;
@@ -420,11 +335,20 @@ fn attach_downloaded_lyrics(audio_path: &Path) {
         })
         .collect::<Vec<_>>();
     sources.sort_by_key(|path| {
-        !path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc"))
+        (
+            !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc")),
+            path.clone(),
+        )
     });
     for source in &sources {
+        if source
+            .metadata()
+            .map_or(true, |metadata| metadata.len() > 2_000_000)
+        {
+            continue;
+        }
         let result = if source
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("lrc"))
@@ -616,8 +540,14 @@ fn lyrics_read(track_id: u64, state: State<'_, AppState>) -> Result<LyricsData, 
     let sidecar = fs::read_to_string(lyrics_path(&path))
         .ok()
         .filter(|text| !text.trim().is_empty());
+    let text = saved_text.or(sidecar).or_else(|| embedded_lyrics(&path));
+    let source = source.or_else(|| {
+        text.as_ref()
+            .filter(|text| text.contains("[re:MichoPlay YouTube captions v2]"))
+            .map(|_| "YouTube:captions".to_owned())
+    });
     Ok(LyricsData {
-        text: saved_text.or(sidecar).or_else(|| embedded_lyrics(&path)),
+        text,
         offset_ms,
         source,
     })
@@ -3115,6 +3045,8 @@ struct YoutubeDownloadManager {
     #[cfg(not(target_os = "android"))]
     active_workers: usize,
     #[cfg(not(target_os = "android"))]
+    max_concurrent_downloads: Option<usize>,
+    #[cfg(not(target_os = "android"))]
     last_progress_emit: Option<std::time::Instant>,
     #[cfg(not(target_os = "android"))]
     update_scheduled: bool,
@@ -3127,7 +3059,8 @@ struct YoutubeDownloadManager {
 }
 
 #[cfg(not(target_os = "android"))]
-const MAX_CONCURRENT_YOUTUBE_DOWNLOADS: usize = 3;
+const DEFAULT_CONCURRENT_YOUTUBE_DOWNLOADS: usize = 5;
+const MAX_CONCURRENT_YOUTUBE_DOWNLOADS: usize = 10;
 
 #[derive(Default)]
 #[cfg_attr(target_os = "android", allow(dead_code))]
@@ -4115,6 +4048,39 @@ async fn youtube_downloads_state(
 }
 
 #[tauri::command]
+async fn youtube_download_set_concurrency(
+    max_concurrent: usize,
+    app: AppHandle,
+    state: State<'_, YoutubeDownloadState>,
+    bridge: State<'_, MediaBridge>,
+) -> Result<(), String> {
+    let max_concurrent = max_concurrent.clamp(1, MAX_CONCURRENT_YOUTUBE_DOWNLOADS);
+    #[cfg(target_os = "android")]
+    {
+        let _ = (app, state);
+        let plugin = android_media_plugin(&bridge)?;
+        call_android_media(
+            plugin,
+            "youtubeDownloadSetConcurrency",
+            serde_json::json!({ "maxConcurrent": max_concurrent }),
+        )
+        .await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        let mut manager = state
+            .0
+            .lock()
+            .map_err(|_| "The download manager is unavailable.".to_owned())?;
+        manager.max_concurrent_downloads = Some(max_concurrent);
+        drop(manager);
+        start_youtube_download_workers(app);
+        Ok(())
+    }
+}
+
+#[tauri::command]
 async fn youtube_download_enqueue(
     url: String,
     title: String,
@@ -4387,7 +4353,11 @@ fn start_youtube_download_workers(app: AppHandle) {
                 .filter(|task| task.item.status == "queued")
                 .filter(|task| !task.in_flight)
                 .count();
-            let available = MAX_CONCURRENT_YOUTUBE_DOWNLOADS.saturating_sub(manager.active_workers);
+            let limit = manager
+                .max_concurrent_downloads
+                .unwrap_or(DEFAULT_CONCURRENT_YOUTUBE_DOWNLOADS)
+                .clamp(1, MAX_CONCURRENT_YOUTUBE_DOWNLOADS);
+            let available = limit.saturating_sub(manager.active_workers);
             let count = queued.min(available);
             manager.active_workers += count;
             count
@@ -4407,7 +4377,14 @@ fn youtube_download_worker(app: AppHandle) {
             let Ok(mut manager) = state.0.lock() else {
                 return;
             };
-            if let Some(task) = manager
+            let limit = manager
+                .max_concurrent_downloads
+                .unwrap_or(DEFAULT_CONCURRENT_YOUTUBE_DOWNLOADS)
+                .clamp(1, MAX_CONCURRENT_YOUTUBE_DOWNLOADS);
+            if manager.active_workers > limit {
+                manager.active_workers = manager.active_workers.saturating_sub(1);
+                None
+            } else if let Some(task) = manager
                 .tasks
                 .iter_mut()
                 .find(|task| task.item.status == "queued" && !task.in_flight)
@@ -4679,8 +4656,10 @@ fn run_youtube_download(
         .arg(format!("thumbnail:{}", thumbnail_template.to_string_lossy()))
         .arg("--write-subs")
         .arg("--write-auto-subs")
-        .arg("--sub-langs")
-        .arg("en.*")
+        // Let yt-dlp choose one track, preferring uploaded English captions.
+        // Skip translated variants so original automatic captions are the fallback.
+        .arg("--extractor-args")
+        .arg("youtube:skip=translated_subs")
         .arg("--sub-format")
         .arg("vtt")
         .arg("--ffmpeg-location")
@@ -4774,7 +4753,7 @@ fn run_youtube_download(
                         &app_for_stderr,
                         &task_id,
                         "lyrics",
-                        "Fetching synced lyrics…",
+                        "Fetching captions…",
                     );
                 }
             } else if line.starts_with("[youtube]") {
@@ -4897,7 +4876,7 @@ fn run_youtube_download(
             // inaccessible file is reported without attempting to rewrite it.
             youtube_download_file_size(path)?;
             if has_downloaded_lyrics(path) {
-                set_youtube_download_phase(app, id, "lyrics", "Fetching and embedding lyrics…");
+                set_youtube_download_phase(app, id, "lyrics", "Embedding captions…");
             }
             attach_downloaded_lyrics(path);
             if let Some(thumbnail) = thumbnail_for_audio(path, &thumbnail_dir.0) {
@@ -6119,6 +6098,7 @@ pub fn run() {
             youtube_search,
             spotify_public_metadata,
             youtube_downloads_state,
+            youtube_download_set_concurrency,
             youtube_download_enqueue,
             youtube_download_pause,
             youtube_download_resume,
@@ -6216,7 +6196,7 @@ mod tests {
         assert!(!vtt_sidecar.exists());
         assert_eq!(
             embedded_lyrics(&vtt_audio).as_deref(),
-            Some("[00:01.04]First & second line\n[00:07.25]Next line\n")
+            Some("[re:MichoPlay YouTube captions v2]\n[00:01.042]First & second line\n[00:04.045]\n[00:07.257]Next line\n[00:12.846]\n")
         );
 
         let invalid_audio = root.join("invalid.mp3");

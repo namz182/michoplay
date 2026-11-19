@@ -1,0 +1,62 @@
+[
+  {
+    "name": "manual captions keep precise times and clear instrumental gaps",
+    "vtt": "WEBVTT\n\n00:00:01.042 --> 00:00:04.045\n<c>First &amp; second</c>\nline\n\n00:00:07.257 --> 00:00:12.846\nNext line\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.042]First & second line\n[00:04.045]\n[00:07.257]Next line\n[00:12.846]\n"
+  },
+  {
+    "name": "rolling words retain the start of new text",
+    "vtt": "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nwe<00:00:01.600><c> sing</c>\n\n00:00:03.500 --> 00:00:06.000\nwe sing<00:00:04.200><c> tonight</c>\n\n00:00:09.000 --> 00:00:11.000\nwe sing\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.000]we sing\n[00:04.200]tonight\n[00:06.000]\n[00:09.000]we sing\n[00:11.000]\n"
+  },
+  {
+    "name": "YouTube rolling two line window and 10ms carryover",
+    "vtt": "WEBVTT\n\n00:00:01.000 --> 00:00:03.010 align:start position:0%\nfirst<00:00:01.500><c> line</c>\n\n00:00:03.000 --> 00:00:03.010 align:start position:0%\nfirst line\n\n00:00:03.010 --> 00:00:06.000 align:start position:0%\nfirst line\n<00:00:03.200>second<00:00:03.500> line\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.000]first line\n[00:03.200]second line\n[00:06.000]\n"
+  },
+  {
+    "name": "adjacent repeated phrases are not deleted",
+    "vtt": "WEBVTT\n\n00:01.000 --> 00:02.000\nSing it\n\n00:02.000 --> 00:03.000\nSing it\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.000]Sing it\n[00:02.000]Sing it\n[00:03.000]\n"
+  },
+  {
+    "name": "single shared word is not mistaken for rolling text",
+    "vtt": "WEBVTT\n\n00:01.000 --> 00:03.000\nI want love\n\n00:02.800 --> 00:05.000\nlove is all\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.000]I want love\n[00:02.800]love is all\n[00:05.000]\n"
+  },
+  {
+    "name": "duplicate overlapping cue extends the end without repeating text",
+    "vtt": "WEBVTT\n\n00:01.000 --> 00:03.000\nOne line\n\n00:02.000 --> 00:04.000\nOne line\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.000]One line\n[00:04.000]\n"
+  },
+  {
+    "name": "entities decode once and formatting preserves contractions",
+    "vtt": "WEBVTT\n\n00:01.000 --> 00:03.000\n<v Singer><i>we<00:00:01.500>'re</i> &#x266A; &#233; &amp;lt; &quot;yes&quot; &apos;no&apos;</v>\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.000]we're ♪ é &lt; \"yes\" 'no'\n[00:03.000]\n"
+  },
+  {
+    "name": "notes styles invalid cues CRLF BOM and cue IDs",
+    "vtt": "﻿WEBVTT\r\n\r\nNOTE this is ignored\r\n00:01.000 --> 00:02.000\r\nnot lyrics\r\n\r\nSTYLE\r\n::cue { color: red; }\r\n\r\ncue-id\r\n00:02.001 --> 00:05.009 align:start\r\nValid line\r\n\r\n00:60.000 --> 01:02.000\r\ninvalid\r\n\r\n00:06.000 --> 00:05.000\r\nbackwards\r\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:02.001]Valid line\n[00:05.009]\n"
+  },
+  {
+    "name": "leading inline timestamp and whitespace separators",
+    "vtt": "WEBVTT\n \ncue\n00:00:01.000 --> 00:00:05.000\n<00:00:02.345><c>Later words</c>\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:02.345]Later words\n[00:05.000]\n"
+  },
+  {
+    "name": "empty or bad subtitle response is not embedded",
+    "vtt": "<html>rate limited</html>",
+    "lrc": ""
+  },
+  {
+    "name": "reordered cues and simultaneous lines",
+    "vtt": "WEBVTT\n\n00:05.000 --> 00:06.000\nLater\n\n00:01.000 --> 00:03.000\nFirst\n\n00:01.000 --> 00:03.000\nSecond\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.000]First Second\n[00:03.000]\n[00:05.000]Later\n[00:06.000]\n"
+  },
+  {
+    "name": "fresh inline timing preserves repeated words across overlapping windows",
+    "vtt": "WEBVTT\n\n00:01.000 --> 00:03.010\nsing<00:00:01.500> along\n\n00:03.000 --> 00:05.000\nsing<00:00:03.500> along\n",
+    "lrc": "[re:MichoPlay YouTube captions v2]\n[00:01.000]sing along\n[00:03.000]sing along\n[00:05.000]\n"
+  }
+]

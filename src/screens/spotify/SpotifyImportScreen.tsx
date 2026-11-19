@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Check, Download, LoaderCircle, Music2, Play, RotateCcw, X } from "lucide-react";
+import { LoaderCircle, Music2, X } from "lucide-react";
 import { api, type SpotifyPublicMetadata, type SpotifySong, type Track, type YoutubeDownload, type YoutubeDownloadPlaylist, type YoutubeSearchResult } from "../../lib/api";
 
 import { cleanDownloadMetadata, createDownloadBatch } from "../../lib/downloads";
@@ -13,6 +13,7 @@ type SongStatus = { kind: "searching" | "not-found" | "error" | "library" | "dup
 type Props = {
   libraryTracks: Track[];
   downloads: YoutubeDownload[];
+  downloadConcurrency: number;
   onQueue: (candidate: YoutubeSearchResult, playlist?: YoutubeDownloadPlaylist) => Promise<boolean>;
   onDownloadControl: (id: string, action: "pause" | "resume" | "cancel" | "remove") => void;
 };
@@ -93,7 +94,7 @@ function songQuery(song: SpotifySong) {
   return [song.title, song.artist].filter(Boolean).join(" ").slice(0, 190);
 }
 
-export function SpotifyImportScreen({ libraryTracks, downloads, onQueue, onDownloadControl }: Props) {
+export function SpotifyImportScreen({ libraryTracks, downloads, downloadConcurrency, onQueue, onDownloadControl }: Props) {
   const [url, setUrl] = useState("");
   const [metadata, setMetadata] = useState<SpotifyPublicMetadata | null>(null);
   const [songs, setSongs] = useState<PlaylistSong[]>([]);
@@ -190,7 +191,7 @@ export function SpotifyImportScreen({ libraryTracks, downloads, onQueue, onDownl
     const found = existingMatch ? [existingMatch] : await api.youtubeSearch(songQuery(song), 10, 0, false, false);
     const candidate = existingMatch ?? matchYoutubeSong(song, found);
     if (!candidate) {
-      setStatuses((current) => new Map(current).set(song.key, { kind: "not-found", message: "No confident YouTube match found. Try again." }));
+      setStatuses((current) => new Map(current).set(song.key, { kind: "not-found", message: "No confident match found. Try again." }));
       return;
     }
     setResolvedMatches((current) => new Map(current).set(song.key, candidate));
@@ -209,7 +210,7 @@ export function SpotifyImportScreen({ libraryTracks, downloads, onQueue, onDownl
     }
     const claimedBy = claimedMatches.current.get(candidate.url);
     if (claimedBy && claimedBy !== song.key) {
-      setStatuses((current) => new Map(current).set(song.key, { kind: "duplicate", message: "This YouTube match is already queued for another row." }));
+      setStatuses((current) => new Map(current).set(song.key, { kind: "duplicate", message: "This match is already queued for another row." }));
       return;
     }
     claimedMatches.current.set(candidate.url, song.key);
@@ -241,22 +242,25 @@ export function SpotifyImportScreen({ libraryTracks, downloads, onQueue, onDownl
         } catch (reason) {
           setStatuses((current) => new Map(current).set(song.key, {
             kind: "error",
-            message: reason instanceof Error ? reason.message : "YouTube search failed. Retry the download.",
+            message: reason instanceof Error ? reason.message : "Song search failed. Retry the download.",
           }));
         } finally {
           processing.current.delete(song.key);
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(2, pending.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(downloadConcurrency, pending.length) }, worker));
   }
 
-  function jobAction(job?: YoutubeDownload) {
+  function jobAction(job: YoutubeDownload | undefined, title: string, progress: number) {
     if (!job) return null;
-    if (job.status === "completed") return <button className="spotify-row-download is-complete" disabled><Check size={14} />Downloaded</button>;
-    if (job.status === "failed") return <button className="spotify-row-download" onClick={() => onDownloadControl(job.id, "resume")}><RotateCcw size={14} />Retry</button>;
-    if (job.status === "paused") return <button className="spotify-row-download" onClick={() => onDownloadControl(job.id, "resume")}><Play size={14} />Resume</button>;
-    if (job.status === "queued" || job.status === "downloading") return <button className="spotify-row-download" onClick={() => onDownloadControl(job.id, "cancel")}>Cancel</button>;
+    if (job.status === "completed") return <button className="spotify-row-download is-complete" disabled>Downloaded</button>;
+    if (job.status === "failed") return <button className="spotify-row-download" onClick={() => onDownloadControl(job.id, "resume")}>Retry</button>;
+    if (job.status === "paused") return <button className="spotify-row-download" onClick={() => onDownloadControl(job.id, "resume")}>Resume</button>;
+    if (job.status === "queued" || job.status === "downloading") {
+      const percentage = Math.round(Math.min(100, Math.max(0, progress)));
+      return <button className="spotify-row-download" aria-label={`Cancel ${title} download (${percentage}%)`} title="Cancel download" onClick={() => onDownloadControl(job.id, "cancel")}>{percentage}%</button>;
+    }
     return null;
   }
 
@@ -269,7 +273,7 @@ export function SpotifyImportScreen({ libraryTracks, downloads, onQueue, onDownl
     const inLibrary = status?.kind === "library";
     const duplicate = status?.kind === "duplicate";
     const progress = job?.status === "completed" ? 100 : job?.percent ?? 0;
-    const action = jobAction(job);
+    const action = jobAction(job, song.title, progress);
     return (
       <div className="spotify-track-row" key={song.key}>
         <input type="checkbox" checked={selected.has(song.key)} onChange={() => toggleSelected(song.key)} aria-label={`Select ${song.title}`} />
@@ -281,11 +285,9 @@ export function SpotifyImportScreen({ libraryTracks, downloads, onQueue, onDownl
         <span className="spotify-track-copy">
           <strong title={song.title}>{song.title}</strong>
           <small>{[song.artist, formatDuration(song.durationSeconds)].filter(Boolean).join(" · ") || "Spotify preview"}</small>
-          {status && <em className={`spotify-row-status is-${status.kind}`} role={status.kind === "error" || status.kind === "library" || status.kind === "duplicate" ? "status" : undefined}>{status.message ?? "Searching YouTube for one match…"}</em>}
-          {candidate && candidate.title !== song.title && job && <em className="spotify-row-status">YouTube match: {candidate.title}</em>}
+          {status && status.kind !== "searching" && <em className={`spotify-row-status is-${status.kind}`} role={status.kind === "error" || status.kind === "library" || status.kind === "duplicate" ? "status" : undefined}>{status.message}</em>}
         </span>
-        <span className="spotify-track-progress" role="progressbar" aria-label={`Download progress for ${song.title}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><i style={{ width: `${progress}%` }} /></span>
-        {busy ? <button className="spotify-row-download" disabled><LoaderCircle size={14} className="spotify-spin" />Searching</button> : inLibrary ? <button className="spotify-row-download" disabled>In library</button> : duplicate ? <button className="spotify-row-download" disabled>Queued</button> : action ?? <button className="spotify-row-download" onClick={() => void downloadSongs([song])}>Download</button>}
+        {busy ? <button className="spotify-row-download" disabled>Searching…</button> : inLibrary ? <button className="spotify-row-download" disabled>In library</button> : duplicate ? <button className="spotify-row-download" disabled>Queued</button> : action ?? <button className="spotify-row-download" onClick={() => void downloadSongs([song])}>Download</button>}
       </div>
     );
   }
@@ -320,7 +322,7 @@ export function SpotifyImportScreen({ libraryTracks, downloads, onQueue, onDownl
         <section className="spotify-collection-card" aria-label="Spotify playlist preview">
           <div className="spotify-collection-art">{metadata.thumbnailUrl ? <img src={metadata.thumbnailUrl} alt="" /> : <Music2 size={36} />}</div>
           <div className="spotify-collection-copy"><h2>{metadata.title}</h2><p>{metadata.author ? `${metadata.author} · ` : ""}{loadedCount}{totalTracks != null && totalTracks > loadedCount ? ` of ${totalTracks}` : ""} {loadedCount === 1 ? "track" : "tracks"}{totalTracks == null ? " loaded" : ""}</p></div>
-          <button className="spotify-download-selected" disabled={!selectedSongs.length} onClick={() => void downloadSongs(selectedSongs)}><Download size={15} />Download selected ({selectedSongs.length})</button>
+          <button className="spotify-download-selected" disabled={!selectedSongs.length} onClick={() => void downloadSongs(selectedSongs)}>Download selected ({selectedSongs.length})</button>
         </section>
         {totalTracks != null && totalTracks > loadedCount && <p className="spotify-partial-note">Showing {loadedCount} of {totalTracks} songs available in Spotify’s public preview.</p>}
         <section className="spotify-track-section" aria-label="Select songs to download">

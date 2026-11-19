@@ -199,6 +199,10 @@ export default function App() {
   const [globalYoutubeSearchEnabled, setGlobalYoutubeSearchEnabled] = useState(
     () => stored("global-youtube-search-enabled", true),
   );
+  const [downloadConcurrency, setDownloadConcurrency] = useState(() => {
+    const saved = stored<number>("download-concurrency", 5);
+    return Number.isFinite(saved) ? Math.min(10, Math.max(1, Math.round(saved))) : 5;
+  });
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
     const saved = stored<unknown>("recent-searches", []);
@@ -1520,6 +1524,14 @@ export default function App() {
   useEffect(() => {
     saveStoredData("compact", JSON.stringify(compact));
   }, [compact]);
+  useEffect(() => {
+    saveStoredData("download-concurrency", JSON.stringify(downloadConcurrency));
+    if (isTauri()) {
+      void api.youtubeDownloadSetConcurrency(downloadConcurrency).catch((error) =>
+        setMessage(String(error)),
+      );
+    }
+  }, [downloadConcurrency]);
   useEffect(() => {
     const close = (event: globalThis.PointerEvent) => {
       if (
@@ -3991,6 +4003,7 @@ export default function App() {
                       keepScreenAwake={keepScreenAwake}
                       scanning={scanning}
                       zoomLevel={zoomLevel}
+                      downloadConcurrency={downloadConcurrency}
                       hiddenTracks={hiddenTracks}
                       onRestoreTrack={restoreTrack}
                       onBack={() => {
@@ -4034,6 +4047,7 @@ export default function App() {
                         void run(() => api.sleepTimer(minutes, atTrackEnd))
                       }
                       onZoom={setZoomLevel}
+                      onDownloadConcurrency={setDownloadConcurrency}
                       onAbout={() => setMobileAboutOpen(true)}
                     />
                   )
@@ -4105,6 +4119,7 @@ export default function App() {
                   <SpotifyImportScreen
                     libraryTracks={tracks}
                     downloads={youtubeDownloads}
+                    downloadConcurrency={downloadConcurrency}
                     onQueue={(candidate, playlist) => queueYoutubeDownload(candidate, undefined, playlist, true)}
                     onDownloadControl={(id, action) => {
                       void controlYoutubeDownload(id, action);
@@ -4131,9 +4146,11 @@ export default function App() {
                     scanning={scanning}
                     mobile={isAndroid}
                     zoomLevel={zoomLevel}
+                    downloadConcurrency={downloadConcurrency}
                     hiddenTracks={hiddenTracks}
                     onRestoreTrack={restoreTrack}
                     onZoom={setZoomLevel}
+                    onDownloadConcurrency={setDownloadConcurrency}
                     onEqualizer={(bands) => {
                       setEqualizerBands(bands);
                       saveStoredData("equalizer-bands", JSON.stringify(bands));

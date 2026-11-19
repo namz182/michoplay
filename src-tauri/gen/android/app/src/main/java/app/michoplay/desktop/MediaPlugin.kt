@@ -73,6 +73,9 @@ class YoutubeDownloadArgs {
 }
 
 @InvokeArg
+class YoutubeDownloadConcurrencyArgs { var maxConcurrent: Int = 5 }
+
+@InvokeArg
 class ShareTextArgs {
   var title: String = ""
   var text: String = ""
@@ -94,8 +97,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private val downloadQueueLock = Any()
   private val downloadEvents = Executors.newSingleThreadScheduledExecutor()
   private var downloadEventPending = false
-  // Keep native extraction and FFmpeg from starving the Android UI thread.
-  private val maxConcurrentDownloads = 1
+  // Keep the configured number of parallel extraction jobs within Settings limits.
+  @Volatile private var maxConcurrentDownloads = 5
   private val nextDownloadId = AtomicInteger(1)
   @Volatile private var downloaderReady = false
   @Volatile private var downloaderError: String? = null
@@ -571,6 +574,14 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   fun youtubeDownloadsState(invoke: Invoke) = invoke.resolveObject(downloads.asReversed().map { synchronized(it) { it.toMap() } })
 
   @Command
+  fun youtubeDownloadSetConcurrency(invoke: Invoke) {
+    val requested = invoke.parseArgs(YoutubeDownloadConcurrencyArgs::class.java).maxConcurrent
+    synchronized(downloadQueueLock) { maxConcurrentDownloads = requested.coerceIn(1, 10) }
+    startQueuedDownloads()
+    invoke.resolve()
+  }
+
+  @Command
   fun youtubeDownloadEnqueue(invoke: Invoke) {
     val args = invoke.parseArgs(YoutubeDownloadArgs::class.java)
     if (!isYoutubeUrl(args.url)) { invoke.reject("Enter a valid YouTube video or playlist URL."); return }
@@ -651,14 +662,16 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
             val filePaths = audioFiles.map { audio ->
               requireActiveJob(item, generation)
               requirePlayableAudio(audio)
-              val lyric = staging.walkTopDown().firstOrNull { file -> file.isFile && (file.extension.equals("lrc", true) || file.extension.equals("vtt", true)) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
-              if (lyric != null) {
-                item["phase"] = "lyrics"; item["message"] = "Fetching and embedding lyrics…"; emitDownloads()
-                val text = lyric.readText()
-                val synchronizedLyrics = if (lyric.extension.equals("vtt", true)) vttToLrc(text) else text
-                if (synchronizedLyrics.isNotBlank() && !embedLyricsInMp3(audio, synchronizedLyrics)) {
-                  throw IllegalStateException("Could not embed the downloaded lyrics in the MP3.")
-                }
+              val lyrics = staging.walkTopDown().filter { file -> file.isFile && file.length() <= 2000000 && (file.extension.equals("lrc", true) || file.extension.equals("vtt", true)) && (file.nameWithoutExtension == audio.nameWithoutExtension || file.nameWithoutExtension.startsWith(audio.nameWithoutExtension + ".")) }
+                .sortedWith(compareBy<File>({ if (it.extension.equals("lrc", true)) 0 else 1 }, { it.name })).toList()
+              for (lyric in lyrics) {
+                item["phase"] = "lyrics"; item["message"] = "Embedding captions…"; emitDownloads()
+                val embedded = runCatching {
+                  val text = lyric.readText()
+                  val synchronizedLyrics = if (lyric.extension.equals("vtt", true)) CaptionLyrics.fromVtt(text) else text
+                  synchronizedLyrics.isNotBlank() && embedLyricsInMp3(audio, synchronizedLyrics)
+                }.onFailure { Log.w("MichoPlay", "Could not attach optional captions", it) }.getOrDefault(false)
+                if (embedded) break
               }
               requireActiveJob(item, generation)
               item["phase"] = "saving"; item["message"] = "Saving audio to Music…"; emitDownloads()
@@ -714,7 +727,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     request.addOption("--retries", "5"); request.addOption("--fragment-retries", "5")
     request.addOption("--extractor-retries", "3"); request.addOption("--socket-timeout", "30")
     request.addOption("--progress-template", "download:__MICHOPLAY_PROGRESS__%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent)s|%(progress.filename)s")
-    if (playerClients != null) request.addOption("--extractor-args", "youtube:player_client=$playerClients")
+    request.addOption("--extractor-args", "youtube:skip=translated_subs" + (playerClients?.let { ";player_client=$it" } ?: ""))
     if (isPlaylist) request.addOption("--yes-playlist") else request.addOption("--no-playlist")
     request.addOption("--playlist-end", "100")
     // The app only needs an audio stream; selecting `best` can return a
@@ -728,7 +741,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     // before the MP3 is written.
     request.addOption("--no-embed-chapters")
     request.addOption("--postprocessor-args", "Metadata+ffmpeg_o:-vn")
-    request.addOption("--write-subs"); request.addOption("--write-auto-subs"); request.addOption("--sub-langs", "en.*"); request.addOption("--sub-format", "vtt")
+    request.addOption("--write-subs"); request.addOption("--write-auto-subs"); request.addOption("--sub-format", "vtt")
     request.addOption("--embed-thumbnail")
     request.addOption("-o", File(staging, "%(title).160B.%(ext)s").absolutePath)
     val downloadProgress = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%")
@@ -753,7 +766,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           val extension = destination.substringAfterLast('.', "").substringBefore('?').lowercase()
           isAudioTransfer = extension in setOf("webm", "m4a", "mp3", "opus", "ogg", "aac", "flac", "wav")
           if (isAudioTransfer) { item["phase"] = "downloading"; item["message"] = "Downloading audio…"; emitDownloads() }
-          else if (extension == "vtt") { item["phase"] = "lyrics"; item["message"] = "Fetching synced lyrics…"; emitDownloads() }
+          else if (extension == "vtt") { item["phase"] = "lyrics"; item["message"] = "Fetching captions…"; emitDownloads() }
         }
         when {
           line.startsWith("[youtube]") -> { item["phase"] = "fetching"; item["message"] = "Getting song information…"; emitDownloads() }
@@ -856,7 +869,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
       val lyricFrameBody = ByteArrayOutputStream().apply {
         write(1) // UTF-16 with BOM, supported by ID3v2.3 and v2.4.
-        write(byteArrayOf(0x65, 0x6e, 0x67)) // English
+        write(byteArrayOf(0x75, 0x6e, 0x64)) // Undetermined; captions may use the song's original language.
         write(byteArrayOf(0xff.toByte(), 0xfe.toByte(), 0x00, 0x00)) // Empty UTF-16 descriptor.
         write(lyrics.toByteArray(Charset.forName("UTF-16")))
       }.toByteArray()
@@ -911,50 +924,6 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     if (value < 0 || value > 0x0fffffff) throw IOException("ID3 tag is too large")
     out.writeByte((value shr 21) and 0x7f); out.writeByte((value shr 14) and 0x7f)
     out.writeByte((value shr 7) and 0x7f); out.writeByte(value and 0x7f)
-  }
-
-  private fun vttToLrc(vtt: String): String {
-    val lines = mutableListOf<String>()
-    val cue = mutableListOf<String>()
-    var startMs: Long? = null
-    fun flush() {
-      val start = startMs
-      val text = cue.joinToString(" ").replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-        .replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ")
-        .trim().split(Regex("\\s+")).joinToString(" ").trim()
-      cue.clear()
-      if (start != null && text.isNotEmpty() && lines.lastOrNull()?.substringAfter(']') != text) {
-        val minutes = (start / 60000).toString().padStart(2, '0')
-        val seconds = (start / 1000 % 60).toString().padStart(2, '0')
-        val centiseconds = (start % 1000 / 10).toString().padStart(2, '0')
-        lines.add("[$minutes:$seconds.$centiseconds]$text")
-      }
-    }
-    for (row in vtt.lineSequence() + sequenceOf("")) {
-      val line = row.trim()
-      if ("-->" in line) {
-        flush()
-        startMs = vttTimestampMs(line.substringBefore("-->"))
-      } else if (line.isEmpty()) {
-        flush()
-        startMs = null
-      } else if (startMs != null) cue.add(line)
-    }
-    return if (lines.isEmpty()) "" else lines.joinToString("\n", postfix = "\n")
-  }
-
-  private fun vttTimestampMs(value: String): Long? {
-    val parts = value.trim().split('.')
-    if (parts.size != 2) return null
-    val time = parts[0].split(':').map { it.toLongOrNull() ?: return null }
-    val seconds = when (time.size) {
-      2 -> time[0] * 60 + time[1]
-      3 -> time[0] * 3600 + time[1] * 60 + time[2]
-      else -> return null
-    }
-    val millis = parts[1].take(3).padEnd(3, '0').toLongOrNull() ?: return null
-    return seconds * 1000 + millis
   }
 
   private fun isYoutubeCompatibilityFailure(error: Throwable): Boolean {

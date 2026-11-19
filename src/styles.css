@@ -11662,7 +11662,7 @@ body:has(.android-app),
 .spotify-select-all-button:disabled { opacity: .45; cursor: default; }
 .spotify-deselect-button { min-height: 32px; padding: 0 9px; border: 0; background: transparent; font-size: 10px; }
 .spotify-track-list { display: grid; padding: 0; }
-.spotify-track-row { min-height: 72px; grid-template-columns: 18px 22px 42px minmax(100px, 1fr) minmax(80px, .8fr) 104px; gap: 12px; padding: 7px 0; border-bottom: 1px solid rgb(255 255 255 / 6%); border-radius: 0; }
+.spotify-track-row { min-height: 72px; grid-template-columns: 18px 22px 42px minmax(100px, 1fr) 104px; gap: 12px; padding: 7px 0; border-bottom: 1px solid rgb(255 255 255 / 6%); border-radius: 0; }
 .spotify-track-row:hover { background: rgb(255 255 255 / 2%); }
 .spotify-track-position { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
 .spotify-track-art { position: relative; width: 42px; height: 42px; border-radius: 7px; }
@@ -11671,9 +11671,7 @@ body:has(.android-app),
 .spotify-track-copy { gap: 4px; }
 .spotify-track-copy > strong { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .spotify-track-copy > small { font-size: 11px; }
-.spotify-track-progress { display: block; height: 4px; overflow: hidden; border-radius: 999px; background: rgb(255 255 255 / 12%); }
-.spotify-track-progress > i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 180ms ease; }
-.spotify-row-download { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; gap: 6px; padding: 0 13px; border: 1px solid rgb(255 255 255 / 16%); border-radius: 999px; color: var(--text); background: transparent; font: inherit; font-size: 11px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.spotify-row-download { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; padding: 0 13px; border: 1px solid rgb(255 255 255 / 16%); border-radius: 999px; color: var(--text); background: transparent; font: inherit; font-size: 11px; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .spotify-row-download:hover:not(:disabled) { border-color: rgb(255 255 255 / 32%); background: rgb(255 255 255 / 5%); }
 .spotify-row-download:disabled { opacity: .55; cursor: default; }
 .spotify-row-download.is-complete { color: #a7dbb4; }
@@ -11691,10 +11689,10 @@ body:has(.android-app),
 
 .spotify-import-page {
   display: flex;
-  height: 100%;
-  min-height: 0;
+  height: auto;
+  min-height: 100%;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   padding-bottom: 20px;
 }
 .spotify-import-heading,
@@ -11704,9 +11702,10 @@ body:has(.android-app),
 .spotify-partial-note { flex: 0 0 auto; }
 .spotify-track-section {
   display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: auto;
+  flex: 0 0 auto;
   flex-direction: column;
+  overflow: visible;
 }
 .spotify-selection-toolbar {
   position: sticky;
@@ -11716,15 +11715,11 @@ body:has(.android-app),
   background: #181718;
 }
 .spotify-track-list {
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-color: #514c54 transparent;
-  scrollbar-width: thin;
-  -webkit-overflow-scrolling: touch;
+  min-height: auto;
+  flex: 0 0 auto;
+  overflow: visible;
 }
-.spotify-loading-preview { min-height: 0; flex: 1 1 auto; overflow-y: auto; }
+.spotify-loading-preview { min-height: auto; flex: 0 0 auto; overflow: visible; }
 
 @media (max-width: 700px) {
   .spotify-collection-card { gap: 12px; padding: 5px 0 12px; }
@@ -11736,7 +11731,6 @@ body:has(.android-app),
   .spotify-track-art { width: 40px; height: 40px; }
   .spotify-track-copy > strong { font-size: 11px; }
   .spotify-track-copy > small { font-size: 9px; }
-  .spotify-track-progress { display: none; }
   .spotify-row-download { min-height: 34px; padding: 0 9px; font-size: 10px; }
   .spotify-playlist-match { grid-template-columns: 18px 40px minmax(0, 1fr) 82px; }
   .spotify-playlist-match > span:nth-last-child(2) { display: none; }
@@ -11746,10 +11740,10 @@ body:has(.android-app),
   .spotify-review-footer > div > * { flex: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .spotify-track-art > i,.spotify-track-progress > i { transition: none; }
+  .spotify-track-art > i { transition: none; }
 }
 
-.spotify-download-selected { display: inline-flex; min-height: 40px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; border: 1px solid rgb(255 255 255 / 14%); border-radius: 999px; color: var(--text); background: rgb(255 255 255 / 8%); font: inherit; font-size: 11px; font-weight: 650; white-space: nowrap; cursor: pointer; }
+.spotify-download-selected { display: inline-flex; min-height: 40px; flex: 0 0 auto; align-items: center; justify-content: center; padding: 0 16px; border: 1px solid rgb(255 255 255 / 14%); border-radius: 999px; color: var(--text); background: rgb(255 255 255 / 8%); font: inherit; font-size: 11px; font-weight: 650; white-space: nowrap; cursor: pointer; }
 .spotify-download-selected:hover:not(:disabled) { background: rgb(255 255 255 / 13%); }
 .spotify-download-selected:disabled { opacity: .5; cursor: default; }
 .spotify-inline-error { margin: -4px 0 14px; color: #ffb5b5; font-size: 12px; line-height: 1.5; }
@@ -11782,7 +11776,7 @@ body:has(.android-app),
   .spotify-collection-card { margin-top: 10px; }
   .spotify-collection-card { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; }
   .spotify-collection-art { width: 54px; height: 54px; }
-  .spotify-download-selected { margin-left: 0; padding: 0 9px; gap: 5px; font-size: 9px; }
+  .spotify-download-selected { margin-left: 0; padding: 0 9px; font-size: 9px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .spotify-loading-summary > i,
