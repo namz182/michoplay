@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="youtube" android:enabled="true" android:icon="@mipmap/ic_launcher" android:shortcutShortLabel="@string/shortcut_youtube_short" android:shortcutLongLabel="@string/shortcut_youtube_long">
+        <intent android:action="app.michoplay.desktop.SHORTCUT_YOUTUBE" android:targetPackage="app.michoplay.desktop" android:targetClass="app.michoplay.desktop.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    <shortcut android:shortcutId="library" android:enabled="true" android:icon="@mipmap/ic_launcher" android:shortcutShortLabel="@string/shortcut_library_short" android:shortcutLongLabel="@string/shortcut_library_long">
+        <intent android:action="app.michoplay.desktop.SHORTCUT_LIBRARY" android:targetPackage="app.michoplay.desktop" android:targetClass="app.michoplay.desktop.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

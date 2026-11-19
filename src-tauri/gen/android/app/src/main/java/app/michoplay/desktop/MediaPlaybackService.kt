@@ -223,6 +223,7 @@ class MediaPlaybackService : Service() {
     syncWakeLock()
     updateSession()
     startForeground(NOTIFICATION_ID, buildNotification())
+    PlaybackWidgetProvider.update(this, title, artist, isPlaying)
   }
 
   private fun pauseForSystem(action: String) {
@@ -360,6 +361,7 @@ class MediaPlaybackService : Service() {
   private fun refreshNotification() {
     updateSession()
     getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+    PlaybackWidgetProvider.update(this, title, artist, isPlaying)
   }
 
   private fun createChannel() {

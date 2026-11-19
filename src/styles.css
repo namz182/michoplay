@@ -1555,6 +1555,14 @@ button:disabled {
   color: inherit;
   cursor: pointer;
 }
+.lyrics-search-error .lyrics-search-retry {
+  width: auto;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 205, 205, 0.24);
+  border-radius: 999px;
+  font-weight: 650;
+}
 .lyrics-search-error button:hover { background: rgba(255, 255, 255, 0.12); }
 .lyrics-search-status { margin: 12px 0; color: #dfd4dd; font-size: 12px; }
 .lyrics-search-results { min-height: 0; flex: 1 1 auto; overflow-y: auto; scrollbar-width: thin; }
@@ -9397,17 +9405,21 @@ body:has(.android-app),
 }
 .mobile-player-actions.has-lyrics {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  justify-items: center;
+  max-width: 360px;
+  margin-right: auto;
+  margin-left: auto;
 }
 .mobile-player-actions.has-lyrics > .mobile-player-timer {
-  justify-self: start;
+  justify-self: center;
 }
 .mobile-player-actions.has-lyrics > .mobile-lyrics-trigger {
   justify-self: center;
   color: var(--brand-highlight);
 }
 .mobile-player-actions.has-lyrics > button:last-child {
-  justify-self: end;
+  justify-self: center;
 }
 @media (max-height: 760px) and (max-width: 700px) {
   .mobile-player-screen {
@@ -10458,17 +10470,90 @@ body:has(.android-app),
 .mobile-library-action-sheet,
 .mobile-queue-sheet,
 .mobile-sleep-timer-sheet,
+.mobile-control-sheet,
 .mobile-action-sheet {
   transform: translate3d(0, var(--mobile-sheet-drag, 0px), 0);
   transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.mobile-library-action-sheet,
+.mobile-sleep-timer-sheet,
+.mobile-control-sheet {
+  touch-action: none;
+}
+.mobile-queue-sheet,
+.mobile-action-sheet {
+  touch-action: pan-y;
+}
+.mobile-queue-sheet > :not(.mobile-queue-list),
+.mobile-action-sheet > :not(.playlist-menu-wrap),
+.mobile-action-sheet .playlist-menu-wrap > button,
+.mobile-action-sheet .mobile-sheet-handle {
+  touch-action: none;
+}
+.mobile-queue-list,
+.mobile-action-sheet .playlist-submenu,
+.mobile-action-sheet .playlist-options {
+  touch-action: pan-y;
+}
+.mobile-metadata-sheet {
+  touch-action: pan-y;
+}
+.mobile-metadata-sheet > :not(.dialog-title):not(.metadata-sheet-handle),
+.mobile-metadata-sheet .dialog-title,
+.mobile-metadata-sheet .metadata-actions {
+  touch-action: none;
+}
+.mobile-metadata-sheet input,
+.mobile-metadata-sheet textarea,
+.mobile-metadata-sheet select {
+  touch-action: manipulation;
 }
 @media (prefers-reduced-motion: reduce) {
   .mobile-library-action-sheet,
   .mobile-queue-sheet,
   .mobile-sleep-timer-sheet,
+  .mobile-control-sheet,
   .mobile-action-sheet {
     transition: none;
   }
+}
+.mobile-control-sheet {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: min(84dvh, 780px, calc(100dvh - max(env(safe-area-inset-top), 24px) - 8px));
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 20px calc(env(safe-area-inset-bottom) + 20px);
+  border-radius: 22px 22px 0 0;
+  background: #242225;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.28);
+}
+.mobile-control-sheet h2 {
+  margin: 4px 0 18px;
+  text-align: center;
+  font-size: 19px;
+}
+.mobile-control-volume {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0 22px;
+}
+.mobile-control-volume input {
+  width: 100%;
+  accent-color: var(--brand-highlight);
+}
+.mobile-control-volume output {
+  color: #d4cfd7;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.mobile-equalizer-sheet {
+  max-height: min(88dvh, 820px, calc(100dvh - max(env(safe-area-inset-top), 24px) - 8px));
 }
 .android-app .collection-tools {
   align-items: center;

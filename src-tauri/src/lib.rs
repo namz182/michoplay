@@ -435,6 +435,7 @@ async fn lyrics_search(
     track_id: u64,
     query: String,
     state: State<'_, AppState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<Vec<LyricsSearchResult>, String> {
     let (title, artist) = {
         let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
@@ -448,6 +449,7 @@ async fn lyrics_search(
     if query.len() > 200 {
         return Err("The lyrics search is too long.".to_owned());
     }
+    #[cfg(not(target_os = "android"))]
     let client = reqwest::Client::builder()
         .user_agent(format!(
             "MichoPlay/{} (https://michoplay.mainza.dev/)",
@@ -468,34 +470,63 @@ async fn lyrics_search(
             params.append_pair("q", query);
         }
     }
-    let response =
-        client.get(url).send().await.map_err(|_| {
-            "Could not reach LRCLIB. Check your connection and try again.".to_owned()
-        })?;
-    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        let wait = response
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
+    let (status, retry_after, bytes) = {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct AndroidLyricsResponse {
+                status: u16,
+                retry_after: Option<String>,
+                body: String,
+            }
+            let response: AndroidLyricsResponse = call_android_media(
+                android_media_plugin(&bridge)?,
+                "lyricsSearch",
+                serde_json::json!({ "url": url.as_str() }),
+            )
+            .await?;
+            (
+                response.status,
+                response.retry_after,
+                response.body.into_bytes(),
+            )
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = bridge;
+            let response = client.get(url).send().await.map_err(|_| {
+                "Could not reach LRCLIB. Check your connection and try again.".to_owned()
+            })?;
+            let status = response.status().as_u16();
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned);
+            if response
+                .content_length()
+                .is_some_and(|length| length > 2_000_000)
+            {
+                return Err("The lyrics search response was too large.".to_owned());
+            }
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|_| "Could not read the lyrics results.".to_owned())?;
+            (status, retry_after, bytes.to_vec())
+        }
+    };
+    if status == 429 {
+        let wait = retry_after.and_then(|value| value.parse::<u64>().ok());
         return Err(wait.map_or_else(
             || "LRCLIB is busy. Try again shortly.".to_owned(),
             |seconds| format!("LRCLIB is busy. Try again in {seconds} seconds."),
         ));
     }
-    if !response.status().is_success() {
+    if !(200..300).contains(&status) {
         return Err("LRCLIB could not search for lyrics right now.".to_owned());
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > 2_000_000)
-    {
-        return Err("The lyrics search response was too large.".to_owned());
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| "Could not read the lyrics results.".to_owned())?;
     if bytes.len() > 2_000_000 {
         return Err("The lyrics search response was too large.".to_owned());
     }
@@ -733,6 +764,11 @@ struct PendingMediaActions {
     actions: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct PendingShortcut {
+    action: Option<String>,
+}
+
 #[cfg(target_os = "android")]
 fn android_media_plugin(
     state: &State<'_, MediaBridge>,
@@ -933,6 +969,29 @@ fn media_take_pending_actions(state: State<'_, MediaBridge>) -> Result<Vec<Strin
     {
         let _ = state;
         Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+fn media_take_pending_shortcut(state: State<'_, MediaBridge>) -> Result<Option<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let bridge = state
+            .0
+            .lock()
+            .map_err(|_| "Media controls are unavailable.".to_owned())?;
+        if let Some(handle) = bridge.as_ref() {
+            return handle
+                .run_mobile_plugin::<PendingShortcut>("takePendingShortcut", ())
+                .map(|response| response.action)
+                .map_err(|error| error.to_string());
+        }
+        return Ok(None);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = state;
+        Ok(None)
     }
 }
 
@@ -3655,6 +3714,61 @@ async fn spotify_public_metadata(
         })?
 }
 
+#[tauri::command]
+async fn native_player_sheet(
+    kind: String,
+    volume: u8,
+    equalizer_bands: Vec<i32>,
+    equalizer_enabled: bool,
+    bridge: State<'_, MediaBridge>,
+) -> Result<(), String> {
+    if !matches!(kind.as_str(), "volume" | "equalizer") {
+        return Err("This native player sheet is not supported.".to_owned());
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _: serde_json::Value = call_android_media(
+            android_media_plugin(&bridge)?,
+            "nativePlayerSheet",
+            serde_json::json!({
+                "kind": kind,
+                "volume": volume.min(100),
+                "equalizerBands": equalizer_bands.into_iter().map(|band| band.clamp(-12, 12)).collect::<Vec<_>>(),
+                "equalizerEnabled": equalizer_enabled,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (volume, equalizer_bands, equalizer_enabled, bridge);
+        Err("Native player controls are only available on Android.".to_owned())
+    }
+}
+
+#[tauri::command]
+async fn native_haptic(style: String, bridge: State<'_, MediaBridge>) -> Result<(), String> {
+    if !matches!(style.as_str(), "click" | "tick" | "confirm" | "dismiss") {
+        return Err("Unsupported haptic feedback style.".to_owned());
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _: serde_json::Value = call_android_media(
+            android_media_plugin(&bridge)?,
+            "haptic",
+            serde_json::json!({ "style": style }),
+        )
+        .await?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (style, bridge);
+        Err("Native haptics are only available on Android.".to_owned())
+    }
+}
+
 fn spotify_json_from_script(script: &str) -> Option<serde_json::Value> {
     if let Ok(value) = serde_json::from_str(script.trim()) {
         return Some(value);
@@ -6147,6 +6261,8 @@ pub fn run() {
             youtube_music_directory,
             youtube_search,
             spotify_public_metadata,
+            native_player_sheet,
+            native_haptic,
             youtube_downloads_state,
             youtube_download_set_concurrency,
             youtube_download_enqueue,
@@ -6176,6 +6292,7 @@ pub fn run() {
             system_set_default_player,
             media_take_opened_audio,
             media_take_pending_actions,
+            media_take_pending_shortcut,
             player_play_collection,
             player_queue_move,
             player_queue_remove,

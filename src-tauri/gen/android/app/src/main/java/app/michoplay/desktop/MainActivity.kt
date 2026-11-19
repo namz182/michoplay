@@ -25,6 +25,7 @@ class MainActivity : TauriActivity() {
       mediaWriteResult = null
       callback?.invoke(result.resultCode == RESULT_OK)
     }
+    dispatchShortcut(intent)
 
     // Android 17 blocks LAN access for apps targeting API 37 unless the
     // ACCESS_LOCAL_NETWORK runtime permission is granted. Tauri's Android
@@ -59,6 +60,17 @@ class MainActivity : TauriActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    MediaPlugin.dispatchOpenAudio()
+    dispatchShortcut(intent)
+    if (intent.action == Intent.ACTION_VIEW || intent.action == Intent.ACTION_SEND ||
+      intent.action == Intent.ACTION_SEND_MULTIPLE || intent.clipData != null) {
+      MediaPlugin.dispatchOpenAudio()
+    }
+  }
+
+  private fun dispatchShortcut(intent: Intent?) {
+    when (intent?.action) {
+      "app.michoplay.desktop.SHORTCUT_YOUTUBE" -> MediaPlugin.dispatchShortcut("shortcut-youtube")
+      "app.michoplay.desktop.SHORTCUT_LIBRARY" -> MediaPlugin.dispatchShortcut("shortcut-library")
+    }
   }
 }

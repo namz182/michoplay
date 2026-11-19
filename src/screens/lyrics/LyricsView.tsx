@@ -120,7 +120,10 @@ export function LyricsView({
     setSearchFailed(false);
     setSelectedId(null);
     try {
-      const matches = await api.lyricsSearch(track.id, value);
+      const matches = await new Promise<LyricsSearchResult[]>((resolve, reject) => {
+        const timeout = window.setTimeout(() => reject(new Error("Lyrics search took too long. Check your connection and retry.")), 20_000);
+        api.lyricsSearch(track.id, value).then(resolve, reject).finally(() => window.clearTimeout(timeout));
+      });
       if (currentRequest === requestId.current) setResults(matches);
     } catch (reason) {
       if (currentRequest === requestId.current) {
@@ -196,6 +199,7 @@ export function LyricsView({
   const previewLines = previewText.split(/\r?\n/).map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]\s*/, "").trim()).filter(Boolean).slice(0, 5);
   const errorAlert = error ? <div className="lyrics-search-error" role="alert">
     <span>{error}</span>
+    {searchFailed && <button type="button" className="lyrics-search-retry" onClick={() => void searchLyrics(query)}>Retry</button>}
     <button type="button" aria-label="Dismiss lyrics alert" title="Dismiss alert" onClick={() => setError("")}><X size={15} /></button>
   </div> : null;
 

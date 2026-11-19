@@ -55,6 +55,7 @@ import {
   AlignJustify,
   Check,
   Timer,
+  Volume2,
   Download,
   EyeOff,
   Maximize2,
@@ -97,6 +98,7 @@ import {
 import { Cover, useArtwork } from "./Artwork";
 import { LyricsBadge } from "../components/LyricsBadge";
 import { LyricsView } from "../screens/lyrics/LyricsView";
+import { SpotifyImportScreen } from "../screens/spotify/SpotifyImportScreen";
 import { PlaylistSelection } from "../components/downloads/PlaylistSelection";
 import { DownloadProgressList } from "../components/downloads/DownloadProgressList";
 import {
@@ -114,7 +116,6 @@ import {
 } from "./components/SleepTimerControl";
 import { VolumeControl } from "./components/VolumeControl";
 import { MobileNav } from "./components/MobileNav";
-import { SpotifyImportScreen } from "../screens/spotify/SpotifyImportScreen";
 import { TransportControls } from "./components/TransportControls";
 import { useYoutubeSearch } from "./useYoutubeSearch";
 import type {
@@ -230,6 +231,10 @@ export default function App() {
   const [equalizerEnabled, setEqualizerEnabled] = useState(() =>
     stored("equalizer-enabled", false),
   );
+  const equalizerBandsRef = useRef(equalizerBands);
+  const equalizerEnabledRef = useRef(equalizerEnabled);
+  equalizerBandsRef.current = equalizerBands;
+  equalizerEnabledRef.current = equalizerEnabled;
   const [favorites, setFavorites] = useState<number[]>(() =>
     stored("favorites", []),
   );
@@ -411,6 +416,7 @@ export default function App() {
     lastAt: number;
     velocity: number;
   } | null>(null);
+  const mobileSheetSuppressClick = useRef(false);
   const mobileTrackSwipeStartX = useRef<number | null>(null);
   const mobileTrackSwipeMoved = useRef(false);
   const [youtubeDirectory, setYoutubeDirectory] = useState("");
@@ -907,6 +913,28 @@ export default function App() {
     // Restore library and playback preferences once on launch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (!isAndroid) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<{ kind: string; value?: number; enabled?: boolean; bands?: number[] }>("native-player-control", ({ payload }) => {
+      if (payload.kind === "volume" && typeof payload.value === "number") {
+        const volume = Math.max(0, Math.min(1, payload.value));
+        saveStoredData("volume", JSON.stringify(volume));
+        void api.volume(volume);
+      } else if (payload.kind === "equalizer-enabled" && typeof payload.enabled === "boolean") {
+        setEqualizerEnabled(payload.enabled);
+        saveStoredData("equalizer-enabled", JSON.stringify(payload.enabled));
+        void api.equalizer(equalizerBandsRef.current, payload.enabled);
+      } else if (payload.kind === "equalizer-bands" && Array.isArray(payload.bands)) {
+        const bands = Array.from({ length: 6 }, (_, index) => Math.max(-12, Math.min(12, Number(payload.bands?.[index] ?? 0))));
+        setEqualizerBands(bands);
+        saveStoredData("equalizer-bands", JSON.stringify(bands));
+        void api.equalizer(bands, equalizerEnabledRef.current);
+      }
+    }).then((dispose) => { if (active) unlisten = dispose; else dispose(); });
+    return () => { active = false; unlisten?.(); };
+  }, [isAndroid]);
   useEffect(() => {
     if (!isTauri()) {
       setStartupLoading(false);
@@ -1722,9 +1750,14 @@ export default function App() {
     } as CSSProperties;
   }
   function beginMobileSheetDrag(
-    event: ReactPointerEvent<HTMLDivElement>,
+    event: ReactPointerEvent<HTMLElement>,
     sheet: string,
   ) {
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest("input, select, textarea, [role=slider], .mobile-sheet-handle")
+    ) return;
     const now = performance.now();
     mobileSheetDragState.current = {
       sheet,
@@ -1736,11 +1769,13 @@ export default function App() {
     event.currentTarget.setPointerCapture(event.pointerId);
   }
   function moveMobileSheetDrag(
-    event: ReactPointerEvent<HTMLDivElement>,
+    event: ReactPointerEvent<HTMLElement>,
     sheet: string,
   ) {
     const drag = mobileSheetDragState.current;
     if (!drag || drag.sheet !== sheet) return;
+    if (Math.abs(event.clientY - drag.startY) > 8)
+      mobileSheetSuppressClick.current = true;
     const now = performance.now();
     drag.velocity =
       (event.clientY - drag.lastY) / Math.max(1, now - drag.lastAt);
@@ -1752,11 +1787,18 @@ export default function App() {
       dragging: true,
     });
   }
+  function captureMobileSheetClick(event: MouseEvent<HTMLElement>) {
+    if (!mobileSheetSuppressClick.current) return;
+    mobileSheetSuppressClick.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }
   function finishMobileSheetDrag(sheet: string, close: () => void) {
     const drag = mobileSheetDragState.current;
     if (!drag || drag.sheet !== sheet) return;
     mobileSheetDragState.current = null;
     const shouldClose = drag.lastY - drag.startY > 85 || drag.velocity > 0.55;
+    window.setTimeout(() => { mobileSheetSuppressClick.current = false; }, 0);
     setMobileSheetDrag({
       sheet,
       offset: shouldClose ? window.innerHeight : 0,
@@ -1900,7 +1942,9 @@ export default function App() {
     mobileQueueReorderRef.current = null;
     setMobileQueueReorder(null);
   }
-  function beginMetadataSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
+  function beginMetadataSheetDrag(event: ReactPointerEvent<HTMLElement>) {
+    const target = event.target;
+    if (target instanceof Element && target.closest("button, input, select, textarea, .metadata-sheet-handle")) return;
     const now = performance.now();
     metadataSheetDrag.current = {
       startY: event.clientY,
@@ -1911,7 +1955,7 @@ export default function App() {
     event.currentTarget.setPointerCapture(event.pointerId);
     setMetadataSheetDragging(true);
   }
-  function moveMetadataSheetDrag(event: ReactPointerEvent<HTMLDivElement>) {
+  function moveMetadataSheetDrag(event: ReactPointerEvent<HTMLElement>) {
     const drag = metadataSheetDrag.current;
     if (!drag) return;
     const now = performance.now();
@@ -3024,6 +3068,12 @@ export default function App() {
         return;
       }
       switch (action) {
+        case "shortcut-youtube":
+          setMobileTab("youtube");
+          break;
+        case "shortcut-library":
+          setMobileTab("library");
+          break;
         case "open-audio":
           void api
             .takeOpenedAudio()
@@ -3086,6 +3136,8 @@ export default function App() {
       const refreshOnResume = () => {
         refreshPlayerState();
         if (document.visibilityState !== "visible") return;
+        void api.mediaTakePendingActions().then((actions) => actions.forEach(handleAction)).catch(() => {});
+        void api.mediaTakePendingShortcut().then((action) => { if (action) handleAction(action); }).catch(() => {});
         void api
           .appDataLoad()
           .then((saved) => {
@@ -3112,6 +3164,8 @@ export default function App() {
       });
       document.addEventListener("visibilitychange", refreshOnResume);
       window.addEventListener("focus", refreshOnResume);
+      void api.mediaTakePendingActions().then((actions) => actions.forEach(handleAction)).catch(() => {});
+      void api.mediaTakePendingShortcut().then((action) => { if (action) handleAction(action); }).catch(() => {});
       return () => {
         active = false;
         unlisten?.();
@@ -4234,24 +4288,7 @@ export default function App() {
                       openDetail("Playlists", "playlist", item);
                     }}
                   />
-                ) : page.section === "Spotify" ? (
-                  <SpotifyImportScreen
-                    mobile={isAndroid}
-                    onBack={() => {
-                      if (history.index > 0) travel(-1);
-                      else navigate({ section: "Home" });
-                    }}
-                    libraryTracks={tracks}
-                    downloads={youtubeDownloads}
-                    downloadConcurrency={downloadConcurrency}
-                    onQueue={(candidate, playlist) =>
-                      queueYoutubeDownload(candidate, undefined, playlist, true)
-                    }
-                    onDownloadControl={(id, action) => {
-                      void controlYoutubeDownload(id, action);
-                    }}
-                  />
-                ) : page.section === "Settings" ? (
+                ) : page.section === "Spotify" ? null : page.section === "Settings" ? (
                   <SettingsPage
                     roots={roots}
                     player={player}
@@ -4998,6 +5035,24 @@ export default function App() {
                     )}
                   </>
                 )}
+                <div hidden={page.section !== "Spotify"}>
+                  <SpotifyImportScreen
+                    mobile={isAndroid}
+                    onBack={() => {
+                      if (history.index > 0) travel(-1);
+                      else navigate({ section: "Home" });
+                    }}
+                    libraryTracks={tracks}
+                    downloads={youtubeDownloads}
+                    downloadConcurrency={downloadConcurrency}
+                    onQueue={(candidate, playlist) =>
+                      queueYoutubeDownload(candidate, undefined, playlist, true)
+                    }
+                    onDownloadControl={(id, action) => {
+                      void controlYoutubeDownload(id, action);
+                    }}
+                  />
+                </div>
               </>
             </div>
           </section>
@@ -6202,7 +6257,9 @@ export default function App() {
         </>
       )}
       {isAndroid && mobilePlayerOpen && (
-        <section className="mobile-player-screen" aria-label="Now playing">
+        <section className="mobile-player-screen" aria-label="Now playing" onClickCapture={(event) => {
+          if (event.target instanceof Element && event.target.closest("button")) void api.haptic("click").catch(() => undefined);
+        }}>
           <header className="mobile-player-top">
             <button
               aria-label="Close player"
@@ -6497,13 +6554,18 @@ export default function App() {
                   )}
                 </button>
                 <button
-                  className="mobile-lyrics-trigger"
-                  aria-label="Show lyrics"
-                  title="Lyrics"
-                  onClick={() => setMobilePlayerLyricsOpen(true)}
+                  className={`mobile-lyrics-trigger ${mobilePlayerLyricsOpen ? "active" : ""}`}
+                  aria-label={
+                    mobilePlayerLyricsOpen ? "Close lyrics" : "Show lyrics"
+                  }
+                  aria-pressed={mobilePlayerLyricsOpen}
+                  title={mobilePlayerLyricsOpen ? "Close lyrics" : "Lyrics"}
+                  onClick={() => setMobilePlayerLyricsOpen((open) => !open)}
                 >
                   <Mic2 size={22} />
                 </button>
+                <button aria-label="Volume" title="Volume" onClick={() => void api.nativePlayerSheet("volume", player.volume, equalizerBands, equalizerEnabled)}><Volume2 size={22} /></button>
+                <button aria-label="Equalizer" title="Equalizer" onClick={() => void api.nativePlayerSheet("equalizer", player.volume, equalizerBands, equalizerEnabled)}><ListFilter size={22} /></button>
                 <button
                   aria-label="Show queue"
                   onClick={() => setMobileQueueOpen(true)}
@@ -6575,6 +6637,11 @@ export default function App() {
           <section
             className="mobile-library-action-sheet"
             style={mobileSheetStyle("library")}
+            onPointerDown={(event) => beginMobileSheetDrag(event, "library")}
+            onPointerMove={(event) => moveMobileSheetDrag(event, "library")}
+            onPointerUp={() => finishMobileSheetDrag("library", () => setMobileLibraryActionsOpen(false))}
+            onPointerCancel={() => cancelMobileSheetDrag("library")}
+            onClickCapture={captureMobileSheetClick}
             role="dialog"
             aria-modal="true"
             aria-label="Add to your library"
@@ -6624,6 +6691,11 @@ export default function App() {
           <section
             className="mobile-queue-sheet"
             style={mobileSheetStyle("queue")}
+            onPointerDown={(event) => beginMobileSheetDrag(event, "queue")}
+            onPointerMove={(event) => moveMobileSheetDrag(event, "queue")}
+            onPointerUp={() => finishMobileSheetDrag("queue", () => setMobileQueueOpen(false))}
+            onPointerCancel={() => cancelMobileSheetDrag("queue")}
+            onClickCapture={captureMobileSheetClick}
             role="dialog"
             aria-modal="true"
             aria-label="Playback queue"
@@ -6844,6 +6916,11 @@ export default function App() {
           <section
             className="mobile-sleep-timer-sheet"
             style={mobileSheetStyle("timer")}
+            onPointerDown={(event) => beginMobileSheetDrag(event, "timer")}
+            onPointerMove={(event) => moveMobileSheetDrag(event, "timer")}
+            onPointerUp={() => finishMobileSheetDrag("timer", () => setMobileSleepTimerOpen(false))}
+            onPointerCancel={() => cancelMobileSheetDrag("timer")}
+            onClickCapture={captureMobileSheetClick}
             role="dialog"
             aria-modal="true"
             aria-label="Sleep timer"
@@ -6914,6 +6991,11 @@ export default function App() {
             <div
               ref={trackMenuRef}
               className={`action-menu track-menu ${isAndroid ? "mobile-action-sheet" : ""} ${submenuPlacement === "submenu-inline" ? "submenu-inline" : ""}`}
+              onPointerDown={isAndroid ? (event) => beginMobileSheetDrag(event, "actions") : undefined}
+              onPointerMove={isAndroid ? (event) => moveMobileSheetDrag(event, "actions") : undefined}
+              onPointerUp={isAndroid ? () => finishMobileSheetDrag("actions", () => setMenu(null)) : undefined}
+              onPointerCancel={isAndroid ? () => cancelMobileSheetDrag("actions") : undefined}
+              onClickCapture={isAndroid ? captureMobileSheetClick : undefined}
               role="menu"
               style={
                 isAndroid
@@ -7233,6 +7315,11 @@ export default function App() {
         >
           <form
             className={`playlist-dialog metadata-dialog ${isAndroid ? "mobile-metadata-sheet" : ""}`}
+            onPointerDown={isAndroid ? beginMetadataSheetDrag : undefined}
+            onPointerMove={isAndroid ? moveMetadataSheetDrag : undefined}
+            onPointerUp={isAndroid ? endMetadataSheetDrag : undefined}
+            onPointerCancel={isAndroid ? () => { metadataSheetDrag.current = null; setMetadataSheetDragging(false); setMetadataSheetDragY(0); } : undefined}
+            onClickCapture={isAndroid ? captureMobileSheetClick : undefined}
             style={
               isAndroid
                 ? ({

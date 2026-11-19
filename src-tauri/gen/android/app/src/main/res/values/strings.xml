@@ -1,4 +1,8 @@
 <resources>
     <string name="app_name">"MichoPlay"</string>
     <string name="main_activity_title">"MichoPlay"</string>
+    <string name="shortcut_youtube_short">YouTube</string>
+    <string name="shortcut_youtube_long">Search YouTube</string>
+    <string name="shortcut_library_short">Library</string>
+    <string name="shortcut_library_long">Open your library</string>
 </resources>

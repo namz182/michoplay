@@ -67,6 +67,20 @@ class YoutubeSearchArgs { var query: String = ""; var limit: Int = 15; var offse
 class SpotifyPreviewArgs { var url: String = "" }
 
 @InvokeArg
+class NativePlayerSheetArgs {
+  var kind: String = ""
+  var volume: Int = 100
+  var equalizerBands: List<Int> = emptyList()
+  var equalizerEnabled: Boolean = false
+}
+
+@InvokeArg
+class HapticArgs { var style: String = "click" }
+
+@InvokeArg
+class LyricsSearchArgs { var url: String = "" }
+
+@InvokeArg
 class YoutubeDownloadArgs {
   var artist: String? = null
   var url: String = ""
@@ -114,12 +128,14 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   companion object {
     @Volatile private var notificationPermissionPrompted = false
     private val pendingActions = CopyOnWriteArrayList<String>()
+    private val pendingShortcuts = CopyOnWriteArrayList<String>()
 
     fun dispatch(action: String) {
       if (action != "youtube-downloads-updated") synchronized(pendingActions) { pendingActions.add(action) }
     }
 
     fun dispatchOpenAudio() = dispatch("open-audio")
+    fun dispatchShortcut(action: String) { synchronized(pendingShortcuts) { pendingShortcuts.add(action) } }
   }
 
   override fun load(webView: android.webkit.WebView) {
@@ -136,6 +152,12 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       pendingActions.clear()
     }
     invoke.resolve(JSObject().apply { put("actions", actions) })
+  }
+
+  @Command
+  fun takePendingShortcut(invoke: Invoke) {
+    val action = synchronized(pendingShortcuts) { pendingShortcuts.firstOrNull()?.also { pendingShortcuts.remove(it) } }
+    invoke.resolveObject(JSObject().apply { put("action", action) })
   }
 
   @Command
@@ -549,6 +571,159 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       } finally {
         deadline.cancel(false)
         connection.get()?.disconnect()
+      }
+    }
+  }
+
+  @Command
+  fun nativePlayerSheet(invoke: Invoke) {
+    val args = invoke.parseArgs(NativePlayerSheetArgs::class.java)
+    if (args.kind !in setOf("volume", "equalizer")) {
+      invoke.reject("This native player sheet is not supported.")
+      return
+    }
+    activity.runOnUiThread {
+      try {
+        showNativePlayerSheet(args)
+        invoke.resolve()
+      } catch (error: Exception) {
+        invoke.reject(error.message ?: "Could not open the Android player controls.")
+      }
+    }
+  }
+
+  private fun showNativePlayerSheet(args: NativePlayerSheetArgs) {
+    val dialog = com.google.android.material.bottomsheet.BottomSheetDialog(activity)
+    val density = activity.resources.displayMetrics.density
+    fun dp(value: Int) = (value * density).toInt()
+    val surfaceColor = com.google.android.material.color.MaterialColors.getColor(activity, com.google.android.material.R.attr.colorSurface, android.graphics.Color.DKGRAY)
+    val onSurfaceColor = com.google.android.material.color.MaterialColors.getColor(activity, com.google.android.material.R.attr.colorOnSurface, android.graphics.Color.WHITE)
+    val secondaryTextColor = com.google.android.material.color.MaterialColors.getColor(activity, com.google.android.material.R.attr.colorOnSurfaceVariant, android.graphics.Color.LTGRAY)
+    val content = android.widget.LinearLayout(activity).apply {
+      orientation = android.widget.LinearLayout.VERTICAL
+      setPadding(dp(24), dp(8), dp(24), dp(32))
+      setBackgroundColor(surfaceColor)
+    }
+    val handle = android.view.View(activity).apply {
+      background = android.graphics.drawable.GradientDrawable().apply {
+        setColor(android.graphics.Color.LTGRAY)
+        cornerRadius = dp(3).toFloat()
+      }
+    }
+    content.addView(handle, android.widget.LinearLayout.LayoutParams(dp(38), dp(4)).apply {
+      gravity = android.view.Gravity.CENTER_HORIZONTAL
+      bottomMargin = dp(18)
+    })
+    content.addView(android.widget.TextView(activity).apply {
+      text = if (args.kind == "volume") "Volume" else "Equalizer"
+      textSize = 20f
+      setTextColor(onSurfaceColor)
+      gravity = android.view.Gravity.CENTER
+    }, android.widget.LinearLayout.LayoutParams(-1, dp(44)))
+
+    if (args.kind == "volume") {
+      val row = android.widget.LinearLayout(activity).apply {
+        orientation = android.widget.LinearLayout.HORIZONTAL
+        gravity = android.view.Gravity.CENTER_VERTICAL
+      }
+      row.addView(android.widget.TextView(activity).apply {
+        text = "Volume"
+        setTextColor(secondaryTextColor)
+      })
+      val seek = android.widget.SeekBar(activity).apply { max = 100; progress = args.volume.coerceIn(0, 100) }
+      row.addView(seek, android.widget.LinearLayout.LayoutParams(0, dp(52), 1f))
+      val value = android.widget.TextView(activity).apply {
+        text = "${seek.progress}%"
+        setTextColor(onSurfaceColor)
+        gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+      }
+      row.addView(value, android.widget.LinearLayout.LayoutParams(dp(52), dp(52)))
+      seek.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+          value.text = "$progress%"
+          if (fromUser) trigger("native-player-control", JSObject().apply { put("kind", "volume"); put("value", progress / 100.0) })
+        }
+        override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) = Unit
+        override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) = Unit
+      })
+      content.addView(row, android.widget.LinearLayout.LayoutParams(-1, dp(64)))
+    } else {
+      val enabled = androidx.appcompat.widget.SwitchCompat(activity).apply {
+        text = "Enable equalizer"
+        setTextColor(onSurfaceColor)
+        isChecked = args.equalizerEnabled
+      }
+      enabled.setOnCheckedChangeListener { _, checked ->
+        trigger("native-player-control", JSObject().apply { put("kind", "equalizer-enabled"); put("enabled", checked) })
+      }
+      content.addView(enabled, android.widget.LinearLayout.LayoutParams(-1, dp(52)))
+      val labels = listOf("60 Hz", "150 Hz", "400 Hz", "1 kHz", "2.4 kHz", "15 kHz")
+      val bands = MutableList(6) { index -> args.equalizerBands.getOrNull(index)?.coerceIn(-12, 12) ?: 0 }
+      labels.forEachIndexed { index, label ->
+        val row = android.widget.LinearLayout(activity).apply {
+          orientation = android.widget.LinearLayout.HORIZONTAL
+          gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        row.addView(android.widget.TextView(activity).apply {
+          text = label
+          setTextColor(secondaryTextColor)
+        }, android.widget.LinearLayout.LayoutParams(dp(60), dp(48)))
+        val seek = android.widget.SeekBar(activity).apply { max = 24; progress = bands[index] + 12 }
+        row.addView(seek, android.widget.LinearLayout.LayoutParams(0, dp(48), 1f))
+        val value = android.widget.TextView(activity).apply {
+          text = "${bands[index]} dB"
+          setTextColor(onSurfaceColor)
+          gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+        }
+        row.addView(value, android.widget.LinearLayout.LayoutParams(dp(52), dp(48)))
+        seek.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+          override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+            bands[index] = progress - 12
+            value.text = "${bands[index]} dB"
+            if (fromUser) trigger("native-player-control", JSObject().apply { put("kind", "equalizer-bands"); put("bands", JSONArray().apply { bands.forEach(::put) }) })
+          }
+          override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) = Unit
+          override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) = Unit
+        })
+        content.addView(row, android.widget.LinearLayout.LayoutParams(-1, dp(48)))
+      }
+    }
+    dialog.setContentView(content)
+    dialog.behavior.isDraggable = true
+    dialog.behavior.isFitToContents = true
+    dialog.show()
+  }
+
+  @Command
+  fun haptic(invoke: Invoke) {
+    val style = invoke.parseArgs(HapticArgs::class.java).style
+    val feedback = when (style) {
+      "tick" -> android.view.HapticFeedbackConstants.CLOCK_TICK
+      "confirm" -> if (Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.KEYBOARD_TAP
+      "dismiss" -> android.view.HapticFeedbackConstants.CONTEXT_CLICK
+      else -> android.view.HapticFeedbackConstants.CONTEXT_CLICK
+    }
+    activity.runOnUiThread {
+      activity.window.decorView.performHapticFeedback(feedback)
+      invoke.resolve()
+    }
+  }
+
+  @Command
+  fun lyricsSearch(invoke: Invoke) {
+    val args = invoke.parseArgs(LyricsSearchArgs::class.java)
+    io.execute {
+      try {
+        val response = LyricsSearchClient.fetch(args.url)
+        invoke.resolveObject(mapOf("status" to response.status, "retryAfter" to response.retryAfter, "body" to response.body))
+      } catch (error: Exception) {
+        Log.w("MichoPlay", "Lyrics search request failed", error)
+        val message = when (error) {
+          is SocketTimeoutException -> "LRCLIB took too long to respond. Check your connection and retry."
+          is java.net.UnknownHostException -> "LRCLIB could not be reached. Check your connection and retry."
+          else -> error.message ?: "Could not reach LRCLIB. Check your connection and try again."
+        }
+        invoke.reject(message)
       }
     }
   }

@@ -680,37 +680,6 @@ export function SpotifyImportScreen({
 
       {metadata && !loading && (
         <>
-          <section
-            className="spotify-collection-card"
-            aria-label="Spotify playlist preview"
-          >
-            <div className="spotify-collection-art">
-              {metadata.thumbnailUrl ? (
-                <img src={metadata.thumbnailUrl} alt="" />
-              ) : (
-                <Music2 size={36} />
-              )}
-            </div>
-            <div className="spotify-collection-copy">
-              <h2>{metadata.title}</h2>
-              <p>
-                {metadata.author ? `${metadata.author} · ` : ""}
-                {loadedCount}
-                {totalTracks != null && totalTracks > loadedCount
-                  ? ` of ${totalTracks}`
-                  : ""}{" "}
-                {loadedCount === 1 ? "track" : "tracks"}
-                {totalTracks == null ? " loaded" : ""}
-              </p>
-            </div>
-            <button
-              className="spotify-download-selected"
-              disabled={!selectedSongs.length}
-              onClick={() => void downloadSongs(selectedSongs)}
-            >
-              Download selected ({selectedSongs.length})
-            </button>
-          </section>
           {totalTracks != null && totalTracks > loadedCount && (
             <p className="spotify-partial-note">
               Showing {loadedCount} of {totalTracks} songs available in
@@ -726,6 +695,13 @@ export function SpotifyImportScreen({
                 {selectedSongs.length} of {loadedCount} selected
               </span>
               <div className="spotify-selection-tools">
+                <button
+                  className="spotify-download-selected"
+                  disabled={!selectedSongs.length}
+                  onClick={() => void downloadSongs(selectedSongs)}
+                >
+                  Download selected ({selectedSongs.length})
+                </button>
                 {selectedSongs.length > 0 && !allSelected && (
                   <button
                     className="spotify-deselect-button"
