@@ -1012,7 +1012,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     // Keep stdout and stderr separate. yt-dlp writes the progress template to
     // stdout, while the library builds its exception message from stderr.
     // Merging the streams leaves response.err empty and hides the real error.
-    val response = YoutubeDL.getInstance().execute(request, item["id"] as String) { progress, _, line ->
+    val response = YoutubeDL.getInstance().execute(request, item["id"] as String) { _, _, line ->
       if (jobIsActive(item, generation)) {
         playlistItem.find(line)?.let { match ->
           val current = match.groupValues[1].toIntOrNull()
@@ -1039,7 +1039,6 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         val percentValue = fields?.getOrNull(0)?.trim()?.removeSuffix("%")?.toDoubleOrNull()
           ?: fields?.getOrNull(6)?.trim()?.toDoubleOrNull()
           ?: progressMatch?.groupValues?.getOrNull(1)?.toDoubleOrNull()
-          ?: progress.takeIf { it.isFinite() }?.toDouble()
         val isAudioProgress = isAudioTransfer || progressIsAudio || item["phase"] == "downloading"
         if (percentValue != null && isAudioProgress) {
           // Ignore caption/artwork transfers so the bar follows the audio stream.
@@ -1072,7 +1071,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           item["speedBytesPerSecond"] = fields?.getOrNull(4)?.toDoubleOrNull()?.toLong()
             ?: speedProgress.find(line)?.let { toByteCount(it.groupValues[1], it.groupValues[2]) }
           item["etaSeconds"] = fields?.getOrNull(5)?.toLongOrNull() ?: etaProgress.find(line)?.groupValues?.getOrNull(1)?.let(::parseEtaSeconds)
-          if (item["isPlaylist"] != true) item["message"] = line.substringAfter("[download]").trim()
+          if (item["isPlaylist"] != true) item["message"] = "Downloading audio…"
           emitDownloads()
         }
       }
@@ -1189,6 +1188,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     while (cause != null) {
       val message = cause.message.orEmpty()
       if (message.contains("403") || message.contains("forbidden", ignoreCase = true) ||
+        (message.contains("yt-dlp version", ignoreCase = true) &&
+          (message.contains("older than", ignoreCase = true) || message.contains("is old", ignoreCase = true))) ||
         message.contains("signature", ignoreCase = true) ||
         message.contains("challenge", ignoreCase = true) ||
         message.contains("javascript runtime", ignoreCase = true) ||
@@ -1224,6 +1225,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     downloader403RefreshAttempted = true
     return try {
       YoutubeDL.getInstance().updateYoutubeDL(activity.applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
+      activity.getSharedPreferences("michoplay-downloader", 0).edit()
+        .putLong("last-successful-update", System.currentTimeMillis()).apply()
       downloaderError = null
       true
     } catch (error: Exception) {
@@ -1331,6 +1334,21 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     return try {
       YoutubeDL.getInstance().init(activity.applicationContext)
       FFmpeg.getInstance().init(activity.applicationContext)
+      // The APK can contain an old yt-dlp even when the Android wrapper is
+      // current. Refresh it before search or queued downloads use it, at most
+      // once a day. A failed check leaves the bundled tool available offline.
+      val preferences = activity.getSharedPreferences("michoplay-downloader", 0)
+      val lastUpdate = preferences.getLong("last-successful-update", 0L)
+      val now = System.currentTimeMillis()
+      if (lastUpdate <= 0L || now < lastUpdate || now - lastUpdate >= TimeUnit.DAYS.toMillis(1)) {
+        try {
+          YoutubeDL.getInstance().updateYoutubeDL(activity.applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
+          preferences.edit().putLong("last-successful-update", System.currentTimeMillis()).apply()
+          downloader403RefreshAttempted = true
+        } catch (error: Exception) {
+          Log.w("MichoPlay", "Could not refresh YouTube support; using bundled downloader", error)
+        }
+      }
       downloaderError = null
       downloaderReady = true
       true

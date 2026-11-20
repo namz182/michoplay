@@ -1,6 +1,7 @@
 import { ChevronDown, ListMusic, MoreVertical, Pause, Play, X } from "lucide-react";
 import { useState, type MouseEvent } from "react";
 import type { YoutubeDownload } from "../../lib/api";
+import { youtubeDownloadErrorText } from "../../lib/youtube-size";
 import { youtubeDownloadIsPending, youtubeDownloadProgress } from "./DownloadStatus";
 
 type Action = "pause" | "cancel" | "resume" | "remove";
@@ -27,7 +28,7 @@ export function PlaylistDownloadProgress({ downloads, onControl, onPlay, onMenu 
         {open && <div className="playlist-download-tracks">
           {rows.map((item) => <div className={`playlist-download-track status-${item.status}`} key={item.id}>
             <span className="playlist-download-track-index">{item.playlist?.index}</span>
-            <span className="playlist-download-track-copy"><strong>{item.title}</strong><small>{item.status === "downloading" && youtubeDownloadIsPending(item) ? "Starting…" : item.status === "completed" ? "Completed" : item.status === "failed" ? item.message : item.status}</small><span className="playlist-download-progress"><i className={youtubeDownloadIsPending(item) ? "is-pending" : ""} style={{ width: `${youtubeDownloadProgress(item)}%` }}/></span></span>
+            <span className="playlist-download-track-copy"><strong>{item.title}</strong><small>{item.status === "downloading" && youtubeDownloadIsPending(item) ? "Starting…" : item.status === "completed" ? "Completed" : item.status === "failed" ? youtubeDownloadErrorText(item.message, item.isPlaylist) : item.status}</small><span className="playlist-download-progress"><i className={youtubeDownloadIsPending(item) ? "is-pending" : ""} style={{ width: `${youtubeDownloadProgress(item)}%` }}/></span></span>
             <span className="playlist-download-track-actions">
               {item.status === "queued" || item.status === "downloading" ? <button aria-label={`Pause ${item.title}`} onClick={() => onControl(item.id, "pause")}><Pause size={14}/></button> : null}
               {item.status === "paused" || item.status === "failed" ? <button aria-label={`${item.status === "failed" ? "Retry" : "Resume"} ${item.title}`} onClick={() => onControl(item.id, "resume")}><Play size={14}/></button> : null}

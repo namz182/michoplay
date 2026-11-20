@@ -113,6 +113,9 @@ export function youtubeDownloadErrorText(error: string, isPlaylist = false) {
   if (/javascript runtime|js runtime|challenge solving failed|signature extraction|signature solving/.test(detail)) {
     return "YouTube changed how this song is delivered. Update MichoPlay and try again.";
   }
+  if (/your yt-dlp version .* older than|your yt-dlp version .* is old/.test(detail)) {
+    return "YouTube support is out of date. Connect to the internet, restart MichoPlay, and retry.";
+  }
   if (/private video|video unavailable|not available|removed by the uploader|has been removed|copyright/.test(detail)) {
     return "This video is unavailable. Try another song.";
   }

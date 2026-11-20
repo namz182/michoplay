@@ -34,6 +34,8 @@ Media notifications keep song artwork separate from app identity. Android uses a
 
 Desktop downloads default to the user's system Music folder, with a home `Music` fallback, and share the resolved `YouTube` directory with library scanning. yt-dlp reports final MP3 paths as JSON strings with UTF-8 output so desktop encodings cannot strip filename characters. Workers verify each file before optional artwork embedding and again before marking the download complete. Download failures distinguish missing files, unreadable save locations, access permissions, empty files, unsupported formats, and MP3 conversion failures. The UI preserves approved native messages and classifies other tool output without displaying debug logs, file paths, or operating system error details.
 
+Android initializes its bundled yt-dlp and FFmpeg tools before YouTube work, then checks for a newer yt-dlp at most once a day before starting queued downloads. A failed update check leaves the bundled downloader available; compatibility failures can trigger one refresh and retry during the session. Playlist rows classify tool errors into user-facing messages, and only actual audio transfer output updates progress.
+
 ## Known implementation limits
 
 - `src-tauri/src/lib.rs` still contains several domains in one module; continue extracting library scanning, playback, downloads, and platform integration behind focused modules.

@@ -56,6 +56,10 @@ test("debug context does not override the actual failure or leak into messages",
 
 test("YouTube compatibility failures and temporary request errors stay actionable", () => {
   assert.equal(
+    youtubeDownloadErrorText("WARNING: Your yt-dlp version (2025.11.12) is older than 90 days!"),
+    "YouTube support is out of date. Connect to the internet, restart MichoPlay, and retry.",
+  );
+  assert.equal(
     youtubeDownloadErrorText("ERROR: No supported JavaScript runtime could be found; challenge solving failed"),
     "YouTube changed how this song is delivered. Update MichoPlay and try again.",
   );

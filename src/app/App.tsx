@@ -4153,7 +4153,7 @@ export default function App() {
           <section
             ref={contentScrollRef}
             className={`content-scroll ${desktopLyricsOpen ? "lyrics-open" : ""}`}
-            aria-label={heading}
+            aria-label={isAndroid && mobileTab === "downloads" ? "Downloads" : heading}
           >
             {!isAndroid && lyricsMounted && footerTrack && (
               <div
@@ -5100,7 +5100,7 @@ export default function App() {
                     )}
                   </>
                 )}
-                <div hidden={page.section !== "Spotify"}>
+                <div hidden={page.section !== "Spotify" || (isAndroid && mobileTab !== "home")}>
                   <SpotifyImportScreen
                     mobile={isAndroid}
                     onBack={() => {
