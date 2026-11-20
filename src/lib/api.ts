@@ -16,6 +16,7 @@ export type PlayerSnapshot = {
 export type YoutubeSearchResult = { id: string; title: string; artist?: string | null; url: string; thumbnail: string | null; durationSeconds: number | null; isPlaylist: boolean; hasLyrics: boolean };
 export type SpotifySong = { id: string; title: string; artist: string; thumbnailUrl?: string | null; durationSeconds?: number | null };
 export type SpotifyPublicMetadata = { title: string; thumbnailUrl?: string | null; author?: string | null; kind: "track" | "album" | "playlist"; songs: SpotifySong[]; totalTracks?: number | null };
+export type SpotifySongsPage = { songs: SpotifySong[]; totalTracks?: number | null };
 export type LyricsData = { text: string | null; offsetMs: number; source: string | null };
 export type LyricsSearchResult = { id: number; trackName: string; artistName: string; albumName: string; duration: number | null; instrumental: boolean; plainLyrics: string | null; syncedLyrics: string | null };
 export type YoutubeDownloadPlaylist = { id: string; title: string; index: number; total: number };
@@ -40,6 +41,7 @@ export const api = {
   shareText: (title: string, text: string, url: string) => invoke<void>("media_share_text", { title, text, url }),
   youtubeMusicDirectory: () => invoke<string>("youtube_music_directory"),
   spotifyPublicMetadata: (url: string) => invoke<SpotifyPublicMetadata>("spotify_public_metadata", { url }),
+  spotifyLoadMoreSongs: (url: string, offset: number) => invoke<SpotifySongsPage>("spotify_load_more_songs", { url, offset }),
   nativePlayerSheet: (kind: "volume" | "equalizer", volume: number, equalizerBands: number[], equalizerEnabled: boolean) => invoke<void>("native_player_sheet", { kind, volume: Math.round(volume * 100), equalizerBands, equalizerEnabled }),
   haptic: (style: "click" | "tick" | "confirm" | "dismiss" = "click") => invoke<void>("native_haptic", { style }),
   pickMusicFolder: () => invoke<{ path: string; count: number; name: string }>("library_pick_music_folder"),

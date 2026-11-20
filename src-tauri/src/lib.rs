@@ -3032,6 +3032,19 @@ struct SpotifyPublicMetadata {
     total_tracks: Option<usize>,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotifySongsPage {
+    songs: Vec<SpotifySong>,
+    total_tracks: Option<usize>,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct SpotifyPathfinderResponse {
+    response: String,
+}
+
 #[cfg(not(target_os = "android"))]
 fn youtube_entry_has_lyrics(entry: &serde_json::Value) -> bool {
     ["subtitles", "automatic_captions"].iter().any(|field| {
@@ -3715,6 +3728,240 @@ async fn spotify_public_metadata(
 }
 
 #[tauri::command]
+async fn spotify_load_more_songs(
+    url: String,
+    offset: usize,
+    bridge: State<'_, MediaBridge>,
+) -> Result<SpotifySongsPage, String> {
+    let (kind, preview_url) = spotify_preview_url(&url)?;
+    if kind != "playlist" {
+        return Err("More songs can only be loaded from a Spotify playlist.".to_owned());
+    }
+    if offset < 100 {
+        return Err("Spotify playlist pagination starts after the first 100 songs.".to_owned());
+    }
+    let offset = offset.min(100_000);
+
+    #[cfg(target_os = "android")]
+    {
+        let response: SpotifyPathfinderResponse = call_android_media(
+            android_media_plugin(&bridge)?,
+            "spotifyLoadMoreSongs",
+            serde_json::json!({ "url": preview_url, "offset": offset }),
+        )
+        .await?;
+        let payload: serde_json::Value =
+            serde_json::from_str(&response.response).map_err(|_| {
+                "Spotify returned an invalid playlist page. Retry loading more songs.".to_owned()
+            })?;
+        spotify_songs_page_from_pathfinder(&payload, offset)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        let client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|_| "MichoPlay could not prepare a Spotify request.".to_owned())?;
+        let mut response = client
+            .get(&preview_url)
+            .header(reqwest::header::ACCEPT, "text/html")
+            .send()
+            .await
+            .map_err(|_| {
+                "Spotify’s public preview could not be reached. Check your connection and retry."
+                    .to_owned()
+            })?;
+        if !response.status().is_success() {
+            return Err(
+                "Spotify could not preview this playlist. Check that it is public and retry."
+                    .to_owned(),
+            );
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > 5_000_000)
+        {
+            return Err("Spotify’s public preview response was too large.".to_owned());
+        }
+        let mut html_bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| {
+            "Spotify’s public preview could not be read. Retry loading more songs.".to_owned()
+        })? {
+            if html_bytes.len() + chunk.len() > 5_000_000 {
+                return Err("Spotify’s public preview response was too large.".to_owned());
+            }
+            html_bytes.extend_from_slice(&chunk);
+        }
+        let html = String::from_utf8(html_bytes)
+            .map_err(|_| "Spotify returned an invalid public preview.".to_owned())?;
+        let page_state = spotify_json_from_html(&html).ok_or_else(|| {
+            "Spotify did not expose playlist details in its public preview.".to_owned()
+        })?;
+        let access_token = page_state
+            .pointer("/props/pageProps/state/settings/session/accessToken")
+            .or_else(|| page_state.pointer("/settings/session/accessToken"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|token| !token.is_empty())
+            .ok_or_else(|| {
+                "Spotify did not provide access to the next playlist page.".to_owned()
+            })?;
+        let client_id = page_state
+            .pointer("/props/pageProps/state/settings/clientId")
+            .or_else(|| page_state.pointer("/props/pageProps/config/clientId"))
+            .or_else(|| page_state.pointer("/settings/clientId"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|client_id| !client_id.is_empty());
+        let client_version = if client_id.is_some() {
+            match client
+                .get("https://open.spotify.com/")
+                .header(reqwest::header::ACCEPT, "text/html")
+                .timeout(Duration::from_secs(8))
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => match response.bytes().await {
+                    Ok(bytes) if bytes.len() <= 5_000_000 => String::from_utf8(bytes.to_vec())
+                        .ok()
+                        .and_then(|html| spotify_client_version_from_html(&html)),
+                    _ => None,
+                },
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let client_token = match (client_id, client_version.as_deref()) {
+            (Some(client_id), Some(client_version)) => {
+                let token_request = serde_json::json!({
+                    "client_data": {
+                        "client_version": client_version,
+                        "client_id": client_id,
+                        "js_sdk_data": {
+                            "device_brand": "unknown",
+                            "device_model": "unknown",
+                            "os": "linux",
+                            "os_version": "unknown",
+                            "device_id": spotify_device_id(),
+                            "device_type": "computer",
+                        }
+                    }
+                });
+                match serde_json::to_string(&token_request) {
+                    Ok(body) => match client
+                        .post("https://clienttoken.spotify.com/v1/clienttoken")
+                        .header(reqwest::header::ACCEPT, "application/json")
+                        .header(
+                            reqwest::header::CONTENT_TYPE,
+                            "application/json;charset=UTF-8",
+                        )
+                        .timeout(Duration::from_secs(8))
+                        .body(body)
+                        .send()
+                        .await
+                    {
+                        Ok(response) if response.status().is_success() => {
+                            match response.bytes().await {
+                                Ok(bytes) if bytes.len() <= 1_000_000 => {
+                                    serde_json::from_slice::<serde_json::Value>(&bytes)
+                                        .ok()
+                                        .and_then(|payload| {
+                                            payload
+                                                .pointer("/granted_token/token")
+                                                .and_then(serde_json::Value::as_str)
+                                                .map(ToOwned::to_owned)
+                                        })
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    },
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        };
+        let playlist_id = preview_url
+            .rsplit('/')
+            .next()
+            .ok_or_else(|| "The Spotify playlist link is invalid.".to_owned())?;
+        let request_body = serde_json::json!({
+            "variables": {
+                "uri": format!("spotify:playlist:{playlist_id}"),
+                "offset": offset,
+                "limit": 100,
+                "includeEpisodeContentRatingsV2": true,
+            },
+            "operationName": "fetchPlaylistContents",
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "21ea11a6ac75a5f3e01fd365d29c18e0a4a8b7dc09f89bbb5d73910190c6acaf",
+                }
+            }
+        });
+        let mut pathfinder_request = client
+            .post("https://api-partner.spotify.com/pathfinder/v2/query")
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/json;charset=UTF-8",
+            )
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {access_token}"),
+            )
+            .header("app-platform", "WebPlayer")
+            .body(
+                serde_json::to_string(&request_body)
+                    .map_err(|_| "Could not prepare Spotify’s playlist request.".to_owned())?,
+            );
+        if let (Some(client_token), Some(client_version)) =
+            (client_token.as_deref(), client_version.as_deref())
+        {
+            pathfinder_request = pathfinder_request
+                .header("client-token", client_token)
+                .header("spotify-app-version", client_version);
+        }
+        let response = pathfinder_request.send().await.map_err(|_| {
+            "Spotify could not load more songs. Check your connection and retry.".to_owned()
+        })?;
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(
+                "Spotify is busy. Wait a moment, then retry loading more songs.".to_owned(),
+            );
+        }
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            || response.status() == reqwest::StatusCode::FORBIDDEN
+        {
+            return Err("Spotify did not allow access to the next playlist page.".to_owned());
+        }
+        if !response.status().is_success() {
+            return Err("Spotify could not load more songs from this playlist.".to_owned());
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > 5_000_000)
+        {
+            return Err("Spotify’s playlist page was too large.".to_owned());
+        }
+        let bytes = response.bytes().await.map_err(|_| {
+            "Spotify’s playlist page could not be read. Retry loading more songs.".to_owned()
+        })?;
+        if bytes.len() > 5_000_000 {
+            return Err("Spotify’s playlist page was too large.".to_owned());
+        }
+        let payload: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| "Spotify returned an invalid playlist page.".to_owned())?;
+        spotify_songs_page_from_pathfinder(&payload, offset)
+    }
+}
+
+#[tauri::command]
 async fn native_player_sheet(
     kind: String,
     volume: u8,
@@ -3788,6 +4035,34 @@ fn spotify_json_from_script(script: &str) -> Option<serde_json::Value> {
     .and_then(|bytes| serde_json::from_slice(&bytes).ok())
 }
 
+fn spotify_client_version_from_html(html: &str) -> Option<String> {
+    let marker = "id=\"appServerConfig\"";
+    let marker_start = html.find(marker)?;
+    let tag_start = html[..marker_start].rfind("<script")?;
+    let tag_end = marker_start + marker.len() + html[marker_start + marker.len()..].find('>')?;
+    let script_end = tag_end + 1 + html[tag_end + 1..].find("</script>")?;
+    spotify_json_from_script(&html[tag_end + 1..script_end])?
+        .get("clientVersion")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+fn spotify_device_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let pid = std::process::id() as u128;
+    format!(
+        "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+        (nanos >> 64) as u32,
+        (nanos >> 48) as u16,
+        ((nanos >> 36) & 0x0fff) as u16,
+        ((nanos >> 24) & 0x0fff) as u16,
+        ((nanos ^ pid) & 0xffffffffffff) as u64,
+    )
+}
+
 fn spotify_embedded_entity(value: &serde_json::Value) -> Option<&serde_json::Value> {
     value
         .pointer("/data/entity")
@@ -3823,6 +4098,117 @@ fn spotify_json_from_html(html: &str) -> Option<serde_json::Value> {
         cursor = end + "</script>".len();
     }
     None
+}
+
+fn spotify_songs_page_from_pathfinder(
+    payload: &serde_json::Value,
+    offset: usize,
+) -> Result<SpotifySongsPage, String> {
+    if payload
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|errors| !errors.is_empty())
+    {
+        return Err(
+            "Spotify could not load more songs from this playlist. Retry in a moment.".to_owned(),
+        );
+    }
+    let content = payload
+        .pointer("/data/playlistV2/content")
+        .or_else(|| payload.pointer("/data/playlist/content"))
+        .ok_or_else(|| "Spotify returned an invalid playlist page.".to_owned())?;
+    let items = content
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Spotify returned an invalid playlist page.".to_owned())?;
+    let total_tracks = content
+        .get("totalCount")
+        .or_else(|| content.get("total"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok());
+    let songs = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            let track = row
+                .pointer("/itemV2/data")
+                .or_else(|| row.pointer("/itemV3/data"))
+                .or_else(|| row.get("item"))
+                .unwrap_or(row);
+            let title = track
+                .get("name")
+                .or_else(|| track.get("title"))
+                .and_then(serde_json::Value::as_str)?
+                .trim();
+            if title.is_empty() {
+                return None;
+            }
+            let artist_names = track
+                .pointer("/artists/items")
+                .and_then(serde_json::Value::as_array)
+                .or_else(|| track.get("artists").and_then(serde_json::Value::as_array))
+                .map(|artists| {
+                    artists
+                        .iter()
+                        .filter_map(|artist| {
+                            artist
+                                .pointer("/profile/name")
+                                .or_else(|| artist.get("name"))
+                                .and_then(serde_json::Value::as_str)
+                        })
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|artists| !artists.is_empty())
+                .or_else(|| {
+                    track
+                        .get("subtitle")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|artist| !artist.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+                .unwrap_or_default();
+            let uri = track.get("uri").and_then(serde_json::Value::as_str);
+            let id = uri
+                .and_then(|uri| uri.rsplit(':').next())
+                .or_else(|| track.get("id").and_then(serde_json::Value::as_str))
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("spotify-track-{}", offset + index));
+            let duration_ms = track
+                .pointer("/trackDuration/totalMilliseconds")
+                .or_else(|| track.get("duration_ms"))
+                .or_else(|| track.get("duration"))
+                .and_then(serde_json::Value::as_f64);
+            let thumbnail_url = track
+                .get("albumOfTrack")
+                .or_else(|| track.get("album"))
+                .and_then(spotify_image_url)
+                .or_else(|| spotify_image_url(track));
+            Some(SpotifySong {
+                id,
+                title: title.to_owned(),
+                artist: artist_names,
+                thumbnail_url,
+                duration_seconds: duration_ms.map(|duration| {
+                    if duration > 1000.0 {
+                        duration / 1000.0
+                    } else {
+                        duration
+                    }
+                }),
+            })
+        })
+        .collect::<Vec<_>>();
+    if songs.is_empty() && (!items.is_empty() || total_tracks.is_some_and(|total| total > offset)) {
+        return Err("Spotify did not return usable songs for this playlist page.".to_owned());
+    }
+    Ok(SpotifySongsPage {
+        songs,
+        total_tracks,
+    })
 }
 
 fn spotify_image_url(value: &serde_json::Value) -> Option<String> {
@@ -6261,6 +6647,7 @@ pub fn run() {
             youtube_music_directory,
             youtube_search,
             spotify_public_metadata,
+            spotify_load_more_songs,
             native_player_sheet,
             native_haptic,
             youtube_downloads_state,

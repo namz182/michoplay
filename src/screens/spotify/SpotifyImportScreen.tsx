@@ -6,6 +6,7 @@ import {
   api,
   type SpotifyPublicMetadata,
   type SpotifySong,
+  type SpotifySongsPage,
   type Track,
   type YoutubeDownload,
   type YoutubeDownloadPlaylist,
@@ -202,8 +203,12 @@ export function SpotifyImportScreen({
   onDownloadControl,
 }: Props) {
   const [url, setUrl] = useState("");
+  const [loadedUrl, setLoadedUrl] = useState("");
   const [metadata, setMetadata] = useState<SpotifyPublicMetadata | null>(null);
   const [songs, setSongs] = useState<PlaylistSong[]>([]);
+  const [hasMoreSongs, setHasMoreSongs] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -246,6 +251,10 @@ export function SpotifyImportScreen({
       );
       setMetadata(null);
       setSongs([]);
+      setLoadedUrl("");
+      setHasMoreSongs(false);
+      setLoadMoreError("");
+      setLoadingMore(false);
       setSelected(new Set());
       setStatuses(new Map());
       setResolvedMatches(new Map());
@@ -255,10 +264,14 @@ export function SpotifyImportScreen({
     }
 
     setUrl(parsed.url);
+    setLoadedUrl(parsed.url);
     setError("");
     setLoading(true);
     setMetadata(null);
     setSongs([]);
+    setHasMoreSongs(false);
+    setLoadingMore(false);
+    setLoadMoreError("");
     setSelected(new Set());
     setStatuses(new Map());
     setResolvedMatches(new Map());
@@ -275,6 +288,11 @@ export function SpotifyImportScreen({
       }));
       setMetadata({ ...result, kind: parsed.kind });
       setSongs(items);
+      setHasMoreSongs(
+        parsed.kind === "playlist" &&
+          (result.totalTracks != null && result.totalTracks > items.length ||
+            items.length >= 100),
+      );
     } catch (reason) {
       if (thisRequest !== requestId.current) return;
       setError(
@@ -302,8 +320,12 @@ export function SpotifyImportScreen({
     previewRequest.current?.abort();
     previewRequest.current = null;
     setUrl("");
+    setLoadedUrl("");
     setMetadata(null);
     setSongs([]);
+    setHasMoreSongs(false);
+    setLoadingMore(false);
+    setLoadMoreError("");
     setSelected(new Set());
     setStatuses(new Map());
     setResolvedMatches(new Map());
@@ -318,6 +340,51 @@ export function SpotifyImportScreen({
     previewRequest.current = null;
     setLoading(false);
     setError("");
+  }
+
+  async function loadMoreSongs() {
+    if (!metadata || !loadedUrl || loadingMore || !hasMoreSongs) return;
+    const thisRequest = requestId.current;
+    const offset = songs.length;
+    setLoadingMore(true);
+    setLoadMoreError("");
+    try {
+      const page: SpotifySongsPage = await api.spotifyLoadMoreSongs(
+        loadedUrl,
+        offset,
+      );
+      if (thisRequest !== requestId.current) return;
+      const items = page.songs.map((song, index) => ({
+        ...song,
+        key: `${song.id}:${offset + index}`,
+      }));
+      if (!items.length) {
+        setHasMoreSongs(false);
+        return;
+      }
+      setSongs((current) => [...current, ...items]);
+      const totalTracks = page.totalTracks ?? metadata.totalTracks;
+      if (page.totalTracks != null)
+        setMetadata((current) =>
+          current ? { ...current, totalTracks: page.totalTracks } : current,
+        );
+      setHasMoreSongs(
+        totalTracks != null
+          ? offset + items.length < totalTracks || items.length >= 100
+          : items.length >= 100,
+      );
+    } catch (reason) {
+      if (thisRequest !== requestId.current) return;
+      setLoadMoreError(
+        reason instanceof Error
+          ? reason.message
+          : typeof reason === "string" && reason.trim()
+            ? reason
+            : "Could not load more Spotify songs. Check your connection and retry.",
+      );
+    } finally {
+      if (thisRequest === requestId.current) setLoadingMore(false);
+    }
   }
 
   function setAllSelected(checked: boolean) {
@@ -682,8 +749,7 @@ export function SpotifyImportScreen({
         <>
           {totalTracks != null && totalTracks > loadedCount && (
             <p className="spotify-partial-note">
-              Showing {loadedCount} of {totalTracks} songs available in
-              Spotify’s public preview.
+              Showing {loadedCount} of {totalTracks} songs.
             </p>
           )}
           <section
@@ -719,7 +785,29 @@ export function SpotifyImportScreen({
                 </button>
               </div>
             </div>
-            <div className="spotify-track-list">{songs.map(renderSongRow)}</div>
+            <div id="spotify-track-list" className="spotify-track-list">
+              {songs.map(renderSongRow)}
+            </div>
+            {loadMoreError && (
+              <div className="spotify-load-more-error" role="alert">
+                <span>{loadMoreError}</span>
+                <button type="button" onClick={() => void loadMoreSongs()}>
+                  Retry
+                </button>
+              </div>
+            )}
+            {hasMoreSongs && !loadMoreError && (
+              <div className="spotify-load-more">
+                <button
+                  type="button"
+                  aria-controls="spotify-track-list"
+                  disabled={loadingMore}
+                  onClick={() => void loadMoreSongs()}
+                >
+                  {loadingMore ? "Loading more songs…" : "Load more songs"}
+                </button>
+              </div>
+            )}
           </section>
         </>
       )}

@@ -67,6 +67,9 @@ class YoutubeSearchArgs { var query: String = ""; var limit: Int = 15; var offse
 class SpotifyPreviewArgs { var url: String = "" }
 
 @InvokeArg
+class SpotifyLoadMoreArgs { var url: String = ""; var offset: Int = 100 }
+
+@InvokeArg
 class NativePlayerSheetArgs {
   var kind: String = ""
   var volume: Int = 100
@@ -568,6 +571,35 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           else -> error.message ?: "Spotify’s public preview could not be loaded. Retry the link."
         }
         if (settled.compareAndSet(false, true)) invoke.reject(message)
+      } finally {
+        deadline.cancel(false)
+        connection.get()?.disconnect()
+      }
+    }
+  }
+
+  @Command
+  fun spotifyLoadMoreSongs(invoke: Invoke) {
+    val args = invoke.parseArgs(SpotifyLoadMoreArgs::class.java)
+    val settled = AtomicBoolean(false)
+    val connection = AtomicReference<HttpURLConnection?>(null)
+    val deadline = downloadEvents.schedule({
+      if (settled.compareAndSet(false, true)) {
+        invoke.reject("Spotify took too long to load more songs. Check your connection and retry.")
+        io.execute { connection.get()?.disconnect() }
+      }
+    }, 75, TimeUnit.SECONDS)
+    io.execute {
+      try {
+        val response = SpotifyPreviewClient.loadMoreSongs(
+          args.url,
+          args.offset,
+          onConnection = { connection.set(it) },
+        )
+        if (settled.compareAndSet(false, true)) invoke.resolveObject(mapOf("response" to response))
+      } catch (error: Exception) {
+        Log.w("MichoPlay", "Spotify playlist pagination failed", error)
+        if (settled.compareAndSet(false, true)) invoke.reject(error.message ?: "Could not load more Spotify songs. Retry the playlist.")
       } finally {
         deadline.cancel(false)
         connection.get()?.disconnect()

@@ -11843,6 +11843,12 @@ body:has(.android-app),
 .spotify-inline-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -4px 0 14px; color: #ffb5b5; font-size: 12px; line-height: 1.5; }
 .spotify-inline-error > .spotify-source-reset { flex: 0 0 auto; }
 .spotify-partial-note { margin: 2px 0 8px; color: var(--muted); font-size: 10px; }
+.spotify-load-more { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 15px 0 8px; color: var(--muted); font-size: 10px; }
+.spotify-load-more button { min-height: 36px; padding: 0 13px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: rgb(255 255 255 / 4%); font: inherit; font-size: 10px; cursor: pointer; }
+.spotify-load-more button:hover:not(:disabled) { background: rgb(255 255 255 / 8%); }
+.spotify-load-more button:disabled { opacity: .55; cursor: default; }
+.spotify-load-more-error { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 0 4px; color: #ffb5b5; font-size: 10px; }
+.spotify-load-more-error button { min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: transparent; font: inherit; font-size: 10px; cursor: pointer; }
 .spotify-row-status { display: block; overflow: hidden; color: var(--muted); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .spotify-row-status.is-error { color: #ffb5b5; }
 .spotify-row-status.is-library { color: #a9d8b5; }
