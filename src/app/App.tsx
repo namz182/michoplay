@@ -2690,6 +2690,7 @@ export default function App() {
     };
   }, [footerTrack?.id]);
   function handleLyricsImported(trackId: number, result: LyricsData) {
+    if (result.savedToFile) setMessage("Lyrics saved to the audio file.");
     if (footerTrack?.id === trackId) {
       lyricsRequestVersion.current += 1;
       setLyricsText(result.text);

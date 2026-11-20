@@ -298,17 +298,34 @@ fn embed_lyrics_text(audio_path: &Path, contents: &str) -> Result<(), String> {
         .map_err(|error| format!("Could not read downloaded audio tags: {error}"))?
         .read()
         .map_err(|error| format!("Could not read downloaded audio tags: {error}"))?;
+    let tag_type = tagged.primary_tag_type();
     if tagged.primary_tag().is_none() {
-        tagged.insert_tag(Tag::new(TagType::Id3v2));
+        tagged.insert_tag(Tag::new(tag_type));
     }
     let tag = tagged
         .primary_tag_mut()
         .ok_or_else(|| "Could not prepare audio lyrics metadata.".to_owned())?;
-    // Keep the original LRC timestamp markup inside the audio's lyrics tag.
-    // This works for ID3 MP3 downloads and preserves timing for MichoPlay's renderer.
-    tag.insert_text(ItemKey::UnsyncLyrics, contents.to_owned());
+    // ID3 requires UnsyncLyrics; other tag formats use their standard Lyrics key.
+    // Keep LRC timestamp markup intact so MichoPlay can continue syncing playback.
+    let lyrics_key = if tag_type == TagType::Id3v2 {
+        ItemKey::UnsyncLyrics
+    } else {
+        ItemKey::Lyrics
+    };
+    if !tag.insert_text(lyrics_key, contents.to_owned()) {
+        return Err("This audio format does not support embedded lyrics.".to_owned());
+    }
     tag.save_to_path(audio_path, WriteOptions::default())
-        .map_err(|error| format!("Could not embed downloaded lyrics: {error}"))
+        .map_err(|error| format!("Could not save lyrics to the audio file: {error}"))?;
+    let saved = embedded_lyrics(audio_path).ok_or_else(|| {
+        "Lyrics were written, but could not be verified in the audio file.".to_owned()
+    })?;
+    if saved.trim() != contents.trim() {
+        return Err(
+            "Lyrics were written, but the audio file did not retain the imported text.".to_owned(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(not(target_os = "android"))]
@@ -414,6 +431,8 @@ struct LyricsData {
     text: Option<String>,
     offset_ms: i32,
     source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    saved_to_file: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -581,34 +600,94 @@ fn lyrics_read(track_id: u64, state: State<'_, AppState>) -> Result<LyricsData, 
         text,
         offset_ms,
         source,
+        saved_to_file: None,
     })
 }
 
 #[tauri::command]
-fn lyrics_import(
+async fn lyrics_import(
     track_id: u64,
     text: String,
     source_id: u64,
     state: State<'_, AppState>,
+    bridge: State<'_, MediaBridge>,
 ) -> Result<LyricsData, String> {
     if text.trim().is_empty() || text.len() > 250_000 || source_id == 0 {
         return Err("The selected lyrics could not be imported.".to_owned());
     }
-    let (path, storage_dir, track_json) = {
+    let (path, storage_dir) = {
+        let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
+        let index = core.find_track_index(track_id)?;
+        (core.tracks[index].path.clone(), core.storage_dir.clone())
+    };
+    if !path.is_file() {
+        return Err("This song's audio file is unavailable for saving lyrics.".to_owned());
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = (&bridge, &storage_dir);
+
+    #[cfg(target_os = "android")]
+    {
+        let plugin = android_media_plugin(&bridge)?;
+        let _: serde_json::Value = call_android_media(
+            plugin,
+            "requestMetadataWriteAccess",
+            serde_json::json!({ "path": path }),
+        )
+        .await?;
+    }
+
+    let direct_write = embed_lyrics_text(&path, &text);
+    #[cfg(target_os = "android")]
+    if direct_write.is_err() {
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("audio");
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp_path =
+            storage_dir.join(format!(".michoplay-lyrics-{track_id}-{stamp}.{extension}"));
+        let staged_write = (|| -> Result<(), String> {
+            fs::copy(&path, &temp_path)
+                .map_err(|error| format!("Could not prepare the audio file: {error}"))?;
+            embed_lyrics_text(&temp_path, &text)?;
+            let plugin = android_media_plugin(&bridge)?;
+            plugin
+                .run_mobile_plugin::<()>(
+                    "writeMetadataFile",
+                    serde_json::json!({ "path": path, "tempPath": temp_path }),
+                )
+                .map_err(|error| error.to_string())?;
+            let saved = embedded_lyrics(&path).ok_or_else(|| {
+                "Android wrote the audio file, but its embedded lyrics could not be verified."
+                    .to_owned()
+            })?;
+            if saved.trim() != text.trim() {
+                return Err(
+                    "Android wrote the audio file, but it did not retain the imported lyrics."
+                        .to_owned(),
+                );
+            }
+            Ok(())
+        })();
+        let _ = fs::remove_file(&temp_path);
+        staged_write?;
+    }
+    #[cfg(not(target_os = "android"))]
+    direct_write?;
+
+    let path_text = path.to_string_lossy().into_owned();
+    let source = format!("LRCLIB:{source_id}");
+    let track_json = {
         let core = state.0.lock().map_err(|_| "The library is unavailable.")?;
         let index = core.find_track_index(track_id)?;
         let mut track = core.tracks[index].track.clone();
         track.has_lyrics = true;
-        let track_json = serde_json::to_string(&track)
-            .map_err(|_| "Could not update the library.".to_owned())?;
-        (
-            core.tracks[index].path.clone(),
-            core.storage_dir.clone(),
-            track_json,
-        )
+        serde_json::to_string(&track).map_err(|_| "Could not update the library.".to_owned())?
     };
-    let path_text = path.to_string_lossy().into_owned();
-    let source = format!("LRCLIB:{source_id}");
     {
         let _cache_write = LIBRARY_CACHE_WRITE_LOCK
             .lock()
@@ -641,18 +720,11 @@ fn lyrics_import(
             }
         }
     }
-    // Imported lyrics remain available in SQLite even when Android or a
-    // read-only music folder does not allow editing the audio file.
-    if path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"))
-    {
-        let _ = embed_lyrics_text(&path, &text);
-    }
     Ok(LyricsData {
         text: Some(text),
         offset_ms: 0,
         source: Some(source),
+        saved_to_file: Some(true),
     })
 }
 
