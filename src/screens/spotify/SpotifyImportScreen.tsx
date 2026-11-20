@@ -610,7 +610,6 @@ export function SpotifyImportScreen({
           ) : (
             <Music2 size={18} />
           )}
-          <i aria-hidden="true">▶</i>
         </span>
         <span className="spotify-track-copy">
           <strong title={song.title}>{song.title}</strong>
@@ -769,6 +768,33 @@ export function SpotifyImportScreen({
 
       {metadata && !loading && (
         <>
+          <section className="spotify-collection-card" aria-label="Playlist details">
+            <div className="spotify-collection-art">
+              {metadata.thumbnailUrl ? (
+                <img src={metadata.thumbnailUrl} alt="" />
+              ) : (
+                <Disc3 size={28} />
+              )}
+            </div>
+            <div className="spotify-collection-copy">
+              <h2 title={metadata.title}>{metadata.title}</h2>
+              <p>
+                {[metadata.author, totalTracks != null ? `${totalTracks} songs` : null]
+                  .filter(Boolean)
+                  .join(" · ") || "Spotify collection"}
+              </p>
+            </div>
+            <div className="spotify-collection-actions">
+              <button
+                className="spotify-download-selected"
+                type="button"
+                disabled={!selectedSongs.length}
+                onClick={() => void downloadSongs(selectedSongs)}
+              >
+                Download selected ({selectedSongs.length})
+              </button>
+            </div>
+          </section>
           {totalTracks != null && totalTracks > loadedCount && (
             <p className="spotify-partial-note">
               Showing {loadedCount} of {totalTracks} songs.
@@ -783,16 +809,10 @@ export function SpotifyImportScreen({
                 {selectedSongs.length} of {loadedCount} selected
               </span>
               <div className="spotify-selection-tools">
-                <button
-                  className="spotify-download-selected"
-                  disabled={!selectedSongs.length}
-                  onClick={() => void downloadSongs(selectedSongs)}
-                >
-                  Download selected ({selectedSongs.length})
-                </button>
                 {selectedSongs.length > 0 && !allSelected && (
                   <button
                     className="spotify-deselect-button"
+                    type="button"
                     onClick={() => setAllSelected(false)}
                   >
                     Deselect all
@@ -800,6 +820,7 @@ export function SpotifyImportScreen({
                 )}
                 <button
                   className="spotify-select-all-button"
+                  type="button"
                   disabled={!songs.length}
                   onClick={() => setAllSelected(!allSelected)}
                 >
