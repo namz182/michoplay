@@ -4823,10 +4823,20 @@ body.resizing {
 .playlist-menu-wrap {
   position: relative;
 }
-.playlist-actions-wrap {
+.playlist-actions-wrap,
+.folder-detail-actions-wrap {
   position: relative;
   display: flex;
   align-items: center;
+}
+.folder-detail-actions-trigger {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
 }
 .playlist-actions-menu {
   position: absolute;
@@ -10585,7 +10595,7 @@ body:has(.android-app),
   background: rgba(17, 17, 19, 0.97);
   backdrop-filter: blur(14px);
 }
-.android-app .collection-tools:not(:has(.playlist-actions-wrap)) {
+.android-app .collection-tools:not(:has(.playlist-actions-wrap, .folder-detail-actions-wrap)) {
   grid-template-columns: minmax(0, 1fr) max-content;
 }
 .android-app .collection-tools .play-actions {
@@ -10595,12 +10605,14 @@ body:has(.android-app),
   min-width: 0;
   gap: 5px;
 }
-.android-app .collection-tools .playlist-actions-wrap {
+.android-app .collection-tools .playlist-actions-wrap,
+.android-app .collection-tools .folder-detail-actions-wrap {
   grid-column: 3;
   grid-row: 1;
   justify-self: end;
 }
-.android-app .collection-tools .playlist-actions-trigger {
+.android-app .collection-tools .playlist-actions-trigger,
+.android-app .collection-tools .folder-detail-actions-trigger {
   width: 38px;
   height: 40px;
   padding: 0;
@@ -11229,6 +11241,24 @@ body:has(.android-app),
   .collection-tools {
     align-items: flex-start;
     flex-wrap: wrap;
+  }
+  .collection-tools:has(.playlist-actions-wrap, .folder-detail-actions-wrap) {
+    position: relative;
+  }
+  .collection-tools:has(.playlist-actions-wrap, .folder-detail-actions-wrap)
+    .playlist-actions-wrap,
+  .collection-tools:has(.playlist-actions-wrap, .folder-detail-actions-wrap)
+    .folder-detail-actions-wrap {
+    position: absolute;
+    z-index: 2;
+    top: 16px;
+    right: 13px;
+  }
+  .android-app .collection-tools .playlist-actions-wrap,
+  .android-app .collection-tools .folder-detail-actions-wrap {
+    position: relative;
+    top: auto;
+    right: auto;
   }
   .play-actions {
     min-width: 0;

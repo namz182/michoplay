@@ -334,6 +334,8 @@ export default function App() {
   const [dialog, setDialog] = useState<{
     target?: Track;
     playlist?: Playlist;
+    tracks?: Track[];
+    sourceTitle?: string;
   } | null>(null);
   const [confirmation, setConfirmation] = useState<{
     title: string;
@@ -1648,7 +1650,7 @@ export default function App() {
     const close = (event: globalThis.PointerEvent) => {
       if (
         !(event.target as HTMLElement).closest(
-          ".action-menu, .menu-trigger, .playlist-actions-trigger",
+          ".action-menu, .menu-trigger, .playlist-actions-trigger, .folder-detail-actions-trigger",
         )
       ) {
         setMenu(null);
@@ -1694,12 +1696,20 @@ export default function App() {
           void document.exitFullscreen().catch(() => {});
         return;
       }
-      if (dialog || confirmation || menu || appMenu || sortMenuOpen) {
+      if (
+        dialog ||
+        confirmation ||
+        menu ||
+        appMenu ||
+        sortMenuOpen ||
+        playlistActionsOpen
+      ) {
         setDialog(null);
         setConfirmation(null);
         setMenu(null);
         setAppMenu(false);
         setSortMenuOpen(false);
+        setPlaylistActionsOpen(false);
         return;
       }
       if (mobileTab !== "home") {
@@ -1739,6 +1749,7 @@ export default function App() {
     menu,
     appMenu,
     sortMenuOpen,
+    playlistActionsOpen,
     mobileTab,
     history,
     page,
@@ -2771,6 +2782,11 @@ export default function App() {
       }
     return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
   }, [availableTracks]);
+  const folderDetailKey =
+    page.detail?.kind === "folder" ? page.detail.key : null;
+  const selectedFolder = folderDetailKey
+    ? folders.find((folder) => folder.key === folderDetailKey)
+    : undefined;
   const normalizedFoldersSearch = foldersSearch.trim().toLocaleLowerCase();
   const visibleFolders = useMemo(
     () =>
@@ -2912,6 +2928,7 @@ export default function App() {
     ["Folders", "Playlists", "Albums", "Artists"].includes(page.section);
   useEffect(() => {
     setPlaylistSearchOpen(false);
+    setPlaylistActionsOpen(false);
   }, [page.section, page.detail?.key]);
   const globalSearchIndex = useMemo(() => {
     type SearchEntry = { searchText: string; result: GlobalSearchResult };
@@ -3307,6 +3324,15 @@ export default function App() {
     setPlaylistName(playlist?.name ?? "");
     setMenu(null);
   }
+  function newPlaylistFromFolder(folder: Collection) {
+    const folderTracks = folder.tracks.filter(
+      (track) => !hiddenTrackSet.has(track.id),
+    );
+    setDialog({ tracks: folderTracks, sourceTitle: folder.title });
+    setPlaylistName(folder.title);
+    setPlaylistActionsOpen(false);
+    setMenu(null);
+  }
   function savePlaylist() {
     const name = playlistName.trim();
     if (!name || !dialog) return;
@@ -3320,7 +3346,9 @@ export default function App() {
       const playlist: Playlist = {
         id: crypto.randomUUID(),
         name,
-        trackIds: dialog.target ? [dialog.target.id] : [],
+        trackIds: dialog.target
+          ? [dialog.target.id]
+          : [...new Set(dialog.tracks?.map((track) => track.id) ?? [])],
       };
       setPlaylists((prior) => [...prior, playlist]);
       if (!dialog.target) {
@@ -3818,8 +3846,8 @@ export default function App() {
           <div className="library-heading-actions">
             <button
               className="icon-button small"
-              aria-label="Create playlist"
-              title="Create playlist"
+              aria-label="Make playlist"
+              title="Make playlist"
               onClick={() => newPlaylist()}
             >
               <Plus size={15} />
@@ -4824,71 +4852,105 @@ export default function App() {
                                   </button>
                                 </div>
                               )}
-                            </div>
-                            {selectedPlaylist &&
-                              selectedPlaylist.name.toLocaleLowerCase() !==
-                                "youtube" && (
-                                <div className="playlist-actions-wrap">
+                          </div>
+                          {selectedPlaylist &&
+                            selectedPlaylist.name.toLocaleLowerCase() !==
+                              "youtube" && (
+                              <div className="playlist-actions-wrap">
+                                <button
+                                  type="button"
+                                  className="icon-button playlist-actions-trigger"
+                                  aria-label="Playlist actions"
+                                  aria-expanded={playlistActionsOpen}
+                                  onClick={() =>
+                                    setPlaylistActionsOpen((open) => !open)
+                                  }
+                                >
+                                  <MoreVertical size={20} />
+                                </button>
+                                {playlistActionsOpen && (
+                                  <div
+                                    className="action-menu playlist-actions-menu"
+                                    role="menu"
+                                  >
+                                    <button
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setPlaylistActionsOpen(false);
+                                        setAddSongsPlaylistId(
+                                          selectedPlaylist.id,
+                                        );
+                                        setAddSongsSelected([]);
+                                        setAddSongsSearch("");
+                                        setAddSongsVisibleLimit(100);
+                                      }}
+                                    >
+                                      <Plus size={15} />
+                                      Add songs
+                                    </button>
+                                    <button
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setPlaylistActionsOpen(false);
+                                        newPlaylist(
+                                          undefined,
+                                          selectedPlaylist,
+                                        );
+                                      }}
+                                    >
+                                      <Pencil size={15} />
+                                      Rename playlist
+                                    </button>
+                                    <div className="menu-separator" />
+                                    <button
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setPlaylistActionsOpen(false);
+                                        confirmDeletePlaylist(
+                                          selectedPlaylist,
+                                        );
+                                      }}
+                                    >
+                                      <Trash2 size={15} />
+                                      Delete playlist
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          {selectedFolder && (
+                            <div className="folder-detail-actions-wrap">
+                              <button
+                                type="button"
+                                className="icon-button playlist-actions-trigger folder-detail-actions-trigger"
+                                aria-label="Folder actions"
+                                aria-haspopup="menu"
+                                aria-expanded={playlistActionsOpen}
+                                onClick={() =>
+                                  setPlaylistActionsOpen((open) => !open)
+                                }
+                              >
+                                <MoreVertical size={20} />
+                              </button>
+                              {playlistActionsOpen && (
+                                <div
+                                  className="action-menu playlist-actions-menu folder-detail-actions-menu"
+                                  role="menu"
+                                >
                                   <button
-                                    className="icon-button playlist-actions-trigger"
-                                    aria-label="Playlist actions"
-                                    aria-expanded={playlistActionsOpen}
+                                    type="button"
+                                    role="menuitem"
                                     onClick={() =>
-                                      setPlaylistActionsOpen((open) => !open)
+                                      newPlaylistFromFolder(selectedFolder)
                                     }
                                   >
-                                    <MoreVertical size={20} />
+                                    <ListMusic size={15} />
+                                    Make playlist
                                   </button>
-                                  {playlistActionsOpen && (
-                                    <div
-                                      className="action-menu playlist-actions-menu"
-                                      role="menu"
-                                    >
-                                      <button
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setPlaylistActionsOpen(false);
-                                          setAddSongsPlaylistId(
-                                            selectedPlaylist.id,
-                                          );
-                                          setAddSongsSelected([]);
-                                          setAddSongsSearch("");
-                                          setAddSongsVisibleLimit(100);
-                                        }}
-                                      >
-                                        <Plus size={15} />
-                                        Add songs
-                                      </button>
-                                      <button
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setPlaylistActionsOpen(false);
-                                          newPlaylist(
-                                            undefined,
-                                            selectedPlaylist,
-                                          );
-                                        }}
-                                      >
-                                        <Pencil size={15} />
-                                        Rename playlist
-                                      </button>
-                                      <div className="menu-separator" />
-                                      <button
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setPlaylistActionsOpen(false);
-                                          confirmDeletePlaylist(
-                                            selectedPlaylist,
-                                          );
-                                        }}
-                                      >
-                                        <Trash2 size={15} />
-                                        Delete playlist
-                                      </button>
-                                    </div>
-                                  )}
                                 </div>
                               )}
+                            </div>
+                          )}
                           </div>
                         </div>
                         {rows(
@@ -7491,6 +7553,13 @@ export default function App() {
               />
             </label>
             {dialog.target && <p>“{dialog.target.title}” will be added.</p>}
+            {dialog.tracks && (
+              <p>
+                {dialog.tracks.length} song
+                {dialog.tracks.length === 1 ? "" : "s"} from “
+                {dialog.sourceTitle}” will be added.
+              </p>
+            )}
             <button
               className="primary-button"
               type="submit"
