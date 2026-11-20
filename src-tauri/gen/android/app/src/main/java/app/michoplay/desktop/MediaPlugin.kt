@@ -120,6 +120,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private val jobGenerations = ConcurrentHashMap<String, AtomicInteger>()
   private val activeDownloads = AtomicInteger(0)
   private val downloadQueueLock = Any()
+  private val downloadServiceLock = Any()
+  @Volatile private var downloadServiceStarted = false
   private val downloadEvents = Executors.newSingleThreadScheduledExecutor()
   private var downloadEventPending = false
   // Keep the configured number of parallel extraction jobs within Settings limits.
@@ -130,11 +132,16 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Volatile private var downloader403RefreshAttempted = false
   companion object {
     @Volatile private var notificationPermissionPrompted = false
+    @Volatile private var activePlugin: MediaPlugin? = null
     private val pendingActions = CopyOnWriteArrayList<String>()
     private val pendingShortcuts = CopyOnWriteArrayList<String>()
 
     fun dispatch(action: String) {
       if (action != "youtube-downloads-updated") synchronized(pendingActions) { pendingActions.add(action) }
+    }
+
+    fun pauseDownloadsForServiceTimeout() {
+      activePlugin?.pauseDownloadsForServiceTimeoutInternal()
     }
 
     fun dispatchOpenAudio() = dispatch("open-audio")
@@ -143,7 +150,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   override fun load(webView: android.webkit.WebView) {
     super.load(webView)
+    activePlugin = this
     restoreDownloads()
+    syncDownloadForegroundService()
     io.execute { initializeDownloader(); startQueuedDownloads() }
   }
 
@@ -838,6 +847,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     val playlist = if (!args.playlistId.isNullOrBlank() && !args.playlistTitle.isNullOrBlank()) mapOf("id" to args.playlistId, "title" to args.playlistTitle, "index" to (args.playlistIndex ?: 0), "total" to (args.playlistTotal ?: 0)) else null
     val item = Collections.synchronizedMap(mutableMapOf<String, Any?>("id" to "youtube-${nextDownloadId.getAndIncrement()}", "title" to args.title.ifBlank { "YouTube audio" }, "artist" to args.artist, "url" to args.url, "thumbnail" to args.thumbnail, "isPlaylist" to (args.isPlaylist && args.url.contains("list=")), "playlist" to playlist, "status" to "queued", "phase" to "queued", "percent" to null, "downloadedBytes" to null, "totalBytes" to null, "totalBytesEstimated" to false, "speedBytesPerSecond" to null, "etaSeconds" to null, "message" to "Waiting to download", "filePaths" to emptyList<String>()))
     downloads.add(item); jobGenerations[item["id"] as String] = AtomicInteger(0)
+    syncDownloadForegroundService()
     emitDownloads(); invoke.resolveObject(item); startQueuedDownloads()
   }
 
@@ -859,6 +869,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         }
       } ?: return
       val generation = jobGenerations.getOrPut(item["id"] as String) { AtomicInteger(0) }.get()
+      syncDownloadForegroundService()
       emitDownloads()
       io.execute {
         val staging = File(activity.cacheDir, "youtube/${item["id"]}")
@@ -946,7 +957,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           }
         } finally {
           if (item["status"] == "completed" || item["status"] == "cancelled" || item["status"] == "failed") staging.deleteRecursively()
-          activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads()
+          activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads(); syncDownloadForegroundService()
         }
       }
     }
@@ -988,7 +999,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     request.addOption("--postprocessor-args", "Metadata+ffmpeg_o:-vn")
     request.addOption("--write-subs"); request.addOption("--write-auto-subs"); request.addOption("--sub-format", "vtt")
     request.addOption("--embed-thumbnail")
-    request.addOption("-o", File(staging, "%(title).160B.%(ext)s").absolutePath)
+    // Include the source ID so two songs with the same title cannot overwrite
+    // each other in the public Music folder or be mistaken for the same file.
+    request.addOption("-o", File(staging, "%(title).160B [%(id)s].%(ext)s").absolutePath)
     val downloadProgress = Regex("\\[download\\]\\s*([0-9]+(?:\\.[0-9]+)?)%")
     val sizeProgress = Regex("of\\s+~?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)", RegexOption.IGNORE_CASE)
     val speedProgress = Regex("at\\s+([0-9]+(?:\\.[0-9]+)?)\\s*(KiB|MiB|GiB|KB|MB|GB|B)/s", RegexOption.IGNORE_CASE)
@@ -1276,7 +1289,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       val url = entry.optString("url")
       if (id.isBlank() || url.isBlank()) continue
       val item = Collections.synchronizedMap(mutableMapOf<String, Any?>())
-      for (key in listOf("id", "title", "url", "thumbnail", "isPlaylist", "status", "phase", "percent", "downloadedBytes", "totalBytes", "totalBytesEstimated", "speedBytesPerSecond", "etaSeconds", "message")) {
+      for (key in listOf("id", "title", "artist", "url", "thumbnail", "isPlaylist", "status", "phase", "percent", "downloadedBytes", "totalBytes", "totalBytesEstimated", "speedBytesPerSecond", "etaSeconds", "message")) {
         item[key] = entry.opt(key).takeUnless { it == JSONObject.NULL }
       }
       // SharedPreferences stores the playlist as a JSONObject. Convert it back
@@ -1383,7 +1396,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }
     val values = ContentValues().apply {
       put(MediaStore.Audio.Media.DISPLAY_NAME, file.name)
-      put(MediaStore.Audio.Media.TITLE, file.nameWithoutExtension)
+      put(MediaStore.Audio.Media.TITLE, item["title"] as? String ?: file.nameWithoutExtension)
+      (item["artist"] as? String)?.takeIf { it.isNotBlank() }?.let {
+        put(MediaStore.Audio.Media.ARTIST, it)
+      }
       put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
       put(MediaStore.Audio.Media.RELATIVE_PATH, relativePath)
       put(MediaStore.Audio.Media.IS_PENDING, 1)
@@ -1394,7 +1410,10 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       activity.contentResolver.openOutputStream(uri, "w")?.use { output -> copyAudioToOutput(file, output, item, generation) }
         ?: throw IllegalStateException("Android couldn’t open the new Music file.")
       requireActiveJob(item, generation)
-      ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }.also { activity.contentResolver.update(uri, it, null, null) }
+      val published = ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }
+      if (activity.contentResolver.update(uri, published, null, null) <= 0) {
+        throw IllegalStateException("Android couldn’t finish saving the audio file.")
+      }
       requirePlayableAudio(uri)
       val storedPath = runCatching {
         activity.contentResolver.query(uri, arrayOf(MediaStore.Audio.Media.DATA), null, null, null)?.use { cursor ->
@@ -1431,6 +1450,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     val id = invoke.parseArgs(YoutubeDownloadArgs::class.java).id
     val removed = downloads.removeAll { it["id"] == id && it["status"] != "downloading" }
     if (removed) jobGenerations.remove(id)
+    syncDownloadForegroundService()
     emitDownloads(); invoke.resolve()
   }
   private fun changeDownload(invoke: Invoke, status: String, stop: Boolean) {
@@ -1452,10 +1472,58 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
       allowed
     }
     if (!changed) { invoke.resolve(); return }
+    syncDownloadForegroundService()
     emitDownloads()
     invoke.resolve()
     if (status == "queued") io.execute { startQueuedDownloads() }
     else if (stop) io.execute { try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Exception) {} }
+  }
+
+  private fun syncDownloadForegroundService() {
+    val hasWork = downloads.any { item ->
+      synchronized(item) { item["status"] == "queued" || item["status"] == "downloading" }
+    }
+    val context = activity.applicationContext
+    val intent = Intent(context, YoutubeDownloadService::class.java)
+    synchronized(downloadServiceLock) {
+      if (hasWork && (!downloadServiceStarted || !YoutubeDownloadService.isRunning())) {
+        try {
+          ContextCompat.startForegroundService(context, intent)
+          downloadServiceStarted = true
+        } catch (error: Exception) {
+          Log.w("MichoPlay", "Could not start download foreground service", error)
+        }
+      } else if (!hasWork && downloadServiceStarted) {
+        context.stopService(intent)
+        downloadServiceStarted = false
+      }
+    }
+  }
+
+  private fun pauseDownloadsForServiceTimeoutInternal() {
+    val idsToStop = mutableListOf<String>()
+    synchronized(downloadQueueLock) {
+      downloads.forEach { item ->
+        synchronized(item) {
+          if (item["status"] == "queued" || item["status"] == "downloading") {
+            val id = item["id"] as? String ?: return@synchronized
+            jobGenerations.getOrPut(id) { AtomicInteger(0) }.incrementAndGet()
+            item["status"] = "paused"
+            item["phase"] = "paused"
+            item["message"] = "Paused by Android. Open Downloads to resume."
+            idsToStop.add(id)
+          }
+        }
+      }
+    }
+    if (idsToStop.isNotEmpty()) {
+      emitDownloads()
+      io.execute {
+        idsToStop.forEach { id ->
+          try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Exception) { }
+        }
+      }
+    }
   }
 
   @Command
