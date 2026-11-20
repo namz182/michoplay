@@ -11749,7 +11749,7 @@ body:has(.android-app),
 }
 
 /* Spotify import follows the flat playlist treatment from the playlist view. */
-.spotify-collection-card { position: sticky; top: 0; z-index: 4; min-height: 96px; gap: 17px; margin: 0 0 4px; padding: 8px 0 15px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: #171619; }
+.spotify-collection-card { position: sticky; top: 0; z-index: 4; min-height: 96px; gap: 17px; margin: 0 0 4px; padding: 8px 12px 15px; border: 0; border-radius: 0; background: #171619; }
 .spotify-collection-art { width: 64px; height: 64px; border-radius: 9px; }
 .spotify-collection-type { font-size: 10px; letter-spacing: .12em; }
 .spotify-collection-copy h2 { margin: 5px 0 3px; font-size: 20px; }
@@ -11757,7 +11757,7 @@ body:has(.android-app),
 .spotify-collection-actions { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 7px; }
 .spotify-source-reset { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: transparent; font: inherit; font-size: 10px; cursor: pointer; }
 .spotify-track-section { overflow: visible; margin-top: 0; border: 0; border-radius: 0; background: transparent; }
-.spotify-selection-toolbar { min-height: 48px; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.spotify-selection-toolbar { min-height: 48px; justify-content: space-between; gap: 12px; padding: 4px 12px; border: 0; }
 .spotify-selected-count { min-width: 120px; font-size: 11px; }
 .spotify-whole-list-button { min-height: 40px; padding: 0 9px; border: 0; color: #c8ff00; background: transparent; font: inherit; font-size: 11px; font-weight: 650; cursor: pointer; }
 @media (hover: hover) and (pointer: fine) {
@@ -11843,7 +11843,7 @@ body:has(.android-app),
 .spotify-loading-preview { min-height: auto; flex: 0 0 auto; overflow: visible; }
 
 @media (max-width: 700px) {
-  .spotify-collection-card { gap: 12px; padding: 5px 0 12px; }
+  .spotify-collection-card { gap: 12px; padding: 5px 8px 12px; }
   .spotify-collection-copy h2 { font-size: 17px; }
   .spotify-selection-toolbar { flex-wrap: wrap; gap: 3px 8px; padding: 5px 0; }
   .spotify-selected-count { min-width: 0; flex: 1; }
@@ -11930,12 +11930,14 @@ body:has(.android-app),
 
 @media (max-width: 700px) {
   .spotify-import-page { padding-inline: 12px; }
-  .spotify-import-page .spotify-selection-toolbar { gap: 6px; padding-inline: 0; }
+  .spotify-import-page .spotify-selection-toolbar { gap: 6px; padding-inline: 8px; }
   .spotify-import-page .spotify-selection-tools { min-width: 0; gap: 5px; }
 }
 
 @media (max-width: 380px) {
   .spotify-import-page { padding-inline: 10px; }
+  .spotify-import-page .spotify-collection-card,
+  .spotify-import-page .spotify-selection-toolbar { padding-inline: 6px; }
   .spotify-import-page .spotify-collection-card {
     grid-template-columns: 44px minmax(0, 1fr) auto;
     gap: 7px;
