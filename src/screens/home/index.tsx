@@ -13,6 +13,21 @@ type Collection = {
 };
 type Section = "Songs" | "Albums" | "Artists" | "Playlists" | "Folders";
 
+function compareCollectionsByDateAdded(a: Collection, b: Collection) {
+  const newestAddedAt = (collection: Collection) =>
+    collection.tracks.reduce(
+      (newest, track) => Math.max(newest, track.addedAt),
+      0,
+    );
+  return (
+    newestAddedAt(b) - newestAddedAt(a) ||
+    a.title.localeCompare(b.title, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    })
+  );
+}
+
 export function HomeScreen({
   albums,
   artists,
@@ -40,24 +55,30 @@ export function HomeScreen({
   openAlbum: (album: Collection) => void;
   openArtist: (artist: Collection) => void;
 }) {
-  const folderItems = folders.map((folder) => ({
-    ...folder,
-    label: "Folder",
-    meta: `${folder.tracks.length} songs`,
-    onOpen: () => openFolder(folder),
-  }));
-  const albumItems = albums.map((album) => ({
-    ...album,
-    label: "Album",
-    meta: album.subtitle || `${album.tracks.length} songs`,
-    onOpen: () => openAlbum(album),
-  }));
-  const artistItems = artists.map((artist) => ({
-    ...artist,
-    label: "Artist",
-    meta: `${artist.tracks.length} songs`,
-    onOpen: () => openArtist(artist),
-  }));
+  const folderItems = folders
+    .map((folder) => ({
+      ...folder,
+      label: "Folder",
+      meta: `${folder.tracks.length} songs`,
+      onOpen: () => openFolder(folder),
+    }))
+    .sort(compareCollectionsByDateAdded);
+  const albumItems = albums
+    .map((album) => ({
+      ...album,
+      label: "Album",
+      meta: album.subtitle || `${album.tracks.length} songs`,
+      onOpen: () => openAlbum(album),
+    }))
+    .sort(compareCollectionsByDateAdded);
+  const artistItems = artists
+    .map((artist) => ({
+      ...artist,
+      label: "Artist",
+      meta: `${artist.tracks.length} songs`,
+      onOpen: () => openArtist(artist),
+    }))
+    .sort(compareCollectionsByDateAdded);
   return (
     <div className="home-section android-home">
       <HomeQuickLinks
