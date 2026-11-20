@@ -57,12 +57,12 @@ internal object SpotifyPreviewClient {
     throw IOException("Spotify’s public preview could not be reached. Retry the link.")
   }
 
-  fun loadMoreSongs(
+  fun loadPlaylistSongsPage(
     previewUrl: String,
     offset: Int,
     onConnection: (HttpURLConnection) -> Unit = {},
   ): String {
-    require(offset in 100..100000) { "Invalid Spotify playlist page." }
+    require(offset in 0..100000) { "Invalid Spotify playlist page." }
     val html = fetch(previewUrl, onConnection = onConnection)
     val accessToken = Regex("\"accessToken\"\\s*:\\s*\"([^\"]+)\"")
       .find(html)

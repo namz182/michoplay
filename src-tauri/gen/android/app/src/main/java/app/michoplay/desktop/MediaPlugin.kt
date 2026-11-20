@@ -579,7 +579,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
-  fun spotifyLoadMoreSongs(invoke: Invoke) {
+  fun spotifyPlaylistSongsPage(invoke: Invoke) {
     val args = invoke.parseArgs(SpotifyLoadMoreArgs::class.java)
     val settled = AtomicBoolean(false)
     val connection = AtomicReference<HttpURLConnection?>(null)
@@ -591,7 +591,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     }, 75, TimeUnit.SECONDS)
     io.execute {
       try {
-        val response = SpotifyPreviewClient.loadMoreSongs(
+        val response = SpotifyPreviewClient.loadPlaylistSongsPage(
           args.url,
           args.offset,
           onConnection = { connection.set(it) },

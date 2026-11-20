@@ -3728,7 +3728,7 @@ async fn spotify_public_metadata(
 }
 
 #[tauri::command]
-async fn spotify_load_more_songs(
+async fn spotify_playlist_songs_page(
     url: String,
     offset: usize,
     bridge: State<'_, MediaBridge>,
@@ -3737,16 +3737,15 @@ async fn spotify_load_more_songs(
     if kind != "playlist" {
         return Err("More songs can only be loaded from a Spotify playlist.".to_owned());
     }
-    if offset < 100 {
-        return Err("Spotify playlist pagination starts after the first 100 songs.".to_owned());
+    if offset > 100_000 {
+        return Err("Spotify playlist page is out of range.".to_owned());
     }
-    let offset = offset.min(100_000);
 
     #[cfg(target_os = "android")]
     {
         let response: SpotifyPathfinderResponse = call_android_media(
             android_media_plugin(&bridge)?,
-            "spotifyLoadMoreSongs",
+            "spotifyPlaylistSongsPage",
             serde_json::json!({ "url": preview_url, "offset": offset }),
         )
         .await?;
@@ -6647,7 +6646,7 @@ pub fn run() {
             youtube_music_directory,
             youtube_search,
             spotify_public_metadata,
-            spotify_load_more_songs,
+            spotify_playlist_songs_page,
             native_player_sheet,
             native_haptic,
             youtube_downloads_state,

@@ -41,7 +41,7 @@ export const api = {
   shareText: (title: string, text: string, url: string) => invoke<void>("media_share_text", { title, text, url }),
   youtubeMusicDirectory: () => invoke<string>("youtube_music_directory"),
   spotifyPublicMetadata: (url: string) => invoke<SpotifyPublicMetadata>("spotify_public_metadata", { url }),
-  spotifyLoadMoreSongs: (url: string, offset: number) => invoke<SpotifySongsPage>("spotify_load_more_songs", { url, offset }),
+  spotifyPlaylistSongsPage: (url: string, offset: number) => invoke<SpotifySongsPage>("spotify_playlist_songs_page", { url, offset }),
   nativePlayerSheet: (kind: "volume" | "equalizer", volume: number, equalizerBands: number[], equalizerEnabled: boolean) => invoke<void>("native_player_sheet", { kind, volume: Math.round(volume * 100), equalizerBands, equalizerEnabled }),
   haptic: (style: "click" | "tick" | "confirm" | "dismiss" = "click") => invoke<void>("native_haptic", { style }),
   pickMusicFolder: () => invoke<{ path: string; count: number; name: string }>("library_pick_music_folder"),

@@ -293,6 +293,28 @@ export function SpotifyImportScreen({
           (result.totalTracks != null && result.totalTracks > items.length ||
             items.length >= 100),
       );
+      if (parsed.kind === "playlist" && items.length > 0) {
+        void api
+          .spotifyPlaylistSongsPage(parsed.url, 0)
+          .then((page) => {
+            if (thisRequest !== requestId.current) return;
+            const thumbnails = new Map(
+              page.songs
+                .filter((song) => song.thumbnailUrl)
+                .map((song) => [song.id, song.thumbnailUrl!]),
+            );
+            if (!thumbnails.size) return;
+            setSongs((current) =>
+              current.map((song) => {
+                const thumbnailUrl = thumbnails.get(song.id);
+                return thumbnailUrl
+                  ? { ...song, thumbnailUrl }
+                  : song;
+              }),
+            );
+          })
+          .catch(() => undefined);
+      }
     } catch (reason) {
       if (thisRequest !== requestId.current) return;
       setError(
@@ -349,7 +371,7 @@ export function SpotifyImportScreen({
     setLoadingMore(true);
     setLoadMoreError("");
     try {
-      const page: SpotifySongsPage = await api.spotifyLoadMoreSongs(
+      const page: SpotifySongsPage = await api.spotifyPlaylistSongsPage(
         loadedUrl,
         offset,
       );
