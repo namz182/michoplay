@@ -214,6 +214,8 @@ Build an Android App Bundle for store distribution:
 npm run tauri android build -- --aab
 ```
 
+Every Android build (including Android Studio builds) resolves the latest stable downloader wrapper and FFmpeg libraries, including their Python and QuickJS runtime dependencies. Gradle also fetches the latest yt-dlp nightly, verifies its published SHA-256 checksum, and bundles it in the APK. This preparation requires network access and fails the build if it cannot refresh or verify the downloader. The app adopts the bundled version on upgrade and continues checking for runtime updates. Android framework and UI libraries remain pinned for compatibility.
+
 Outputs are under `src-tauri/gen/android/app/build/outputs/`. Install a generated APK on the connected phone with:
 
 ```sh

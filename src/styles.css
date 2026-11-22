@@ -12034,3 +12034,32 @@ body:has(.android-app),
   content-visibility: auto;
   contain-intrinsic-size: auto 72px;
 }
+
+/* Keep the import session mounted while giving it a single page boundary. */
+.spotify-page-host {
+  display: block;
+  position: relative;
+  min-width: 0;
+  isolation: isolate;
+}
+.spotify-page-host[hidden] { display: none !important; }
+
+/* Mobile uses the desktop download card, with touch sized controls. */
+.android-app .mobile-download-list .download-item {
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  grid-template-rows: auto 4px;
+  gap: 8px 10px;
+  padding: 14px 0;
+}
+.android-app .mobile-download-list .download-item-main { grid-column: 1 / 3; grid-row: 1; gap: 10px; }
+.android-app .mobile-download-list .download-item-art { width: 52px; height: 52px; flex-basis: 52px; border-radius: 8px; }
+.android-app .mobile-download-list .download-item-copy strong { font-size: 13px; }
+.android-app .mobile-download-list .download-item-copy small { font-size: 11px; }
+.android-app .mobile-download-list .download-item-progress { grid-column: 2; grid-row: 2; height: 4px; }
+.android-app .mobile-download-list .download-item-actions { grid-column: 3; grid-row: 1 / 3; flex-wrap: wrap; justify-content: flex-end; max-width: 88px; margin: 0; gap: 0; }
+.android-app .mobile-download-list .download-status-label { width: 100%; margin: 0; text-align: right; font-size: 10px; }
+.android-app .mobile-download-list .download-item-actions button,
+.android-app .playlist-download-track-actions button { width: 44px; height: 44px; flex-basis: 44px; touch-action: manipulation; }
+.android-app .mobile-download-list .download-item-actions button:active { background: rgb(255 255 255 / 10%); }
+.android-app .mobile-download-list .download-art-play { width: 36px; height: 36px; }
+.android-app .mobile-download-list .playlist-download-track-actions { flex-shrink: 0; }

@@ -32,7 +32,7 @@
     "category": "Music",
     "android": {
       "minSdkVersion": 26,
-      "versionCode": 1004
+      "versionCode": 1005
     },
     "shortDescription": "Offline music for your desktop",
     "longDescription": "A private, offline-first music player for your local collection.",

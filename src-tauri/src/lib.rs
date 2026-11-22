@@ -4066,6 +4066,25 @@ async fn native_player_sheet(
 }
 
 #[tauri::command]
+async fn native_background_app(bridge: State<'_, MediaBridge>) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let _: serde_json::Value = call_android_media(
+            android_media_plugin(&bridge)?,
+            "backgroundApp",
+            serde_json::json!({}),
+        )
+        .await?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bridge;
+        Ok(())
+    }
+}
+
+#[tauri::command]
 async fn native_haptic(style: String, bridge: State<'_, MediaBridge>) -> Result<(), String> {
     if !matches!(style.as_str(), "click" | "tick" | "confirm" | "dismiss") {
         return Err("Unsupported haptic feedback style.".to_owned());
@@ -6721,6 +6740,7 @@ pub fn run() {
             spotify_playlist_songs_page,
             native_player_sheet,
             native_haptic,
+            native_background_app,
             youtube_downloads_state,
             youtube_download_set_concurrency,
             youtube_download_enqueue,

@@ -69,6 +69,7 @@ class MainActivity : TauriActivity() {
 
   private fun dispatchShortcut(intent: Intent?) {
     when (intent?.action) {
+      "app.michoplay.desktop.OPEN_DOWNLOADS" -> MediaPlugin.dispatchShortcut("shortcut-downloads")
       "app.michoplay.desktop.SHORTCUT_YOUTUBE" -> MediaPlugin.dispatchShortcut("shortcut-youtube")
       "app.michoplay.desktop.SHORTCUT_LIBRARY" -> MediaPlugin.dispatchShortcut("shortcut-library")
     }

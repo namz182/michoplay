@@ -45,6 +45,8 @@ import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.Collections
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.withLock
 
 @InvokeArg
 class MediaUpdateArgs {
@@ -119,7 +121,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private val downloads = CopyOnWriteArrayList<MutableMap<String, Any?>>()
   private val jobGenerations = ConcurrentHashMap<String, AtomicInteger>()
   private val activeDownloads = AtomicInteger(0)
+  private val runningProcesses = ConcurrentHashMap<String, String>()
   private val downloadQueueLock = Any()
+  private val downloaderRuntimeLock = ReentrantReadWriteLock()
   private val downloadServiceLock = Any()
   @Volatile private var downloadServiceStarted = false
   private val downloadEvents = Executors.newSingleThreadScheduledExecutor()
@@ -617,6 +621,22 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
+  fun backgroundApp(invoke: Invoke) {
+    activity.runOnUiThread { activity.moveTaskToBack(true); invoke.resolve() }
+  }
+
+  private fun requestNotificationPermission() {
+    activity.runOnUiThread {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+        !notificationPermissionPrompted) {
+        notificationPermissionPrompted = true
+        activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9043)
+      }
+    }
+  }
+
+  @Command
   fun nativePlayerSheet(invoke: Invoke) {
     val args = invoke.parseArgs(NativePlayerSheetArgs::class.java)
     if (args.kind !in setOf("volume", "equalizer")) {
@@ -786,7 +806,9 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         val request = YoutubeDLRequest(if (isUrl) query else "ytsearch$searchEnd:$query")
         request.addOption("--ignore-config"); request.addOption("--no-warnings"); if (isPlaylist || !args.includeLyrics) request.addOption("--flat-playlist")
         request.addOption("--dump-single-json"); request.addOption("--playlist-end", searchEnd.toString()); request.addOption("--skip-download")
-        val json = JSONObject(YoutubeDL.getInstance().execute(request).out)
+        val json = downloaderRuntimeLock.readLock().withLock {
+          JSONObject(YoutubeDL.getInstance().execute(request).out)
+        }
         val results = mutableListOf<Map<String, Any?>>()
         if (isPlaylist && !args.playlistItems) {
           val id = json.optString("id", "playlist")
@@ -838,6 +860,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun youtubeDownloadEnqueue(invoke: Invoke) {
     val args = invoke.parseArgs(YoutubeDownloadArgs::class.java)
+    requestNotificationPermission()
     if (!isYoutubeUrl(args.url)) { invoke.reject("Enter a valid YouTube video or playlist URL."); return }
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && ContextCompat.checkSelfPermission(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
       activity.runOnUiThread { activity.requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 9044) }
@@ -853,30 +876,38 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
 
   private fun startQueuedDownloads() {
     while (true) {
-      val item = synchronized(downloadQueueLock) {
+      val work = synchronized(downloadQueueLock) {
         if (activeDownloads.get() >= maxConcurrentDownloads) null
-        else downloads.firstOrNull { it["status"] == "queued" }?.also {
-          activeDownloads.incrementAndGet()
-          it["status"] = "downloading"
-          it["phase"] = "preparing"
-          it["percent"] = null
-          it["downloadedBytes"] = null
-          it["totalBytes"] = null
-          it["totalBytesEstimated"] = false
-          it["speedBytesPerSecond"] = null
-          it["etaSeconds"] = null
-          it["message"] = "Starting download…"
+        else downloads.firstOrNull { it["status"] == "queued" && !runningProcesses.containsKey(it["id"] as String) }?.let { item ->
+          synchronized(item) {
+            val id = item["id"] as String
+            val generation = jobGenerations.getOrPut(id) { AtomicInteger(0) }.get()
+            runningProcesses[id] = "$id-$generation"
+            activeDownloads.incrementAndGet()
+            item["status"] = "downloading"
+            item["phase"] = "preparing"
+            item["percent"] = null
+            item["downloadedBytes"] = null
+            item["totalBytes"] = null
+            item["totalBytesEstimated"] = false
+            item["speedBytesPerSecond"] = null
+            item["etaSeconds"] = null
+            item["message"] = "Starting download…"
+            item to generation
+          }
         }
       } ?: return
-      val generation = jobGenerations.getOrPut(item["id"] as String) { AtomicInteger(0) }.get()
+      val (item, generation) = work
       syncDownloadForegroundService()
       emitDownloads()
       io.execute {
-        val staging = File(activity.cacheDir, "youtube/${item["id"]}")
+        // Keep partial files across cache eviction and app restarts.
+        val staging = File(activity.filesDir, "youtube/${item["id"]}")
         val published = mutableListOf<PublishedAudio>()
         try {
           try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) } catch (_: Exception) { }
           if (!downloaderReady && !initializeDownloader()) throw IllegalStateException(downloaderError ?: "YouTube tools couldn’t start.")
+          requireActiveJob(item, generation)
           staging.mkdirs()
           try {
             executeYoutubeAudioDownload(item, staging, generation)
@@ -951,12 +982,15 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
           }
           // A pause followed quickly by resume changes the item to queued before
           // this process exits. Do not let the old worker overwrite that request.
-          if (jobIsActive(item, generation)) {
-            item["status"] = "failed"; item["phase"] = "failed"; item["message"] = error.message ?: "Download failed"
-            Log.w("MichoPlay", "YouTube download failed: ${error.message}", error)
+          synchronized(item) {
+            if (jobIsActive(item, generation)) {
+              item["status"] = "failed"; item["phase"] = "failed"; item["message"] = error.message ?: "Download failed"
+              Log.w("MichoPlay", "YouTube download failed: ${error.message}", error)
+            }
           }
         } finally {
-          if (item["status"] == "completed" || item["status"] == "cancelled" || item["status"] == "failed") staging.deleteRecursively()
+          if (item["status"] == "completed" || item["status"] == "cancelled") staging.deleteRecursively()
+          runningProcesses.remove(item["id"] as String)
           activeDownloads.decrementAndGet(); emitDownloads(); startQueuedDownloads(); syncDownloadForegroundService()
         }
       }
@@ -1012,8 +1046,13 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     // Keep stdout and stderr separate. yt-dlp writes the progress template to
     // stdout, while the library builds its exception message from stderr.
     // Merging the streams leaves response.err empty and hides the real error.
-    val response = YoutubeDL.getInstance().execute(request, item["id"] as String) { _, _, line ->
-      if (jobIsActive(item, generation)) {
+    requireActiveJob(item, generation)
+    val response = downloaderRuntimeLock.readLock().withLock {
+      requireActiveJob(item, generation)
+      YoutubeDL.getInstance().execute(request, "${item["id"]}-$generation") { _, _, line ->
+      if (!jobIsActive(item, generation)) {
+        runCatching { YoutubeDL.getInstance().destroyProcessById("${item["id"]}-$generation") }
+      } else {
         playlistItem.find(line)?.let { match ->
           val current = match.groupValues[1].toIntOrNull()
           val total = match.groupValues[2].toIntOrNull()
@@ -1076,14 +1115,15 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         }
       }
       kotlin.Unit
+      }
     }
     // --ignore-errors keeps post-processing problems (for example a thumbnail
     // that cannot be attached) from aborting a download that already produced
     // audio. Inspect the exit code ourselves so genuine extractor failures are
     // surfaced and the compatibility retry can run.
     val produced = staging.walkTopDown().any { it.isFile && it.extension.equals("mp3", ignoreCase = true) }
+    if (response.exitCode != 0) throw IllegalStateException(youtubeDownloadFailure(response))
     if (!produced) {
-      if (response.exitCode != 0) throw IllegalStateException(youtubeDownloadFailure(response))
       throw IllegalStateException("YouTube did not produce a playable audio file.")
     }
   }
@@ -1219,19 +1259,20 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
     return detail.ifBlank { "yt-dlp stopped with exit code ${response.exitCode}." }
   }
 
-  @Synchronized
   private fun refreshDownloaderForCompatibility(): Boolean {
-    if (downloader403RefreshAttempted) return false
-    downloader403RefreshAttempted = true
-    return try {
-      YoutubeDL.getInstance().updateYoutubeDL(activity.applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
-      activity.getSharedPreferences("michoplay-downloader", 0).edit()
-        .putLong("last-successful-update", System.currentTimeMillis()).apply()
-      downloaderError = null
-      true
-    } catch (error: Exception) {
-      downloaderError = error.message ?: "YouTube support could not be refreshed."
-      false
+    return downloaderRuntimeLock.writeLock().withLock {
+      if (downloader403RefreshAttempted) return@withLock false
+      downloader403RefreshAttempted = true
+      try {
+        YoutubeDL.getInstance().updateYoutubeDL(activity.applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
+        activity.getSharedPreferences("michoplay-downloader", 0).edit()
+          .putLong("last-successful-update", System.currentTimeMillis()).apply()
+        downloaderError = null
+        true
+      } catch (error: Exception) {
+        downloaderError = error.message ?: "YouTube support could not be refreshed."
+        false
+      }
     }
   }
 
@@ -1276,6 +1317,8 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         JSONArray().apply { downloads.forEach { item -> put(JSONObject(synchronized(item) { item.toMap() })) } }
       }
       runCatching { trigger("youtube-downloads-updated", JSObject().apply { put("items", snapshot) }) }
+      val jobs = downloads.map { item -> synchronized(item) { item.toMap() } }
+      runCatching { YoutubeDownloadService.update(activity.applicationContext, jobs) }
       // SharedPreferences.apply writes asynchronously; never block a bridge or
       // progress callback with a synchronous disk commit for every percentage.
       activity.getSharedPreferences("michoplay_downloads", Activity.MODE_PRIVATE)
@@ -1332,19 +1375,30 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   private fun initializeDownloader(): Boolean {
     if (downloaderReady) return true
     return try {
+      val preferences = activity.getSharedPreferences("michoplay-downloader", 0)
+      val bundledVersion = activity.resources.openRawResource(R.raw.michoplay_ytdlp_version).bufferedReader().use { it.readText().trim() }
+      if (preferences.getString("bundled-version", null) != bundledVersion) {
+        val binary = File(activity.noBackupFilesDir, "youtubedl-android/yt-dlp/yt-dlp")
+        binary.parentFile?.mkdirs()
+        val staged = File(binary.parentFile, "yt-dlp.new")
+        activity.resources.openRawResource(R.raw.ytdlp).use { input -> staged.outputStream().use { input.copyTo(it) } }
+        check(staged.renameTo(binary)) { "Could not install the packaged YouTube downloader." }
+        // This APK already contains the verified current nightly. Start downloads
+        // immediately instead of making first launch wait for another network update.
+        preferences.edit().putString("bundled-version", bundledVersion)
+          .putLong("last-successful-update", System.currentTimeMillis()).apply()
+      }
       YoutubeDL.getInstance().init(activity.applicationContext)
       FFmpeg.getInstance().init(activity.applicationContext)
       // The APK can contain an old yt-dlp even when the Android wrapper is
       // current. Refresh it before search or queued downloads use it, at most
       // once a day. A failed check leaves the bundled tool available offline.
-      val preferences = activity.getSharedPreferences("michoplay-downloader", 0)
       val lastUpdate = preferences.getLong("last-successful-update", 0L)
       val now = System.currentTimeMillis()
       if (lastUpdate <= 0L || now < lastUpdate || now - lastUpdate >= TimeUnit.DAYS.toMillis(1)) {
         try {
           YoutubeDL.getInstance().updateYoutubeDL(activity.applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
           preferences.edit().putLong("last-successful-update", System.currentTimeMillis()).apply()
-          downloader403RefreshAttempted = true
         } catch (error: Exception) {
           Log.w("MichoPlay", "Could not refresh YouTube support; using bundled downloader", error)
         }
@@ -1466,15 +1520,20 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun youtubeDownloadRemove(invoke: Invoke) {
     val id = invoke.parseArgs(YoutubeDownloadArgs::class.java).id
-    val removed = downloads.removeAll { it["id"] == id && it["status"] != "downloading" }
-    if (removed) jobGenerations.remove(id)
+    val removed = downloads.removeAll { it["id"] == id && it["status"] != "downloading" && !runningProcesses.containsKey(id) }
+    if (removed) {
+      jobGenerations.remove(id)
+      File(activity.filesDir, "youtube/$id").deleteRecursively()
+    }
     syncDownloadForegroundService()
     emitDownloads(); invoke.resolve()
   }
   private fun changeDownload(invoke: Invoke, status: String, stop: Boolean) {
     val id = invoke.parseArgs(YoutubeDownloadArgs::class.java).id
     val item = downloads.firstOrNull { it["id"] == id } ?: run { invoke.reject("Download was not found."); return }
-    val changed = synchronized(item) {
+    var processToStop: String? = null
+    val changed = synchronized(downloadQueueLock) { synchronized(item) {
+      processToStop = runningProcesses[id]
       val current = item["status"]
       val allowed = when (status) {
         "queued" -> current == "paused" || current == "failed"
@@ -1488,13 +1547,15 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
         else if (stop) { item["phase"] = status; item["message"] = if (status == "paused") "Paused" else "Cancelled" }
       }
       allowed
-    }
+    } }
     if (!changed) { invoke.resolve(); return }
     syncDownloadForegroundService()
     emitDownloads()
     invoke.resolve()
     if (status == "queued") io.execute { startQueuedDownloads() }
-    else if (stop) io.execute { try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Exception) {} }
+    else if (stop) processToStop?.let { processId -> io.execute {
+      try { YoutubeDL.getInstance().destroyProcessById(processId) } catch (_: Exception) {}
+    } }
   }
 
   private fun syncDownloadForegroundService() {
@@ -1529,7 +1590,7 @@ class MediaPlugin(private val activity: Activity) : Plugin(activity) {
             item["status"] = "paused"
             item["phase"] = "paused"
             item["message"] = "Paused by Android. Open Downloads to resume."
-            idsToStop.add(id)
+            runningProcesses[id]?.let { idsToStop.add(it) }
           }
         }
       }

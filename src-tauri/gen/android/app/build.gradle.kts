@@ -1,11 +1,18 @@
 import java.util.Properties
 import java.io.FileInputStream
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.OutputDirectory
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("rust")
+}
+
+abstract class PrepareAndroidDownloader : Exec() {
+    @get:OutputDirectory
+    abstract val resourceDirectory: DirectoryProperty
 }
 
 val tauriProperties = Properties().apply {
@@ -97,8 +104,9 @@ rust {
 }
 
 dependencies {
-    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
-    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+    // The wrapper carries Python and QuickJS; FFmpeg must track its current release.
+    implementation("io.github.junkfood02.youtubedl-android:library:latest.release")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:latest.release")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
@@ -107,6 +115,24 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
+}
+
+configurations.configureEach {
+    resolutionStrategy.cacheDynamicVersionsFor(0, "seconds")
+}
+
+val prepareAndroidDownloader by tasks.registering(PrepareAndroidDownloader::class) {
+    val script = rootProject.file("../../../scripts/prepare-android-tools.mjs")
+    resourceDirectory.set(layout.buildDirectory.dir("generated/downloader/res"))
+    inputs.file(script)
+    outputs.upToDateWhen { false }
+    commandLine("node", script.absolutePath, resourceDirectory.get().asFile.absolutePath)
+}
+tasks.named("preBuild").configure { dependsOn(prepareAndroidDownloader) }
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.sources.res?.addGeneratedSourceDirectory(prepareAndroidDownloader) { it.resourceDirectory }
+    }
 }
 
 apply(from = file("tauri.build.gradle.kts"))

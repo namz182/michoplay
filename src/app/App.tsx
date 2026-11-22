@@ -90,16 +90,12 @@ import { Empty } from "../components/EmptyState";
 import { CollectionGrid } from "../components/library/CollectionGrid";
 import packageInfo from "../../package.json";
 import { youtubeDownloadErrorText } from "../lib/youtube-size";
-import {
-  youtubeDownloadDescription,
-  youtubeDownloadIsPending,
-  youtubeDownloadProgress,
-} from "../components/downloads/DownloadStatus";
 import { Cover, useArtwork } from "./Artwork";
 import { LyricsBadge } from "../components/LyricsBadge";
 import { LyricsView } from "../screens/lyrics/LyricsView";
 import { SpotifyImportScreen } from "../screens/spotify/SpotifyImportScreen";
 import { PlaylistSelection } from "../components/downloads/PlaylistSelection";
+import { DownloadCard } from "../components/downloads/DownloadCard";
 import { DownloadProgressList } from "../components/downloads/DownloadProgressList";
 import {
   cleanDownloadMetadata,
@@ -370,7 +366,7 @@ export default function App() {
       : "recentlyAdded";
   });
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
-  const [mobileTab, setMobileTab] = useState<
+  const [mobileTab, restoreMobileTab] = useState<
     "home" | "search" | "library" | "youtube" | "downloads"
   >("home");
   const [mobileLibraryActionsOpen, setMobileLibraryActionsOpen] =
@@ -458,14 +454,44 @@ export default function App() {
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const completedYoutubeDownloads = useRef(new Set<string>());
   const isAndroid = useMemo(() => /android/i.test(navigator.userAgent), []);
+  type NavigationView = {
+    mobileTab: typeof mobileTab;
+    search: string;
+    inlineSearch: string;
+    searchOpen: boolean;
+    playlistSearchOpen: boolean;
+    sortBy: TrackSort;
+    scrollTop: number;
+    scrollLeft: number;
+  };
+  const navigationViews = useRef(new Map<number, NavigationView>());
   useLayoutEffect(() => {
-    if (!isAndroid) return;
     const content = contentScrollRef.current;
-    if (content) {
-      content.scrollTop = 0;
-      content.scrollLeft = 0;
-    }
-  }, [isAndroid, mobileTab, page.section, page.detail]);
+    if (!content) return;
+    const view = navigationViews.current.get(history.index);
+    const restore = () => {
+      content.scrollTop = view?.scrollTop ?? 0;
+      content.scrollLeft = view?.scrollLeft ?? 0;
+      content.dispatchEvent(new Event("scroll"));
+    };
+    restore();
+    // Deferred searches and virtual rows can settle after the navigation commit.
+    const observer = new ResizeObserver(restore);
+    const stage = content.querySelector(".content-page-stage");
+    if (stage) observer.observe(stage);
+    const stop = () => observer.disconnect();
+    const timer = window.setTimeout(stop, 1500);
+    content.addEventListener("pointerdown", stop, { passive: true, once: true });
+    content.addEventListener("wheel", stop, { passive: true, once: true });
+    content.addEventListener("touchstart", stop, { passive: true, once: true });
+    return () => {
+      stop();
+      window.clearTimeout(timer);
+      content.removeEventListener("pointerdown", stop);
+      content.removeEventListener("wheel", stop);
+      content.removeEventListener("touchstart", stop);
+    };
+  }, [history.index]);
   useEffect(() => {
     setLyricsOpen(false);
     setMobileLyricsExpanded(false);
@@ -619,33 +645,55 @@ export default function App() {
   const globalYoutubeHasMore = globalYoutubeSearch.hasMore;
   const globalYoutubeLoadingMore = globalYoutubeSearch.loadingMore;
 
-  const navigate = useCallback((next: Page) => {
+  function saveNavigationView() {
+    navigationViews.current.set(history.index, {
+      mobileTab, search, inlineSearch, searchOpen, playlistSearchOpen, sortBy,
+      scrollTop: contentScrollRef.current?.scrollTop ?? 0,
+      scrollLeft: contentScrollRef.current?.scrollLeft ?? 0,
+    });
+  }
+  function closeNavigationMenus() {
+    setMenu(null);
+    setAppMenu(false);
+    setSortMenuOpen(false);
+    setPlaylistActionsOpen(false);
+  }
+  function navigate(next: Page, nextTab: typeof mobileTab = "home") {
+    if (JSON.stringify(page) === JSON.stringify(next) && mobileTab === nextTab) return;
+    saveNavigationView();
+    for (const index of navigationViews.current.keys()) {
+      if (index > history.index) navigationViews.current.delete(index);
+    }
     setHistory((prior) => ({
       entries: [...prior.entries.slice(0, prior.index + 1), next],
       index: prior.index + 1,
     }));
+    restoreMobileTab(nextTab);
     setSearch("");
     setInlineSearch("");
-    setMenu(null);
-    setAppMenu(false);
-    setSortMenuOpen(false);
+    setPlaylistSearchOpen(false);
     setSearchOpen(false);
-  }, []);
-  function travel(delta: number) {
-    setHistory((prior) => ({
-      ...prior,
-      index: Math.max(
-        0,
-        Math.min(prior.entries.length - 1, prior.index + delta),
-      ),
-    }));
-    setSearch("");
-    setInlineSearch("");
-    setMenu(null);
-    setAppMenu(false);
-    setSortMenuOpen(false);
-    setSearchOpen(false);
+    closeNavigationMenus();
   }
+  function setMobileTab(nextTab: typeof mobileTab) {
+    navigationActions.current.navigate({ section: "Home" }, nextTab);
+  }
+  function travel(delta: number) {
+    const index = Math.max(0, Math.min(history.entries.length - 1, history.index + delta));
+    if (index === history.index) return;
+    saveNavigationView();
+    const view = navigationViews.current.get(index);
+    restoreMobileTab(view?.mobileTab ?? "home");
+    setSearch(view?.search ?? "");
+    setInlineSearch(view?.inlineSearch ?? "");
+    setSearchOpen(view?.searchOpen ?? false);
+    setPlaylistSearchOpen(view?.playlistSearchOpen ?? false);
+    if (view) setSortBy(view.sortBy);
+    setHistory((prior) => ({ ...prior, index }));
+    closeNavigationMenus();
+  }
+  const navigationActions = useRef({ navigate, travel });
+  navigationActions.current = { navigate, travel };
   const run = useCallback(async (action: () => Promise<unknown>) => {
     try {
       await action();
@@ -919,22 +967,27 @@ export default function App() {
     if (!isAndroid) return;
     let active = true;
     let unlisten: (() => void) | undefined;
-    void listen<{ kind: string; value?: number; enabled?: boolean; bands?: number[] }>("native-player-control", ({ payload }) => {
+    void addPluginListener<{ kind: string; value?: number; enabled?: boolean; bands?: number[] }>("michoplay-media", "native-player-control", (payload) => {
       if (payload.kind === "volume" && typeof payload.value === "number") {
         const volume = Math.max(0, Math.min(1, payload.value));
         saveStoredData("volume", JSON.stringify(volume));
-        void api.volume(volume);
+        void run(() => api.volume(volume));
       } else if (payload.kind === "equalizer-enabled" && typeof payload.enabled === "boolean") {
+        equalizerEnabledRef.current = payload.enabled;
         setEqualizerEnabled(payload.enabled);
         saveStoredData("equalizer-enabled", JSON.stringify(payload.enabled));
-        void api.equalizer(equalizerBandsRef.current, payload.enabled);
+        void run(() => api.equalizer(equalizerBandsRef.current, payload.enabled!));
       } else if (payload.kind === "equalizer-bands" && Array.isArray(payload.bands)) {
         const bands = Array.from({ length: 6 }, (_, index) => Math.max(-12, Math.min(12, Number(payload.bands?.[index] ?? 0))));
+        equalizerBandsRef.current = bands;
         setEqualizerBands(bands);
         saveStoredData("equalizer-bands", JSON.stringify(bands));
-        void api.equalizer(bands, equalizerEnabledRef.current);
+        void run(() => api.equalizer(bands, equalizerEnabledRef.current));
       }
-    }).then((dispose) => { if (active) unlisten = dispose; else dispose(); });
+    }).then((listener) => {
+      const dispose = () => { void listener.unregister(); };
+      if (active) unlisten = dispose; else dispose();
+    }).catch((error) => setMessage(String(error)));
     return () => { active = false; unlisten?.(); };
   }, [isAndroid]);
   useEffect(() => {
@@ -1676,17 +1729,18 @@ export default function App() {
     };
   }, [confirmationBusy]);
 
-  useEffect(() => {
-    if (!isAndroid) return;
-    let disposed = false;
-    let unregister: (() => void) | undefined;
-    void onBackButtonPress(() => {
+  const backActionRef = useRef<() => void>(() => {});
+  backActionRef.current = () => {
       if (confirmationBusy) return;
+      if (mobileAboutOpen) { setMobileAboutOpen(false); return; }
+      if (mobileLibraryActionsOpen) { setMobileLibraryActionsOpen(false); return; }
+      if (metadataTrack) { if (!metadataSaving) setMetadataTrack(null); return; }
       if (mobileQueueOpen) {
         setMobileQueueOpen(false);
         return;
       }
       if (mobilePlayerOpen) {
+        if (mobilePlayerLyricsOpen) { setMobilePlayerLyricsOpen(false); return; }
         setMobilePlayerOpen(false);
         return;
       }
@@ -1712,48 +1766,23 @@ export default function App() {
         setPlaylistActionsOpen(false);
         return;
       }
-      if (mobileTab !== "home") {
-        setMobileTab("home");
-        setSearch("");
-        if (history.index > 0) travel(-1);
-        return;
-      }
       if (history.index > 0) {
         travel(-1);
         return;
       }
-      if (page.section !== "Home" || page.detail) {
-        setHistory({ entries: [{ section: "Home" }], index: 0 });
-      }
-    })
+      void api.backgroundApp().catch((error) => setMessage(String(error)));
+  };
+  useEffect(() => {
+    if (!isAndroid) return;
+    let disposed = false;
+    let unregister: (() => void) | undefined;
+    void onBackButtonPress(() => backActionRef.current())
       .then((listener) => {
         if (disposed) void listener.unregister();
-        else
-          unregister = () => {
-            void listener.unregister();
-          };
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      unregister?.();
-    };
-  }, [
-    isAndroid,
-    mobileQueueOpen,
-    mobilePlayerOpen,
-    fullMode,
-    dialog,
-    confirmation,
-    confirmationBusy,
-    menu,
-    appMenu,
-    sortMenuOpen,
-    playlistActionsOpen,
-    mobileTab,
-    history,
-    page,
-  ]);
+        else unregister = () => { void listener.unregister(); };
+      }).catch((error) => setMessage(String(error)));
+    return () => { disposed = true; unregister?.(); };
+  }, [isAndroid]);
 
   function mobileSheetStyle(sheet: string): CSSProperties {
     const active = mobileSheetDrag?.sheet === sheet;
@@ -2402,16 +2431,12 @@ export default function App() {
           ? prior
           : [youtube, ...prior],
       );
-    setSearch("");
-    setMobileTab(isAndroid ? "youtube" : "home");
     navigate({
       section: "Playlists",
       detail: { kind: "playlist", key: youtube.id, title: youtube.name },
-    });
+    }, isAndroid ? "youtube" : "home");
   }
   function openSpotifyPage() {
-    setSearch("");
-    setMobileTab("home");
     navigate({ section: "Spotify" });
   }
 
@@ -2486,13 +2511,7 @@ export default function App() {
         setPlaylists((prior) =>
           prior.filter((item) => item.id !== playlist.id),
         );
-        setHistory((prior) => ({
-          entries: [
-            ...prior.entries.slice(0, prior.index + 1),
-            { section: "Playlists" },
-          ],
-          index: prior.index + 1,
-        }));
+        navigate({ section: "Playlists" });
         setConfirmation(null);
         setPlaylistActionsOpen(false);
       },
@@ -2927,10 +2946,7 @@ export default function App() {
   const showAllPage =
     !listPage &&
     ["Folders", "Playlists", "Albums", "Artists"].includes(page.section);
-  useEffect(() => {
-    setPlaylistSearchOpen(false);
-    setPlaylistActionsOpen(false);
-  }, [page.section, page.detail?.key]);
+
   const globalSearchIndex = useMemo(() => {
     type SearchEntry = { searchText: string; result: GlobalSearchResult };
     const songs: SearchEntry[] = availableTracks.map((track) => ({
@@ -3067,6 +3083,8 @@ export default function App() {
     [recentSearches, buildSearchResults],
   );
 
+  const mobileNavigationRef = useRef({ openMobileDownloads, openYoutubePage, setMobileTab });
+  mobileNavigationRef.current = { openMobileDownloads, openYoutubePage, setMobileTab };
   useEffect(() => {
     if (!isAndroid && !isTauri()) return;
     let unlisten: (() => void) | undefined;
@@ -3088,11 +3106,14 @@ export default function App() {
         return;
       }
       switch (action) {
+        case "shortcut-downloads":
+          mobileNavigationRef.current.openMobileDownloads();
+          break;
         case "shortcut-youtube":
-          setMobileTab("youtube");
+          mobileNavigationRef.current.openYoutubePage();
           break;
         case "shortcut-library":
-          setMobileTab("library");
+          mobileNavigationRef.current.setMobileTab("library");
           break;
         case "open-audio":
           void api
@@ -3353,7 +3374,6 @@ export default function App() {
       };
       setPlaylists((prior) => [...prior, playlist]);
       if (!dialog.target) {
-        if (isAndroid) setMobileTab("home");
         navigate({
           section: "Playlists",
           detail: { kind: "playlist", key: playlist.id, title: name },
@@ -3378,7 +3398,6 @@ export default function App() {
     kind: Detail["kind"],
     item: Collection,
   ) {
-    if (isAndroid) setMobileTab("home");
     navigate({ section, detail: { kind, key: item.key, title: item.title } });
   }
   function rememberSearch(query: string) {
@@ -3401,8 +3420,7 @@ export default function App() {
       if (result.trackId === player.currentTrackId) void run(api.toggle);
       else void run(() => api.play(result.trackId!));
     } else if (result.page) {
-      if (isAndroid) setMobileTab("home");
-      navigate(result.page);
+        navigate(result.page);
     }
   }
   function openSearchResultMenu(
@@ -3966,8 +3984,8 @@ export default function App() {
                 {showAllPage ? (
                   <button
                     className="mobile-header-back"
-                    aria-label="Back to Home"
-                    onClick={() => navigate({ section: "Home" })}
+                    aria-label="Go back"
+                    onClick={() => history.index > 0 ? travel(-1) : navigate({ section: "Home" })}
                   >
                     <ChevronLeft size={24} />
                   </button>
@@ -4039,7 +4057,6 @@ export default function App() {
                   className="mobile-icon-button"
                   aria-label="Settings"
                   onClick={() => {
-                    setMobileTab("home");
                     navigate({ section: "Settings" });
                   }}
                 >
@@ -4211,8 +4228,7 @@ export default function App() {
                       hiddenTracks={hiddenTracks}
                       onRestoreTrack={restoreTrack}
                       onBack={() => {
-                        setMobileTab("home");
-                        if (history.index > 0) travel(-1);
+                          if (history.index > 0) travel(-1);
                         else navigate({ section: "Home" });
                       }}
                       onKeepScreenAwake={setKeepScreenAwake}
@@ -4307,15 +4323,12 @@ export default function App() {
                     trackMap={trackMap}
                     hiddenTrackSet={hiddenTrackSet}
                     onOpenFavorites={() => {
-                      setMobileTab("home");
                       navigate({ section: "Favorites" });
                     }}
                     onOpenSongs={() => {
-                      setMobileTab("home");
                       navigate({ section: "Songs" });
                     }}
                     onOpenPlaylist={(item) => {
-                      setMobileTab("home");
                       openDetail("Playlists", "playlist", item);
                     }}
                   />
@@ -5100,7 +5113,7 @@ export default function App() {
                     )}
                   </>
                 )}
-                <div hidden={page.section !== "Spotify" || (isAndroid && mobileTab !== "home")}>
+                <div className="spotify-page-host" hidden={page.section !== "Spotify" || (isAndroid && mobileTab !== "home")}>
                   <SpotifyImportScreen
                     mobile={isAndroid}
                     onBack={() => {
@@ -5237,142 +5250,11 @@ export default function App() {
                             openDownloadedTrackMenu(item, event)
                           }
                           renderSong={(item) => (
-                            <article
-                              className={`download-item status-${item.status}`}
-                              data-download-id={item.id}
-                              key={item.id}
-                            >
-                              <div className="download-item-main">
-                                <div className="download-item-art">
-                                  {item.thumbnail && (
-                                    <img
-                                      src={item.thumbnail}
-                                      alt=""
-                                      loading="lazy"
-                                      onError={(event) => {
-                                        event.currentTarget.hidden = true;
-                                      }}
-                                    />
-                                  )}
-                                  {item.status === "completed" && (
-                                    <button
-                                      className="download-art-play"
-                                      aria-label={`Play ${item.title}`}
-                                      title="Play downloaded audio"
-                                      onClick={() =>
-                                        void playYoutubeDownload(item)
-                                      }
-                                    >
-                                      <Play size={15} fill="currentColor" />
-                                    </button>
-                                  )}
-                                </div>
-                                <div className="download-item-copy">
-                                  <strong>{item.title}</strong>
-                                  {youtubeDownloadDescription(item) && (
-                                    <small>
-                                      {youtubeDownloadDescription(item)}
-                                    </small>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="download-item-progress">
-                                <span
-                                  className={
-                                    youtubeDownloadIsPending(item)
-                                      ? "is-pending"
-                                      : ""
-                                  }
-                                  style={{
-                                    width: `${youtubeDownloadProgress(item)}%`,
-                                  }}
-                                />
-                              </div>
-                              <div className="download-item-actions">
-                                <span
-                                  className={`download-status-label ${item.status}`}
-                                >
-                                  {item.status === "completed"
-                                    ? null
-                                    : item.status}
-                                </span>
-                                {item.status === "completed" ? (
-                                  <button
-                                    className="icon-button download-menu-trigger"
-                                    aria-label={`More actions for ${item.title}`}
-                                    title={`More actions for ${item.title}`}
-                                    onClick={(event) =>
-                                      openDownloadedTrackMenu(item, event)
-                                    }
-                                  >
-                                    <MoreVertical size={16} />
-                                  </button>
-                                ) : (
-                                  <>
-                                    {item.status === "downloading" ||
-                                    item.status === "queued" ? (
-                                      <button
-                                        className="icon-button"
-                                        aria-label={`Pause ${item.title}`}
-                                        onClick={() =>
-                                          void controlYoutubeDownload(
-                                            item.id,
-                                            "pause",
-                                          )
-                                        }
-                                      >
-                                        <Pause size={14} />
-                                      </button>
-                                    ) : item.status === "paused" ||
-                                      item.status === "failed" ? (
-                                      <button
-                                        className="icon-button"
-                                        aria-label={`${item.status === "failed" ? "Retry" : "Resume"} ${item.title}`}
-                                        onClick={() =>
-                                          void controlYoutubeDownload(
-                                            item.id,
-                                            "resume",
-                                          )
-                                        }
-                                      >
-                                        <Play size={14} />
-                                      </button>
-                                    ) : null}
-                                    {[
-                                      "queued",
-                                      "downloading",
-                                      "paused",
-                                    ].includes(item.status) ? (
-                                      <button
-                                        className="icon-button"
-                                        aria-label={`Cancel ${item.title}`}
-                                        onClick={() =>
-                                          void controlYoutubeDownload(
-                                            item.id,
-                                            "cancel",
-                                          )
-                                        }
-                                      >
-                                        <X size={14} />
-                                      </button>
-                                    ) : (
-                                      <button
-                                        className="icon-button"
-                                        aria-label={`Remove ${item.title} from downloads`}
-                                        onClick={() =>
-                                          void controlYoutubeDownload(
-                                            item.id,
-                                            "remove",
-                                          )
-                                        }
-                                      >
-                                        <X size={14} />
-                                      </button>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </article>
+                            <DownloadCard item={item}
+                              onControl={(id, action) => void controlYoutubeDownload(id, action)}
+                              onPlay={(download) => void playYoutubeDownload(download)}
+                              onMenu={openDownloadedTrackMenu}
+                            />
                           )}
                         />
                       </>
@@ -6273,24 +6155,11 @@ export default function App() {
             section={page.section}
             downloadCount={mobileDownloadBadgeCount}
             downloadNavRef={downloadNavRef}
-            onHome={() => {
-              setMobileTab("home");
-              if (page.section !== "Home" || page.detail)
-                navigate({ section: "Home" });
-            }}
-            onLibrary={() => {
-              setMobileTab("library");
-              if (page.section !== "Home" || page.detail)
-                navigate({ section: "Home" });
-            }}
+            onHome={() => setMobileTab("home")}
+            onLibrary={() => setMobileTab("library")}
             onYoutube={openYoutubePage}
             onDownloads={openMobileDownloads}
-            onSearch={() => {
-              setMobileTab("search");
-              setSearch("");
-              if (page.section !== "Home" || page.detail)
-                navigate({ section: "Home" });
-            }}
+            onSearch={() => setMobileTab("search")}
           />
           {downloadFeedback && (
             <>
@@ -6629,8 +6498,8 @@ export default function App() {
                 >
                   <Mic2 size={22} />
                 </button>
-                <button aria-label="Volume" title="Volume" onClick={() => void api.nativePlayerSheet("volume", player.volume, equalizerBands, equalizerEnabled)}><Volume2 size={22} /></button>
-                <button aria-label="Equalizer" title="Equalizer" onClick={() => void api.nativePlayerSheet("equalizer", player.volume, equalizerBands, equalizerEnabled)}><ListFilter size={22} /></button>
+                <button aria-label="Volume" title="Volume" onClick={() => void run(() => api.nativePlayerSheet("volume", player.volume, equalizerBands, equalizerEnabled))}><Volume2 size={22} /></button>
+                <button aria-label="Equalizer" title="Equalizer" onClick={() => void run(() => api.nativePlayerSheet("equalizer", player.volume, equalizerBands, equalizerEnabled))}><ListFilter size={22} /></button>
                 <button
                   aria-label="Show queue"
                   onClick={() => setMobileQueueOpen(true)}
