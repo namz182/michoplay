@@ -37,6 +37,8 @@ export function HomeScreen({
   navigate,
   openYoutube,
   openSpotify,
+  favoriteCount,
+  openFavorites,
   chooseLibrarySource,
   openFolder,
   openAlbum,
@@ -50,6 +52,8 @@ export function HomeScreen({
   navigate: (section: Section) => void;
   openYoutube: () => void;
   openSpotify?: () => void;
+  favoriteCount: number;
+  openFavorites: () => void;
   chooseLibrarySource: () => void;
   openFolder: (folder: Collection) => void;
   openAlbum: (album: Collection) => void;
@@ -86,6 +90,8 @@ export function HomeScreen({
         onNavigate={navigate}
         onYoutube={openYoutube}
         onSpotify={openSpotify}
+        favoriteCount={favoriteCount}
+        onFavorites={openFavorites}
       />
       <HomeArtShelf
         title="Folders"

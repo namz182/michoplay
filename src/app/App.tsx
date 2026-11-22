@@ -5000,11 +5000,13 @@ export default function App() {
                         availableTracks={availableTracks}
                         folders={folders}
                         isScanning={scanning}
+                        favoriteCount={favorites.length}
                         navigate={(section) => {
                           navigate({ section });
                         }}
                         openYoutube={openYoutubePage}
-                        openSpotify={isAndroid ? openSpotifyPage : undefined}
+                        openSpotify={openSpotifyPage}
+                        openFavorites={() => navigate({ section: "Favorites" })}
                         chooseLibrarySource={chooseLibrarySource}
                         openFolder={(item) =>
                           openDetail("Home", "folder", item)

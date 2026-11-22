@@ -8473,12 +8473,13 @@ body:has(.android-app),
   background: var(--youtube-red);
   color: #fff;
 }
-.android-app .home-spotify-link {
-  grid-column: 1 / -1;
-}
 .android-app .home-spotify-link .home-quick-art {
   background: #1db954;
   color: #101012;
+}
+.android-app .home-liked-link .home-quick-art {
+  background: var(--brand-gradient);
+  color: #29252e;
 }
 .android-app .home-quick-card > span:last-child {
   display: grid;

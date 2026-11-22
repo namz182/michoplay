@@ -1,4 +1,4 @@
-import { Disc3, Music2, Youtube } from "lucide-react";
+import { Disc3, Heart, Music2, Youtube } from "lucide-react";
 import { Cover } from "../../app/Artwork";
 
 type Section = "Songs";
@@ -8,11 +8,15 @@ export function HomeQuickLinks({
   onNavigate,
   onYoutube,
   onSpotify,
+  favoriteCount,
+  onFavorites,
 }: {
   songCount: number;
+  favoriteCount: number;
   onNavigate: (section: Section) => void;
   onYoutube: () => void;
   onSpotify?: () => void;
+  onFavorites: () => void;
 }) {
   return (
     <div
@@ -39,6 +43,17 @@ export function HomeQuickLinks({
         <span>
           <strong>YouTube</strong>
           <small>Search and download audio</small>
+        </span>
+      </button>
+      <button className="home-quick-card home-liked-link" onClick={onFavorites}>
+        <span className="home-quick-art">
+          <Heart size={22} fill="currentColor" />
+        </span>
+        <span>
+          <strong>Liked Songs</strong>
+          <small>
+            {favoriteCount} {favoriteCount === 1 ? "song" : "songs"}
+          </small>
         </span>
       </button>
       {onSpotify && (
