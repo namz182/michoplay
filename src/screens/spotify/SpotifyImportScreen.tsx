@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ChevronLeft, Disc3, Music2, X } from "lucide-react";
+import { ChevronLeft, Disc3, LoaderCircle, Music2, X } from "lucide-react";
 import { Cover } from "../../app/Artwork";
 import {
   api,
@@ -210,6 +210,7 @@ export function SpotifyImportScreen({
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkClickLoading, setBulkClickLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [statuses, setStatuses] = useState<Map<string, SongStatus>>(
@@ -220,12 +221,15 @@ export function SpotifyImportScreen({
   >(() => new Map());
   const requestId = useRef(0);
   const previewRequest = useRef<AbortController | null>(null);
+  const bulkClickTimer = useRef<number | null>(null);
   const processing = useRef(new Set<string>());
   const claimedMatches = useRef(new Map<string, string>());
 
   useEffect(() => () => {
     requestId.current += 1;
     previewRequest.current?.abort();
+    if (bulkClickTimer.current !== null)
+      window.clearTimeout(bulkClickTimer.current);
   }, []);
 
   const downloadsByUrl = useMemo(() => {
@@ -240,8 +244,36 @@ export function SpotifyImportScreen({
     [songs, selected],
   );
   const allSelected = songs.length > 0 && selectedSongs.length === songs.length;
+  const bulkButtonLabel = bulkClickLoading
+    ? `Adding ${selectedSongs.length}…`
+    : `Download selected (${selectedSongs.length})`;
+
+  function resetBulkButton() {
+    if (bulkClickTimer.current !== null) {
+      window.clearTimeout(bulkClickTimer.current);
+      bulkClickTimer.current = null;
+    }
+    setBulkClickLoading(false);
+  }
+
+  function downloadSelectedSongs() {
+    if (!selectedSongs.length || bulkClickLoading) return;
+    const items = selectedSongs;
+    setBulkClickLoading(true);
+    bulkClickTimer.current = window.setTimeout(() => {
+      setBulkClickLoading(false);
+      bulkClickTimer.current = null;
+    }, 450);
+    void downloadSongs(items).catch((reason) => {
+      resetBulkButton();
+      setError(
+        reason instanceof Error ? reason.message : "Could not queue selected songs.",
+      );
+    });
+  }
 
   async function fetchLink(input: string) {
+    resetBulkButton();
     previewRequest.current?.abort();
     const parsed = parseSpotifyLink(input);
     const thisRequest = ++requestId.current;
@@ -338,6 +370,7 @@ export function SpotifyImportScreen({
   }
 
   function clearLink() {
+    resetBulkButton();
     requestId.current += 1;
     previewRequest.current?.abort();
     previewRequest.current = null;
@@ -402,10 +435,12 @@ export function SpotifyImportScreen({
   }
 
   function setAllSelected(checked: boolean) {
+    resetBulkButton();
     setSelected(checked ? new Set(songs.map((song) => song.key)) : new Set());
   }
 
   function toggleSelected(key: string) {
+    resetBulkButton();
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
@@ -785,12 +820,14 @@ export function SpotifyImportScreen({
             </div>
             <div className="spotify-collection-actions">
               <button
-                className="spotify-download-selected"
+                className={`spotify-download-selected${selectedSongs.length ? " has-selection" : ""}${bulkClickLoading ? " is-loading" : ""}`}
                 type="button"
-                disabled={!selectedSongs.length}
-                onClick={() => void downloadSongs(selectedSongs)}
+                disabled={!selectedSongs.length || bulkClickLoading}
+                aria-live="polite"
+                onClick={downloadSelectedSongs}
               >
-                Download selected ({selectedSongs.length})
+                {bulkClickLoading && <LoaderCircle className="spotify-download-spinner" size={13} aria-hidden="true" />}
+                {bulkButtonLabel}
               </button>
             </div>
           </section>

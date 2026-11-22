@@ -11895,10 +11895,13 @@ body:has(.android-app),
   .spotify-review-footer > div > * { flex: 1; }
 }
 .spotify-download-selected { display: inline-flex; min-height: 30px; flex: 0 0 auto; align-items: center; justify-content: center; padding: 0 10px; border: 1px solid transparent; border-radius: 999px; color: #171619; background: var(--brand-gradient); font: inherit; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.spotify-download-selected.has-selection { box-shadow: 0 0 0 2px rgb(216 238 228 / 13%); }
+.spotify-download-spinner { flex: 0 0 auto; animation: spotify-rotate .8s linear infinite; }
 @media (hover: hover) and (pointer: fine) {
   .spotify-download-selected:hover:not(:disabled) { filter: brightness(1.06); }
 }
 .spotify-download-selected:disabled { opacity: .48; filter: saturate(.55); cursor: default; }
+.spotify-download-selected.is-loading:disabled { opacity: .82; filter: none; cursor: progress; }
 .spotify-inline-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -4px 0 14px; color: #ffb5b5; font-size: 12px; line-height: 1.5; }
 .spotify-inline-error > .spotify-source-reset { flex: 0 0 auto; }
 .spotify-partial-note { margin: 2px 0 8px; color: var(--muted); font-size: 10px; }
