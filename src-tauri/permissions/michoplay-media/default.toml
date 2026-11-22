@@ -12,6 +12,9 @@ commands.allow = [
   "youtubeDownloadCancel",
   "youtubeDownloadRemove",
   "takePendingActions",
-  "register_listener",
-  "registerListener",
 ]
+
+[[permission]]
+identifier = "register-listener"
+description = "Allows this plugin to register and remove frontend event listeners."
+commands.allow = ["register_listener", "registerListener"]

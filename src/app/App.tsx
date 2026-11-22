@@ -2342,8 +2342,25 @@ export default function App() {
     id: string,
     action: "pause" | "resume" | "cancel" | "remove",
   ) {
+    const item = youtubeDownloads.find((download) => download.id === id);
+    if (isAndroid && action === "resume" && item) {
+      const optimistic: YoutubeDownload[] = newestDownloadsFirst(
+        latestYoutubeDownloads.current.map((download) =>
+          download.id === id
+            ? {
+                ...download,
+                status: "queued",
+                phase: "queued",
+                message: "Waiting to resume…",
+              }
+            : download,
+        ),
+      );
+      latestYoutubeDownloads.current = optimistic;
+      youtubeDownloadsVersion.current += 1;
+      setYoutubeDownloads(optimistic);
+    }
     try {
-      const item = youtubeDownloads.find((download) => download.id === id);
       if (action === "pause") await api.youtubeDownloadPause(id);
       else if (action === "resume") await api.youtubeDownloadResume(id);
       else if (action === "cancel") await api.youtubeDownloadCancel(id);

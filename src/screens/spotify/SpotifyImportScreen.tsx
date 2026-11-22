@@ -356,14 +356,6 @@ export function SpotifyImportScreen({
     setLoading(false);
   }
 
-  function cancelLoading() {
-    requestId.current += 1;
-    previewRequest.current?.abort();
-    previewRequest.current = null;
-    setLoading(false);
-    setError("");
-  }
-
   async function loadMoreSongs() {
     if (!metadata || !loadedUrl || loadingMore || !hasMoreSongs) return;
     const thisRequest = requestId.current;
@@ -719,7 +711,7 @@ export function SpotifyImportScreen({
               <X size={17} />
             </button>
           )}
-          {loading ? <button className="spotify-fetch-button" type="button" onClick={cancelLoading}>Cancel</button> : <button
+          {!loading && <button
             className="spotify-fetch-button"
             type="submit"
             disabled={!parseSpotifyLink(url)}

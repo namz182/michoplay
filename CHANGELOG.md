@@ -1,5 +1,12 @@
 # MichoPlay release notes
 
+## 1.0.3
+
+### Mobile and downloads
+
+- Fix the Android media listener permission warning and immediately reflect resumed downloads.
+- Remove the redundant Cancel button from Spotify link loading.
+
 ## 1.0.2
 
 ### Lyrics
