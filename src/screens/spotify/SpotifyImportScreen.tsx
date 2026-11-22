@@ -597,10 +597,14 @@ export function SpotifyImportScreen({
           {String(index + 1).padStart(2, "0")}
         </span>
         <span className="spotify-track-art">
-          {thumbnail ? (
-            <img src={thumbnail} alt="" loading="lazy" />
-          ) : (
-            <Music2 size={18} />
+          <Music2 className="spotify-art-placeholder" size={18} aria-hidden="true" />
+          {thumbnail && (
+            <img
+              src={thumbnail}
+              alt=""
+              loading="lazy"
+              onError={(event) => { event.currentTarget.hidden = true; }}
+            />
           )}
         </span>
         <span className="spotify-track-copy">
@@ -762,10 +766,13 @@ export function SpotifyImportScreen({
         <>
           <section className="spotify-collection-card" aria-label="Playlist details">
             <div className="spotify-collection-art">
-              {metadata.thumbnailUrl ? (
-                <img src={metadata.thumbnailUrl} alt="" />
-              ) : (
-                <Disc3 size={28} />
+              <Disc3 className="spotify-art-placeholder" size={28} aria-hidden="true" />
+              {metadata.thumbnailUrl && (
+                <img
+                  src={metadata.thumbnailUrl}
+                  alt=""
+                  onError={(event) => { event.currentTarget.hidden = true; }}
+                />
               )}
             </div>
             <div className="spotify-collection-copy">

@@ -11622,7 +11622,7 @@ body:has(.android-app),
 .spotify-start-hint { border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 2%)); }
 .spotify-preview-card { gap: 13px; margin: 15px 0; padding: 12px; }
 .spotify-preview-art,
-.spotify-collection-art { display: grid; flex: 0 0 auto; place-items: center; overflow: hidden; color: var(--muted); background: var(--surface-soft); }
+.spotify-collection-art { position: relative; display: grid; flex: 0 0 auto; place-items: center; overflow: hidden; color: var(--muted); background: var(--surface-soft); }
 .spotify-preview-art { width: 50px; height: 50px; border-radius: 10px; }
 .spotify-preview-art img,
 .spotify-collection-art img,
@@ -11677,8 +11677,11 @@ body:has(.android-app),
 }
 .spotify-track-row.is-disabled { opacity: .56; }
 .spotify-track-art,
-.spotify-candidate-art { display: grid; flex: 0 0 auto; place-items: center; overflow: hidden; color: var(--muted); background: var(--surface-soft); }
+.spotify-candidate-art { position: relative; display: grid; flex: 0 0 auto; place-items: center; overflow: hidden; color: var(--muted); background: var(--surface-soft); }
 .spotify-track-art { width: 44px; height: 44px; border-radius: 8px; }
+.spotify-art-placeholder { color: var(--muted); }
+.spotify-collection-art img,
+.spotify-track-art img { position: absolute; inset: 0; }
 .spotify-track-copy { display: grid; min-width: 0; gap: 3px; }
 .spotify-track-title { overflow: hidden; justify-self: start; max-width: 100%; padding: 0; border: 0; color: var(--text); background: transparent; font: inherit; font-size: 12px; font-weight: 650; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 @media (hover: hover) and (pointer: fine) {
